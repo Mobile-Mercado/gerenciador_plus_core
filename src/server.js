@@ -1,0 +1,39 @@
+import { createApp } from './app.js';
+import { GenerateAiResponseUseCase } from './application/ai/GenerateAiResponseUseCase.js';
+import { ImportProductsFromCsvUseCase } from './application/implantacao/ImportProductsFromCsvUseCase.js';
+import { env } from './config/env.js';
+import { getFirestoreDb } from './infra/firebase/firebaseAdmin.js';
+import { logger } from './infra/logger/logger.js';
+import { OpenAiResponsesGateway } from './infra/openai/OpenAiResponsesGateway.js';
+
+const aiGateway = new OpenAiResponsesGateway({
+  apiKey: env.OPENAI_API_KEY,
+  model: env.OPENAI_MODEL,
+  temperature: env.OPENAI_TEMPERATURE,
+});
+
+const generateAiResponseUseCase = new GenerateAiResponseUseCase({ aiGateway });
+const importProductsFromCsvUseCase = new ImportProductsFromCsvUseCase({
+  firestore: getFirestoreDb(),
+});
+const app = createApp({ generateAiResponseUseCase, importProductsFromCsvUseCase });
+
+const server = app.listen(env.PORT, () => {
+  logger.info('backend_started', {
+    port: env.PORT,
+    env: env.NODE_ENV,
+    model: env.OPENAI_MODEL,
+    firebaseAuthRequired: env.REQUIRE_FIREBASE_AUTH,
+  });
+});
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+function shutdown() {
+  logger.info('backend_stopping');
+  server.close(() => {
+    logger.info('backend_stopped');
+    process.exit(0);
+  });
+}

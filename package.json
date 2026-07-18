@@ -1,0 +1,25 @@
+{
+  "name": "web-gerenciador-plus-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "db:context": "node scripts/firestore-database-context.mjs",
+    "check": "node --check src/server.js && node --check src/app.js && node --check src/config/env.js && node --check src/http/routes/aiRoutes.js && node --check src/http/routes/healthRoutes.js && node --check src/http/routes/implantacaoRoutes.js && node --check src/http/middlewares/asyncHandler.js && node --check src/http/middlewares/errorHandler.js && node --check src/http/middlewares/firebaseAuth.js && node --check src/http/middlewares/requestLogger.js && node --check src/application/ai/GenerateAiResponseUseCase.js && node --check src/application/implantacao/ImportProductsFromCsvUseCase.js && node --check src/application/implantacao/catalogSearchIndex.js && node --check src/domain/ai/AiGateway.js && node --check src/domain/errors/AppError.js && node --check src/infra/firebase/firebaseAdmin.js && node --check src/infra/logger/logger.js && node --check src/infra/openai/OpenAiResponsesGateway.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.19.2",
+    "firebase-admin": "^12.7.0",
+    "helmet": "^7.1.0",
+    "openai": "^5.0.0",
+    "zod": "^3.23.8"
+  }
+}

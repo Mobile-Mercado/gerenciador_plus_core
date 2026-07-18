@@ -1,0 +1,40 @@
+{
+  "defaults": {
+    "sampleDocs": 1
+  },
+  "docIdsByCollectionPath": {
+    "estabelecimentos": [
+      "q0IPIusmpEq3pHbMyfWY"
+    ],
+    "estabelecimentos/*/Products": [
+      "COLOQUE_AQUI_UM_ID_DE_PRODUTO_REPRESENTATIVO"
+    ],
+    "estabelecimentos/*/ProductCategories": [
+      "COLOQUE_AQUI_UM_ID_DE_CATEGORIA_REPRESENTATIVA"
+    ],
+    "estabelecimentos/*/ProductSubcategories": [
+      "COLOQUE_AQUI_UM_ID_DE_SUBCATEGORIA_REPRESENTATIVA"
+    ]
+  },
+  "safeSampleCollections": [
+    "Banners",
+    "DailyStats",
+    "MonthlyStats",
+    "ProductCategories",
+    "ProductSubcategories",
+    "Products",
+    "Stats",
+    "implantacaoGrenciador",
+    "paymentMethods"
+  ],
+  "manualContextCollections": {
+    "Campaigns": "Colecao de campanhas comerciais. Nao amostrada por padrao para evitar dados de estrategia/campanha.",
+    "Cupons": "Colecao de cupons. Nao amostrada por padrao porque pode conter cliente-alvo/codigo.",
+    "Users": "Colecao sensivel de usuarios. O script nao amostra documentos por padrao.",
+    "User": "Colecao sensivel de consumidores finais. O script nao amostra documentos por padrao.",
+    "Chats": "Colecao sensivel de conversas. O script nao amostra documentos por padrao.",
+    "Messages": "Subcolecao sensivel de mensagens. O script nao amostra documentos por padrao.",
+    "PurchaseRequests": "Colecao sensivel de pedidos/clientes/pagamento. O script nao amostra documentos por padrao.",
+    "addresses": "Subcolecao sensivel de enderecos de usuarios. O script nao amostra documentos por padrao."
+  }
+}
