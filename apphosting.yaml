@@ -1,6 +1,6 @@
 runConfig:
   minInstances: 0
-  maxInstances: 2
+  maxInstances: 5
   concurrency: 80
   cpu: 1
   memoryMiB: 512
@@ -8,29 +8,15 @@ runConfig:
 env:
   - variable: NODE_ENV
     value: production
-    availability:
-      - RUNTIME
-  - variable: OPENAI_MODEL
-    value: gpt-4.1-mini
-    availability:
-      - RUNTIME
-  - variable: OPENAI_TEMPERATURE
-    value: "0.2"
-    availability:
-      - RUNTIME
-  - variable: REQUEST_BODY_LIMIT
-    value: 1mb
-    availability:
-      - RUNTIME
+
   - variable: REQUIRE_FIREBASE_AUTH
     value: "true"
-    availability:
-      - RUNTIME
+
+  - variable: REQUEST_BODY_LIMIT
+    value: "10mb"
+
   - variable: CORS_ORIGINS
-    value: ""
-    availability:
-      - RUNTIME
+    value: "https://appmobileprod-19505.web.app,http://localhost:5173,http://127.0.0.1:5173"
+
   - variable: OPENAI_API_KEY
     secret: OPENAI_API_KEY
-    availability:
-      - RUNTIME
