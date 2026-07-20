@@ -7,7 +7,9 @@ export class OpenAiResponsesGateway extends AiGateway {
     super();
     this.model = model;
     this.temperature = temperature;
-    this.client = apiKey ? new OpenAI({ apiKey }) : null;
+    // O padronizador usa ate oito tentativas nas rotinas de catalogo.
+    // Mantemos a mesma resiliencia para rate limit e falhas transitorias.
+    this.client = apiKey ? new OpenAI({ apiKey, maxRetries: 8 }) : null;
   }
 
   async generate({

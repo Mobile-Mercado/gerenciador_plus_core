@@ -111,6 +111,35 @@ Quando `REQUIRE_FIREBASE_AUTH=true`, as rotas `/api/ai/*` e `/api/implantacao/*`
 Authorization: Bearer <firebase-id-token>
 ```
 
+### Painel administrativo de implantação
+
+```text
+GET   /api/implantacao/admin/pipelines
+GET   /api/implantacao/admin/pipelines/{establishmentId}
+PATCH /api/implantacao/admin/pipelines/{establishmentId}/checks/{step}/{checkId}
+```
+
+Além do token Firebase, o UID precisa existir em `IMPLANTATION_ADMIN_UIDS`. Separe múltiplos UIDs por vírgula. O painel lê e altera somente o documento compacto `implantacaoGrenciador/pipeline`.
+
+### Notificacoes web
+
+```text
+GET  /api/notifications/web/status/{establishmentId}
+POST /api/notifications/web/test
+```
+
+As duas rotas sempre exigem `Authorization: Bearer <firebase-id-token>`. O backend confere em `Users` se o UID autenticado pertence ao estabelecimento informado, portanto uma loja nao pode consultar ou disparar notificacoes para outra.
+
+Corpo da notificacao de teste:
+
+```json
+{
+  "establishmentId": "id_do_estabelecimento_logado"
+}
+```
+
+O envio usa os documentos ativos de `FcmTokens`, em lotes de ate 500 tokens. Tokens expirados ou invalidos sao desativados automaticamente. A aprovacao manual dos passos 06 e 07 da implantacao tambem gera uma notificacao direcionada para `/implantacao`.
+
 ## Script de contexto do Firestore
 
 Gera um rascunho local para complementar o `DATABASE.md`, sem aplicar automaticamente:

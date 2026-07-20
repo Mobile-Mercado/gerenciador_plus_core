@@ -5,11 +5,19 @@ import { env } from './config/env.js';
 import { createAiRoutes } from './http/routes/aiRoutes.js';
 import { createHealthRoutes } from './http/routes/healthRoutes.js';
 import { createImplantacaoRoutes } from './http/routes/implantacaoRoutes.js';
+import { createNotificationRoutes } from './http/routes/notificationRoutes.js';
 import { errorHandler, notFoundHandler } from './http/middlewares/errorHandler.js';
 import { createFirebaseAuthMiddleware } from './http/middlewares/firebaseAuth.js';
+import { createImplantationAdminMiddleware } from './http/middlewares/implantationAdmin.js';
 import { requestLogger } from './http/middlewares/requestLogger.js';
 
-export function createApp({ generateAiResponseUseCase, importProductsFromCsvUseCase }) {
+export function createApp({
+  generateAiResponseUseCase,
+  importProductsFromCsvUseCase,
+  manageImplantationPipelines,
+  updateImplantationApprovalUseCase,
+  manageWebNotifications,
+}) {
   const app = express();
 
   app.disable('x-powered-by');
@@ -34,7 +42,19 @@ export function createApp({ generateAiResponseUseCase, importProductsFromCsvUseC
   app.use(
     '/api/implantacao',
     createFirebaseAuthMiddleware({ required: env.REQUIRE_FIREBASE_AUTH }),
-    createImplantacaoRoutes({ importProductsFromCsvUseCase }),
+    createImplantacaoRoutes({
+      importProductsFromCsvUseCase,
+      manageImplantationPipelines,
+      updateImplantationApprovalUseCase,
+      implantationAdminMiddleware: createImplantationAdminMiddleware({
+        allowedUids: env.IMPLANTATION_ADMIN_UIDS,
+      }),
+    }),
+  );
+  app.use(
+    '/api/notifications',
+    createFirebaseAuthMiddleware({ required: true }),
+    createNotificationRoutes({ manageWebNotifications }),
   );
 
   app.use(notFoundHandler);

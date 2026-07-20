@@ -22,13 +22,23 @@ function toBoolean(value, fallback = false) {
 
 function parseOrigins(value) {
   if (!value) {
-    return ['http://localhost:5173', 'http://127.0.0.1:5173'];
+    return [
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'http://localhost:5174',
+      'http://127.0.0.1:5174',
+    ];
   }
 
   return value
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
+}
+
+function parseList(value) {
+  if (!value) return [];
+  return value.split(',').map((item) => item.trim()).filter(Boolean);
 }
 
 const nodeEnv = process.env.NODE_ENV || 'development';
@@ -45,6 +55,7 @@ export const env = Object.freeze({
     process.env.REQUIRE_FIREBASE_AUTH,
     nodeEnv === 'production',
   ),
+  IMPLANTATION_ADMIN_UIDS: parseList(process.env.IMPLANTATION_ADMIN_UIDS),
 });
 
 export function isProduction() {

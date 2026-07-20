@@ -3,14 +3,13 @@ import { getFirebaseAuth } from '../../infra/firebase/firebaseAdmin.js';
 
 export function createFirebaseAuthMiddleware({ required }) {
   return async (request, _response, next) => {
-    if (!required) {
-      next();
-      return;
-    }
-
     const token = extractBearerToken(request.headers.authorization);
 
     if (!token) {
+      if (!required) {
+        next();
+        return;
+      }
       next(
         new AppError('Login obrigatorio para usar a IA.', {
           statusCode: 401,

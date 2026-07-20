@@ -1,7 +1,13 @@
 import { createApp } from './app.js';
 import { GenerateAiResponseUseCase } from './application/ai/GenerateAiResponseUseCase.js';
 import { ImportProductsFromCsvUseCase } from './application/implantacao/ImportProductsFromCsvUseCase.js';
+import { ManageImplantationPipelines } from './application/implantacao/ManageImplantationPipelines.js';
+import { UpdateImplantationApprovalUseCase } from './application/implantacao/UpdateImplantationApprovalUseCase.js';
+import { ManageWebNotifications } from './application/notifications/ManageWebNotifications.js';
 import { env } from './config/env.js';
+import { FirebaseWebNotificationGateway } from './infra/firebase/FirebaseWebNotificationGateway.js';
+import { FirestoreEstablishmentAccessRepository } from './infra/firebase/FirestoreEstablishmentAccessRepository.js';
+import { FirestoreWebNotificationTokenRepository } from './infra/firebase/FirestoreWebNotificationTokenRepository.js';
 import { getFirestoreDb } from './infra/firebase/firebaseAdmin.js';
 import { logger } from './infra/logger/logger.js';
 import { OpenAiResponsesGateway } from './infra/openai/OpenAiResponsesGateway.js';
@@ -13,10 +19,30 @@ const aiGateway = new OpenAiResponsesGateway({
 });
 
 const generateAiResponseUseCase = new GenerateAiResponseUseCase({ aiGateway });
+const firestore = getFirestoreDb();
 const importProductsFromCsvUseCase = new ImportProductsFromCsvUseCase({
-  firestore: getFirestoreDb(),
+  firestore,
 });
-const app = createApp({ generateAiResponseUseCase, importProductsFromCsvUseCase });
+const manageImplantationPipelines = new ManageImplantationPipelines({
+  firestore,
+});
+const manageWebNotifications = new ManageWebNotifications({
+  tokenRepository: new FirestoreWebNotificationTokenRepository({ firestore }),
+  gateway: new FirebaseWebNotificationGateway(),
+  accessRepository: new FirestoreEstablishmentAccessRepository({ firestore }),
+});
+const updateImplantationApprovalUseCase = new UpdateImplantationApprovalUseCase({
+  manageImplantationPipelines,
+  manageWebNotifications,
+  logger,
+});
+const app = createApp({
+  generateAiResponseUseCase,
+  importProductsFromCsvUseCase,
+  manageImplantationPipelines,
+  updateImplantationApprovalUseCase,
+  manageWebNotifications,
+});
 
 const server = app.listen(env.PORT, () => {
   logger.info('backend_started', {

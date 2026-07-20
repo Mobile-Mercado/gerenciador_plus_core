@@ -44,6 +44,7 @@ npm run check
 - Em producao, manter `REQUIRE_FIREBASE_AUTH=true`.
 - Rotas de IA devem aceitar token Firebase do usuario logado antes de consumir credito da OpenAI.
 - Erros enviados ao frontend devem ser claros, mas sem detalhes internos nem chaves.
+- O adapter OpenAI usa ate 8 retries para rate limits e falhas transitorias, alinhado as rotinas de catalogo do `padronizador_mobile_mercado`.
 
 ## Rotas atuais
 
@@ -51,6 +52,18 @@ npm run check
 - `POST /api/ai/responder`: resposta textual para o gerenciador.
 - `POST /api/ai/insights`: resposta orientada a dados/JSON para dashboards, analises e explicacoes.
 - `POST /api/implantacao/importar-produtos`: recebe CSV em texto, importa produtos/categorias/subcategorias via Firebase Admin e responde em NDJSON com progresso real para a tela Implantacao.
+- `/api/implantacao/admin/pipelines`: lista pipelines e aprova verificacoes manuais. Exige token Firebase e UID presente em `IMPLANTATION_ADMIN_UIDS`.
+- `GET /api/notifications/web/status/{establishmentId}`: informa se a loja possui navegadores ativos para Web Push.
+- `POST /api/notifications/web/test`: envia uma notificacao de teste apenas para a loja vinculada ao usuario autenticado.
+
+## Notificacoes web
+
+- O backend envia Web Push pelo Firebase Admin Messaging; nenhuma credencial FCM fica no frontend.
+- Tokens sao lidos de `FcmTokens`, usando `clientId == establishmentId` e no maximo 100 dispositivos por loja.
+- Tokens invalidos sao marcados com `active: false`; nunca registrar o valor do token em logs.
+- As rotas de notificacao sempre exigem Firebase Auth, mesmo quando `REQUIRE_FIREBASE_AUTH=false` em desenvolvimento.
+- O usuario so pode consultar ou testar notificacoes do estabelecimento associado ao seu documento em `Users`.
+- Aprovacoes dos passos 06 e 07 da implantacao enviam um aviso para `/implantacao`. Falhas no Push nao desfazem a aprovacao.
 
 ## Implantacao
 
@@ -68,6 +81,7 @@ npm run check
 - `CORS_ORIGINS`: origens liberadas separadas por virgula.
 - `REQUIRE_FIREBASE_AUTH`: `true` em producao.
 - `REQUEST_BODY_LIMIT`: limite do corpo JSON.
+- `IMPLANTATION_ADMIN_UIDS`: UIDs Firebase autorizados no painel interno, separados por virgula.
 
 ## Contexto com outros projetos
 
