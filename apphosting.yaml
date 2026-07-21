@@ -16,7 +16,7 @@ env:
     value: "10mb"
 
   - variable: CORS_ORIGINS
-    value: "https://appmobileprod-19505.web.app,http://localhost:5173,http://127.0.0.1:5173"
+    value: "https://gerenciadormobile.web.app,https://gerenciadormobile.firebaseapp.com,https://appmobileprod-19505.web.app,http://localhost:5173,http://127.0.0.1:5173"
 
   - variable: OPENAI_API_KEY
     secret: OPENAI_API_KEY
