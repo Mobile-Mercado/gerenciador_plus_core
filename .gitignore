@@ -3,6 +3,7 @@
 !.env.example
 node_modules/
 npm-debug.log*
+firebase-debug.log*
 yarn-debug.log*
 yarn-error.log*
 dist/

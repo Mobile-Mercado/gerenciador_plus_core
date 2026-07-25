@@ -2,6 +2,16 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const REQUIRED_CORS_ORIGINS = Object.freeze([
+  'https://gerenciadormobile.web.app',
+  'https://gerenciadormobile.firebaseapp.com',
+  'https://appmobileprod-19505.web.app',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:5174',
+  'http://127.0.0.1:5174',
+]);
+
 function toInteger(value, fallback) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -20,20 +30,13 @@ function toBoolean(value, fallback = false) {
   return ['1', 'true', 'yes', 'sim'].includes(String(value).trim().toLowerCase());
 }
 
-function parseOrigins(value) {
-  if (!value) {
-    return [
-      'http://localhost:5173',
-      'http://127.0.0.1:5173',
-      'http://localhost:5174',
-      'http://127.0.0.1:5174',
-    ];
-  }
-
-  return value
+export function parseOrigins(value) {
+  const configured = String(value || '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
+
+  return [...new Set([...REQUIRED_CORS_ORIGINS, ...configured])];
 }
 
 function parseList(value) {
