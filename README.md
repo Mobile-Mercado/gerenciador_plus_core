@@ -1,6 +1,6 @@
 # Backend do web_gerenciador_plus
 
-Backend inicial do gerenciador para recursos de IA. Ele fica separado do frontend Vite para manter chaves, prompts internos e chamadas pagas da OpenAI fora do navegador.
+Backend inicial do gerenciador para recursos de IA. Ele fica separado do frontend Vite para manter chaves, prompts internos e chamadas aos provedores de IA fora do navegador.
 
 Esta pasta esta ignorada no reposititorio principal do `web_gerenciador_plus`. Quando chegar a hora, ela deve virar um repositorio proprio.
 
@@ -9,7 +9,7 @@ Esta pasta esta ignorada no reposititorio principal do `web_gerenciador_plus`. Q
 - Node.js 20+
 - Express
 - Firebase Admin
-- OpenAI API
+- OpenAI API ou Groq API
 - Zod
 - Firebase App Hosting
 
@@ -32,19 +32,35 @@ Crie um arquivo `.env` usando `.env.example` como base.
 NODE_ENV=development
 PORT=8080
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+AI_PROVIDER=openai
 OPENAI_API_KEY=sua_chave_apenas_no_backend
 OPENAI_MODEL=gpt-4.1-mini
 OPENAI_TEMPERATURE=0.2
+GROQ_API_KEY=sua_chave_apenas_no_backend
+GROQ_MODEL=qwen/qwen3.6-27b
+GROQ_TEMPERATURE=0.2
 REQUEST_BODY_LIMIT=10mb
 REQUIRE_FIREBASE_AUTH=false
 ```
 
 Regras:
 
-- Nunca colocar `OPENAI_API_KEY` no frontend.
+- Use `AI_PROVIDER=openai` ou `AI_PROVIDER=groq`.
+- Nunca colocar `OPENAI_API_KEY` ou `GROQ_API_KEY` no frontend.
 - Nunca commitar `.env`.
 - Em producao, manter `REQUIRE_FIREBASE_AUTH=true`.
-- Em producao, configurar `OPENAI_API_KEY` como secret do Firebase App Hosting.
+- Em producao, configurar a chave do provedor escolhido como secret do Firebase App Hosting.
+- Nao existe fallback automatico entre provedores: isso evita consumir a OpenAI paga quando a cota gratuita da Groq terminar.
+
+Para usar a Groq localmente:
+
+```env
+AI_PROVIDER=groq
+GROQ_API_KEY=sua_chave_groq
+GROQ_MODEL=qwen/qwen3.6-27b
+```
+
+O modelo Groq padrao aceita texto, imagem e JSON. O plano gratuito possui limites de requisicoes e tokens; uma implantacao completa com milhares de produtos pode consumir a cota antes de terminar.
 
 ## Rotas
 
@@ -83,6 +99,16 @@ Exemplo de corpo:
   }
 }
 ```
+
+### `POST /api/ai/home-overview`
+
+Retorna o resumo e o insight diario da Home. O backend gera no maximo uma resposta por estabelecimento por dia e reutiliza o documento:
+
+```text
+estabelecimentos/{establishmentId}/AiDailyInsights/{aaaa-mm-dd}
+```
+
+O cache guarda somente a resposta final. Contexto bruto, UID e dados de clientes nao sao persistidos.
 
 ### `POST /api/implantacao/importar-produtos`
 
@@ -183,11 +209,18 @@ O controller nao deve conter regra de negocio. A regra fica nos casos de uso, e 
 
 O arquivo `apphosting.yaml` ja deixa o backend preparado para App Hosting.
 
-Antes de publicar:
+Antes de publicar com OpenAI:
 
 1. Configure a secret `OPENAI_API_KEY` no Firebase.
 2. Ajuste `CORS_ORIGINS` para o dominio real do frontend.
 3. Mantenha `REQUIRE_FIREBASE_AUTH=true`.
+
+Para publicar com Groq:
+
+1. Crie a secret: `firebase apphosting:secrets:set GROQ_API_KEY --project appmobileprod-19505`.
+2. No `apphosting.yaml`, troque `AI_PROVIDER` para `groq`.
+3. Adicione `GROQ_API_KEY` ao bloco `env` usando `secret: GROQ_API_KEY`.
+4. Nao remova a secret OpenAI se quiser poder voltar ao provedor anterior.
 
 ## Repositorio proprio
 

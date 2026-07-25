@@ -13,6 +13,7 @@ import { requestLogger } from './http/middlewares/requestLogger.js';
 
 export function createApp({
   generateAiResponseUseCase,
+  getDailyHomeOverviewUseCase,
   importProductsFromCsvUseCase,
   manageImplantationPipelines,
   updateImplantationApprovalUseCase,
@@ -37,7 +38,7 @@ export function createApp({
   app.use(
     '/api/ai',
     createFirebaseAuthMiddleware({ required: env.REQUIRE_FIREBASE_AUTH }),
-    createAiRoutes({ generateAiResponseUseCase }),
+    createAiRoutes({ generateAiResponseUseCase, getDailyHomeOverviewUseCase }),
   );
   app.use(
     '/api/implantacao',

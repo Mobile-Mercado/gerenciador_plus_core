@@ -20,8 +20,26 @@ const insightsRequestSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
 });
 
-export function createAiRoutes({ generateAiResponseUseCase }) {
+const homeOverviewRequestSchema = z.object({
+  establishmentId: z.string().min(1).max(160),
+  context: z.unknown(),
+});
+
+export function createAiRoutes({ generateAiResponseUseCase, getDailyHomeOverviewUseCase }) {
   const router = Router();
+
+  router.post(
+    '/home-overview',
+    asyncHandler(async (request, response) => {
+      const input = homeOverviewRequestSchema.parse(request.body);
+      const result = await getDailyHomeOverviewUseCase.execute({
+        ...input,
+        uid: request.auth?.uid,
+      });
+
+      response.json({ data: result });
+    }),
+  );
 
   router.post(
     '/responder',

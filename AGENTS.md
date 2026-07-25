@@ -4,7 +4,7 @@
 
 Este backend pertence ao projeto `web_gerenciador_plus`, o painel do lojista do ecossistema Mobile Mercado. Ele deve concentrar chamadas de IA e qualquer logica sensivel que nao pode ficar no frontend.
 
-O primeiro provedor de IA e a API da OpenAI. A chave deve existir apenas no ambiente do backend (`OPENAI_API_KEY`), nunca em React, Vite, HTML, service worker, arquivos publicos ou documentacao com valor real.
+Os provedores de IA disponiveis sao OpenAI e Groq, selecionados por `AI_PROVIDER`. As chaves devem existir apenas no ambiente do backend (`OPENAI_API_KEY` ou `GROQ_API_KEY`), nunca em React, Vite, HTML, service worker, arquivos publicos ou documentacao com valor real.
 
 Hospedagem inicial prevista: Firebase App Hosting, usando o `backend/apphosting.yaml`.
 
@@ -26,13 +26,13 @@ npm run check
 - `src/http/middlewares`: erros, auth, logs e utilitarios HTTP.
 - `src/application`: casos de uso. Deve conter regra de aplicacao, sem depender de Express ou OpenAI diretamente.
 - `src/domain`: contratos e erros de dominio.
-- `src/infra`: adaptadores externos, como OpenAI, Firebase Admin e logger.
+- `src/infra`: adaptadores externos, como OpenAI, Groq, Firebase Admin e logger.
 
 ## Regras SOLID
 
 - Rotas HTTP apenas traduzem request/response. Nao colocar regra de negocio nelas.
 - Casos de uso devem depender de contratos, nao de SDKs externos.
-- OpenAI, Firebase e outros provedores entram por adaptadores em `infra`.
+- OpenAI, Groq, Firebase e outros provedores entram por adaptadores em `infra`.
 - Ao adicionar um novo provedor de IA, crie outro adapter que respeite o contrato `AiGateway`.
 - Ao adicionar novos dados do Firestore, leia `../DATABASE.md` antes e nao invente caminhos.
 - Nao duplicar validacoes: se uma regra for compartilhada, mova para application/domain.
@@ -40,17 +40,18 @@ npm run check
 ## Seguranca
 
 - Nunca commitar `.env`.
-- Nao logar prompts com dados sensiveis de clientes, tokens, chaves ou respostas completas da OpenAI.
+- Nao logar prompts com dados sensiveis de clientes, tokens, chaves ou respostas completas dos provedores de IA.
 - Em producao, manter `REQUIRE_FIREBASE_AUTH=true`.
-- Rotas de IA devem aceitar token Firebase do usuario logado antes de consumir credito da OpenAI.
+- Rotas de IA devem aceitar token Firebase do usuario logado antes de consumir cota ou credito do provedor.
 - Erros enviados ao frontend devem ser claros, mas sem detalhes internos nem chaves.
-- O adapter OpenAI usa ate 8 retries para rate limits e falhas transitorias, alinhado as rotinas de catalogo do `padronizador_mobile_mercado`.
+- O adapter OpenAI usa ate 8 retries para falhas transitorias. O adapter Groq usa 2 para evitar insistencia excessiva ao atingir a cota gratuita.
 
 ## Rotas atuais
 
 - `GET /health`: healthcheck publico.
 - `POST /api/ai/responder`: resposta textual para o gerenciador.
 - `POST /api/ai/insights`: resposta orientada a dados/JSON para dashboards, analises e explicacoes.
+- `POST /api/ai/home-overview`: resumo/insight automatico da Home, limitado a uma geracao diaria por estabelecimento e persistido em `estabelecimentos/{id}/AiDailyInsights/{aaaa-mm-dd}`.
 - `POST /api/implantacao/importar-produtos`: recebe CSV em texto, importa produtos/categorias/subcategorias via Firebase Admin e responde em NDJSON com progresso real para a tela Implantacao.
 - `/api/implantacao/admin/pipelines`: lista pipelines e aprova verificacoes manuais. Exige token Firebase e UID presente em `IMPLANTATION_ADMIN_UIDS`.
 - `GET /api/notifications/web/status/{establishmentId}`: informa se a loja possui navegadores ativos para Web Push.
@@ -73,11 +74,22 @@ npm run check
 - Manter o mesmo contrato de Firestore documentado em `../DATABASE.md`: `estabelecimentos/{id}/Products`, `ProductCategories`, `ProductSubcategories` e a colecao global `produtos`.
 - Nao expor log completo de CSV, dados de cliente ou tokens.
 
+## Insight diario da Home
+
+- O cache fica em `estabelecimentos/{id}/AiDailyInsights/{aaaa-mm-dd}` e usa o fuso `America/Sao_Paulo`.
+- O documento guarda apenas a resposta final, provedor/modelo e timestamps; nunca persistir contexto bruto, UID ou dados de clientes.
+- A aquisicao usa uma trava temporaria no Firestore para impedir duas chamadas de IA simultaneas para a mesma loja e dia.
+- A rota sempre valida que o UID Firebase pertence ao estabelecimento antes de ler ou gerar o insight.
+
 ## Variaveis
 
-- `OPENAI_API_KEY`: secret obrigatoria para IA.
+- `AI_PROVIDER`: `openai` ou `groq`. Padrao: `openai`.
+- `OPENAI_API_KEY`: secret usada quando `AI_PROVIDER=openai`.
 - `OPENAI_MODEL`: modelo usado pelo adapter OpenAI. Padrao: `gpt-4.1-mini`.
 - `OPENAI_TEMPERATURE`: criatividade da resposta. Padrao: `0.2`.
+- `GROQ_API_KEY`: secret usada quando `AI_PROVIDER=groq`.
+- `GROQ_MODEL`: modelo usado pelo adapter Groq. Padrao: `qwen/qwen3.6-27b`, com texto, imagem e JSON.
+- `GROQ_TEMPERATURE`: criatividade da resposta Groq. Padrao: `0.2`.
 - `CORS_ORIGINS`: origens liberadas separadas por virgula.
 - `REQUIRE_FIREBASE_AUTH`: `true` em producao.
 - `REQUEST_BODY_LIMIT`: limite do corpo JSON.

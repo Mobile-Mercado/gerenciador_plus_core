@@ -41,15 +41,25 @@ function parseList(value) {
   return value.split(',').map((item) => item.trim()).filter(Boolean);
 }
 
+function parseAiProvider(value) {
+  const provider = String(value || 'openai').trim().toLowerCase();
+  if (provider === 'openai' || provider === 'groq') return provider;
+  throw new Error('AI_PROVIDER deve ser "openai" ou "groq".');
+}
+
 const nodeEnv = process.env.NODE_ENV || 'development';
 
 export const env = Object.freeze({
   NODE_ENV: nodeEnv,
   PORT: toInteger(process.env.PORT, 8080),
   CORS_ORIGINS: parseOrigins(process.env.CORS_ORIGINS),
+  AI_PROVIDER: parseAiProvider(process.env.AI_PROVIDER),
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
   OPENAI_MODEL: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
   OPENAI_TEMPERATURE: toNumber(process.env.OPENAI_TEMPERATURE, 0.2),
+  GROQ_API_KEY: process.env.GROQ_API_KEY || '',
+  GROQ_MODEL: process.env.GROQ_MODEL || 'qwen/qwen3.6-27b',
+  GROQ_TEMPERATURE: toNumber(process.env.GROQ_TEMPERATURE, 0.2),
   REQUEST_BODY_LIMIT: process.env.REQUEST_BODY_LIMIT || '10mb',
   REQUIRE_FIREBASE_AUTH: toBoolean(
     process.env.REQUIRE_FIREBASE_AUTH,

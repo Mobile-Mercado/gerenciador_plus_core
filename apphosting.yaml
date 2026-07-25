@@ -9,6 +9,9 @@ env:
   - variable: NODE_ENV
     value: production
 
+  - variable: AI_PROVIDER
+    value: openai
+
   - variable: REQUIRE_FIREBASE_AUTH
     value: "true"
 
@@ -20,3 +23,15 @@ env:
 
   - variable: OPENAI_API_KEY
     secret: OPENAI_API_KEY
+
+  - variable: OPENAI_MODEL
+    value: "gpt-4.1-mini"
+
+  - variable: OPENAI_TEMPERATURE
+    value: "0.2"
+
+  - variable: GROQ_MODEL
+    value: "qwen/qwen3.6-27b"
+
+  - variable: GROQ_TEMPERATURE
+    value: "0.2"

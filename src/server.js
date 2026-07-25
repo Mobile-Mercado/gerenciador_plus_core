@@ -1,25 +1,29 @@
 import { createApp } from './app.js';
 import { GenerateAiResponseUseCase } from './application/ai/GenerateAiResponseUseCase.js';
+import { GetDailyHomeOverviewUseCase } from './application/ai/GetDailyHomeOverviewUseCase.js';
 import { ImportProductsFromCsvUseCase } from './application/implantacao/ImportProductsFromCsvUseCase.js';
 import { ManageImplantationPipelines } from './application/implantacao/ManageImplantationPipelines.js';
 import { UpdateImplantationApprovalUseCase } from './application/implantacao/UpdateImplantationApprovalUseCase.js';
 import { ManageWebNotifications } from './application/notifications/ManageWebNotifications.js';
 import { env } from './config/env.js';
 import { FirebaseWebNotificationGateway } from './infra/firebase/FirebaseWebNotificationGateway.js';
+import { FirestoreDailyAiInsightRepository } from './infra/firebase/FirestoreDailyAiInsightRepository.js';
 import { FirestoreEstablishmentAccessRepository } from './infra/firebase/FirestoreEstablishmentAccessRepository.js';
 import { FirestoreWebNotificationTokenRepository } from './infra/firebase/FirestoreWebNotificationTokenRepository.js';
 import { getFirestoreDb } from './infra/firebase/firebaseAdmin.js';
+import { createAiGateway } from './infra/ai/createAiGateway.js';
 import { logger } from './infra/logger/logger.js';
-import { OpenAiResponsesGateway } from './infra/openai/OpenAiResponsesGateway.js';
 
-const aiGateway = new OpenAiResponsesGateway({
-  apiKey: env.OPENAI_API_KEY,
-  model: env.OPENAI_MODEL,
-  temperature: env.OPENAI_TEMPERATURE,
-});
+const aiGateway = createAiGateway(env);
 
 const generateAiResponseUseCase = new GenerateAiResponseUseCase({ aiGateway });
 const firestore = getFirestoreDb();
+const accessRepository = new FirestoreEstablishmentAccessRepository({ firestore });
+const getDailyHomeOverviewUseCase = new GetDailyHomeOverviewUseCase({
+  accessRepository,
+  insightRepository: new FirestoreDailyAiInsightRepository({ firestore }),
+  generateAiResponseUseCase,
+});
 const importProductsFromCsvUseCase = new ImportProductsFromCsvUseCase({
   firestore,
 });
@@ -29,7 +33,7 @@ const manageImplantationPipelines = new ManageImplantationPipelines({
 const manageWebNotifications = new ManageWebNotifications({
   tokenRepository: new FirestoreWebNotificationTokenRepository({ firestore }),
   gateway: new FirebaseWebNotificationGateway(),
-  accessRepository: new FirestoreEstablishmentAccessRepository({ firestore }),
+  accessRepository,
 });
 const updateImplantationApprovalUseCase = new UpdateImplantationApprovalUseCase({
   manageImplantationPipelines,
@@ -38,6 +42,7 @@ const updateImplantationApprovalUseCase = new UpdateImplantationApprovalUseCase(
 });
 const app = createApp({
   generateAiResponseUseCase,
+  getDailyHomeOverviewUseCase,
   importProductsFromCsvUseCase,
   manageImplantationPipelines,
   updateImplantationApprovalUseCase,
@@ -48,7 +53,8 @@ const server = app.listen(env.PORT, () => {
   logger.info('backend_started', {
     port: env.PORT,
     env: env.NODE_ENV,
-    model: env.OPENAI_MODEL,
+    aiProvider: aiGateway.provider,
+    model: aiGateway.model,
     firebaseAuthRequired: env.REQUIRE_FIREBASE_AUTH,
   });
 });
