@@ -11,7 +11,7 @@ export function createFirebaseAuthMiddleware({ required }) {
         return;
       }
       next(
-        new AppError('Login obrigatorio para usar a IA.', {
+        new AppError('Login obrigatorio para usar este recurso.', {
           statusCode: 401,
           code: 'auth_token_required',
         }),

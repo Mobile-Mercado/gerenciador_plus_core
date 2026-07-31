@@ -1,0 +1,25 @@
+{
+  "name": "web-gerenciador-functions",
+  "version": "1.0.0",
+  "description": "Firebase Cloud Functions para notificações FCM do Web Gerenciador",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "build": "echo \"No build step\"",
+    "test": "node --test",
+    "backfill:hourly-sales": "node scripts/backfillHourlySales.js",
+    "deploy": "firebase deploy --only functions",
+    "serve": "firebase emulators:start --only functions"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.7.0",
+    "firebase-functions": "^7.0.6"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}

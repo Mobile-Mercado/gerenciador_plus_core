@@ -23,6 +23,36 @@ export class ManageWebNotifications {
     this.clock = clock;
   }
 
+  async registerToken({ actorUid, token, userAgent }) {
+    const safeToken = String(token || '').trim();
+    if (safeToken.length < 20 || safeToken.length > 4096) {
+      throw new AppError('Token de notificacao invalido.', {
+        statusCode: 400,
+        code: 'notification_token_invalid',
+      });
+    }
+
+    const account = await this.accessRepository.findAccountByUid(actorUid);
+    if (!account?.hasEstablishment) {
+      throw new AppError('Conta sem estabelecimento ativo.', {
+        statusCode: 403,
+        code: 'notification_establishment_forbidden',
+      });
+    }
+
+    await this.tokenRepository.upsert({
+      establishmentId: account.establishmentId,
+      token: safeToken,
+      userAgent: sanitizeText(userAgent, 500),
+    });
+    const tokens = await this.tokenRepository.listActiveByEstablishment(account.establishmentId);
+    return {
+      establishmentId: account.establishmentId,
+      enabled: true,
+      activeTokens: tokens.length,
+    };
+  }
+
   async getStatus({ actorUid, establishmentId }) {
     await this.assertAccess({ actorUid, establishmentId });
     const tokens = await this.tokenRepository.listActiveByEstablishment(establishmentId);
@@ -82,6 +112,7 @@ export class ManageWebNotifications {
       title: safeTitle,
       body: safeBody,
       url: safeUrl,
+      tag: safeTag,
       establishmentId: safeEstablishmentId,
       timestamp,
     });
@@ -93,19 +124,12 @@ export class ManageWebNotifications {
     for (const chunk of chunkArray(tokens, MAX_TOKENS_PER_MESSAGE)) {
       const result = await this.gateway.sendMulticast({
         tokens: chunk.map((entry) => entry.token),
-        notification: { title: safeTitle, body: safeBody },
         data: messageData,
         webpush: {
-          notification: {
-            title: safeTitle,
-            body: safeBody,
-            icon: '/favicon.ico',
-            badge: '/favicon.ico',
-            tag: safeTag,
-            requireInteraction: true,
-            vibrate: [200, 100, 200],
-            data: { url: safeUrl },
+          headers: {
+            Urgency: 'high',
           },
+          fcmOptions: { link: safeUrl },
         },
       });
 

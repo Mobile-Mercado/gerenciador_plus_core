@@ -1,0 +1,143 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Bloqueia tudo por padrão
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Users - apenas o próprio usuário pode ler seus dados
+    match /Users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == resource.data.userAuthId;
+    }
+
+    // PurchaseRequests - apenas usuários autenticados do estabelecimento
+    match /PurchaseRequests/{orderId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+      allow delete: if false;
+    }
+
+    // Estabelecimentos
+    match /estabelecimentos/{estabId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+
+      match /Products/{productId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
+
+      match /Categories/{categoryId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
+
+      match /Subcategories/{subcategoryId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
+
+      match /Stats/{statId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
+
+      match /DailyStats/{statId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
+
+      match /MonthlyStats/{statId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
+
+      match /Banners/{bannerId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
+
+      match /ProductCategories/{categoryId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
+
+      match /ProductSubcategories/{subcategoryId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
+
+      match /NotificationViewState/{group} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
+
+      match /implantacaoGrenciador/{automationId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
+    }
+
+    // Base publica de produtos (produtos/{id}) - usada como referencia compartilhada
+    // entre estabelecimentos (lookup por barCode/nome), ver DATABASE.md
+    match /produtos/{productId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // Estatísticas globais do app
+    match /App/{docId} {
+      allow read: if request.auth != null;
+
+      match /{subcol}/{subId} {
+        allow read: if request.auth != null;
+      }
+    }
+
+    // Chats - apenas participantes podem ler/escrever
+    match /Chats/{chatId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+
+      match /Messages/{messageId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
+    }
+
+    // FCM Tokens - apenas o próprio usuário
+    match /FcmTokens/{tokenId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+      allow delete: if request.auth != null;
+    }
+
+    // AgenteVendas - conversas do agente IA por usuário
+    match /AgenteVendas/{userId} {
+      allow read, write: if request.auth != null;
+
+      match /conversas/{conversaId} {
+        allow read, write: if request.auth != null;
+
+        match /mensagens/{mensagemId} {
+          allow read, write: if request.auth != null;
+        }
+      }
+    }
+
+    // Necessário para collectionGroup('conversas') funcionar
+    match /{path=**}/conversas/{conversaId} {
+      allow read: if request.auth != null;
+    }
+
+    // Necessário para collectionGroup('mensagens') funcionar
+    match /{path=**}/mensagens/{mensagemId} {
+      allow read: if request.auth != null;
+    }
+  }
+}

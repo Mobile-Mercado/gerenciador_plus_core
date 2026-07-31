@@ -1,6 +1,6 @@
 # Backend do web_gerenciador_plus
 
-Backend inicial do gerenciador para recursos de IA. Ele fica separado do frontend Vite para manter chaves, prompts internos e chamadas aos provedores de IA fora do navegador.
+Backend do gerenciador para dados, IA, notificacoes e processos assincronos. Ele fica separado do frontend Vite para manter Firestore Admin, chaves, prompts internos e regras de acesso fora do navegador.
 
 Esta pasta esta ignorada no reposititorio principal do `web_gerenciador_plus`. Quando chegar a hora, ela deve virar um repositorio proprio.
 
@@ -67,6 +67,19 @@ O modelo Groq padrao aceita texto, imagem e JSON. O plano gratuito possui limite
 ### `GET /health`
 
 Verifica se o backend esta online.
+
+### Sessao e dados
+
+```text
+GET  /api/session
+POST /api/data/document
+POST /api/data/query
+POST /api/data/count
+POST /api/data/mutate
+POST /api/data/stream
+```
+
+Todas exigem token Firebase. A API resolve o estabelecimento pelo UID e restringe os caminhos antes de usar Firebase Admin. `/api/data/stream` entrega snapshots em NDJSON para manter as telas em tempo real sem expor o SDK Firestore no frontend.
 
 ### `POST /api/ai/responder`
 
@@ -150,11 +163,12 @@ Além do token Firebase, o UID precisa existir em `IMPLANTATION_ADMIN_UIDS`. Sep
 ### Notificacoes web
 
 ```text
+POST /api/notifications/web/register
 GET  /api/notifications/web/status/{establishmentId}
 POST /api/notifications/web/test
 ```
 
-As duas rotas sempre exigem `Authorization: Bearer <firebase-id-token>`. O backend confere em `Users` se o UID autenticado pertence ao estabelecimento informado, portanto uma loja nao pode consultar ou disparar notificacoes para outra.
+As rotas sempre exigem `Authorization: Bearer <firebase-id-token>`. O backend confere em `Users` se o UID autenticado pertence ao estabelecimento, portanto uma loja nao pode registrar, consultar ou disparar notificacoes para outra. A rota `register` recebe o token criado pelo Firebase Messaging no navegador e o persiste pelo Firebase Admin.
 
 Corpo da notificacao de teste:
 
@@ -164,7 +178,7 @@ Corpo da notificacao de teste:
 }
 ```
 
-O envio usa os documentos ativos de `FcmTokens`, em lotes de ate 500 tokens. Tokens expirados ou invalidos sao desativados automaticamente. A aprovacao manual dos passos 06 e 07 da implantacao tambem gera uma notificacao direcionada para `/implantacao`.
+O envio usa os documentos ativos de `FcmTokens`, em lotes de ate 500 tokens. Tokens expirados ou invalidos sao desativados automaticamente. O payload e enviado como mensagem de dados; o Service Worker do frontend monta e exibe uma unica notificacao, inclusive com a pagina fechada. A aprovacao manual dos passos 06 e 07 da implantacao tambem gera uma notificacao direcionada para `/implantacao`.
 
 ## Script de contexto do Firestore
 
@@ -203,6 +217,13 @@ Responsabilidades:
 - `infra`: OpenAI, Firebase Admin e outros servicos externos.
 - `config`: variaveis de ambiente.
 
+Arquivos centrais do BFF Firestore:
+
+- `src/application/data/ManageManagerData.js`: caso de uso de dados.
+- `src/infra/firebase/ManagerDataAccessPolicy.js`: autorizacao por loja e por recurso.
+- `src/infra/firebase/FirestoreManagerDataGateway.js`: consultas, contagens, streams e mutacoes.
+- `src/infra/firebase/firestoreTransport.js`: referencias, timestamps e valores especiais no transporte HTTP.
+
 O controller nao deve conter regra de negocio. A regra fica nos casos de uso, e os servicos externos ficam em adapters.
 
 ## Firebase App Hosting
@@ -222,15 +243,23 @@ Para publicar com Groq:
 3. Adicione `GROQ_API_KEY` ao bloco `env` usando `secret: GROQ_API_KEY`.
 4. Nao remova a secret OpenAI se quiser poder voltar ao provedor anterior.
 
+### Cloud Functions
+
+Os gatilhos de novo pedido e agregacao horaria ficam em `functions/` deste repositorio. App Hosting e Cloud Functions possuem deploys separados:
+
+```powershell
+firebase deploy --only functions --project appmobileprod-19505
+```
+
+Esse comando nao publica `firestore.rules` nem `firestore.indexes.json`. Alteracoes nesses dois arquivos devem ser implantadas somente com autorizacao explicita.
+
 ## Repositorio proprio
 
-Quando for separar:
+Esta pasta ja e um repositorio Git proprio e permanece ignorada pelo repositorio do frontend. Commits e deploys devem ser feitos a partir dela:
 
 ```powershell
 cd C:\Users\lucas\Desktop\mobile_mercado\web_gerenciador_plus\backend
-git init
 git add .
-git commit -m "Backend inicial do gerenciador plus"
+git commit -m "Atualiza backend do gerenciador"
+git push
 ```
-
-Depois conecte ao repositorio remoto proprio do backend.

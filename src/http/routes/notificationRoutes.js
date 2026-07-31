@@ -9,9 +9,26 @@ const establishmentParamsSchema = z.object({
 const testNotificationSchema = z.object({
   establishmentId: z.string().min(1).max(120),
 });
+const registerTokenSchema = z.object({
+  token: z.string().min(20).max(4096),
+  userAgent: z.string().max(500).optional(),
+});
 
 export function createNotificationRoutes({ manageWebNotifications }) {
   const router = Router();
+
+  router.post(
+    '/web/register',
+    asyncHandler(async (request, response) => {
+      const payload = registerTokenSchema.parse(request.body);
+      const result = await manageWebNotifications.registerToken({
+        actorUid: request.auth.uid,
+        token: payload.token,
+        userAgent: payload.userAgent || request.headers['user-agent'],
+      });
+      response.json({ data: result });
+    }),
+  );
 
   router.get(
     '/web/status/:establishmentId',

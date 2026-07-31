@@ -11,8 +11,28 @@ test('impede o usuario de consultar notificacoes de outra loja', async () => {
   );
 });
 
+test('registra o token no estabelecimento resolvido pelo backend', async () => {
+  const registered = [];
+  const manager = createManager({ registered });
+
+  const result = await manager.registerToken({
+    actorUid: 'uid-1',
+    token: 'token-fcm-valido-com-tamanho-suficiente',
+    userAgent: 'Browser Test',
+  });
+
+  assert.equal(result.establishmentId, 'loja-1');
+  assert.equal(result.enabled, true);
+  assert.deepEqual(registered, [{
+    establishmentId: 'loja-1',
+    token: 'token-fcm-valido-com-tamanho-suficiente',
+    userAgent: 'Browser Test',
+  }]);
+});
+
 test('envia notificacao e desativa somente token invalido', async () => {
   const deactivated = [];
+  const sentPayloads = [];
   const manager = createManager({
     tokens: [
       { id: 'doc-a', token: 'token-a' },
@@ -29,6 +49,7 @@ test('envia notificacao e desativa somente token invalido', async () => {
       ],
     },
     deactivated,
+    sentPayloads,
   });
 
   const result = await manager.sendSystemNotification({
@@ -42,6 +63,9 @@ test('envia notificacao e desativa somente token invalido', async () => {
   assert.equal(result.failureCount, 1);
   assert.equal(result.invalidTokensDeactivated, 1);
   assert.deepEqual(deactivated, ['doc-b']);
+  assert.equal(sentPayloads[0].notification, undefined);
+  assert.equal(sentPayloads[0].data.title, 'Atualizacao');
+  assert.equal(sentPayloads[0].data.url, '/implantacao');
 });
 
 test('nao chama o FCM quando a loja nao possui token ativo', async () => {
@@ -69,18 +93,26 @@ function createManager({
   gatewayResult = { successCount: 0, failureCount: 0, failures: [] },
   deactivated = [],
   onGatewayCall = () => {},
+  registered = [],
+  sentPayloads = [],
 } = {}) {
   return new ManageWebNotifications({
     accessRepository: {
       userCanAccess: async () => allowed,
+      findAccountByUid: async () => allowed ? {
+        establishmentId: 'loja-1',
+        hasEstablishment: true,
+      } : null,
     },
     tokenRepository: {
       listActiveByEstablishment: async () => tokens,
       deactivate: async (ids) => deactivated.push(...ids),
+      upsert: async (payload) => registered.push(payload),
     },
     gateway: {
-      sendMulticast: async () => {
+      sendMulticast: async (payload) => {
         onGatewayCall();
+        sentPayloads.push(payload);
         return gatewayResult;
       },
     },

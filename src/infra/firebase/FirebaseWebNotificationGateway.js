@@ -10,9 +10,9 @@ export class FirebaseWebNotificationGateway extends WebNotificationGateway {
   async sendMulticast({ tokens, notification, data, webpush }) {
     const response = await this.messaging.sendEachForMulticast({
       tokens,
-      notification,
       data,
       webpush,
+      ...(notification ? { notification } : {}),
     });
 
     return {

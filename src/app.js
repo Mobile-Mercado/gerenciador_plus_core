@@ -3,9 +3,11 @@ import express from 'express';
 import helmet from 'helmet';
 import { env } from './config/env.js';
 import { createAiRoutes } from './http/routes/aiRoutes.js';
+import { createDataRoutes } from './http/routes/dataRoutes.js';
 import { createHealthRoutes } from './http/routes/healthRoutes.js';
 import { createImplantacaoRoutes } from './http/routes/implantacaoRoutes.js';
 import { createNotificationRoutes } from './http/routes/notificationRoutes.js';
+import { createSessionRoutes } from './http/routes/sessionRoutes.js';
 import { errorHandler, notFoundHandler } from './http/middlewares/errorHandler.js';
 import { createFirebaseAuthMiddleware } from './http/middlewares/firebaseAuth.js';
 import { createImplantationAdminMiddleware } from './http/middlewares/implantationAdmin.js';
@@ -18,6 +20,8 @@ export function createApp({
   manageImplantationPipelines,
   updateImplantationApprovalUseCase,
   manageWebNotifications,
+  getManagerSession,
+  manageManagerData,
 }) {
   const app = express();
 
@@ -35,6 +39,16 @@ export function createApp({
   });
 
   app.use('/health', createHealthRoutes());
+  app.use(
+    '/api/session',
+    createFirebaseAuthMiddleware({ required: true }),
+    createSessionRoutes({ getManagerSession }),
+  );
+  app.use(
+    '/api/data',
+    createFirebaseAuthMiddleware({ required: true }),
+    createDataRoutes({ manageManagerData }),
+  );
   app.use(
     '/api/ai',
     createFirebaseAuthMiddleware({ required: env.REQUIRE_FIREBASE_AUTH }),

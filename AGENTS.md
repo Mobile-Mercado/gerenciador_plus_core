@@ -60,6 +60,7 @@ npm run check
 ## Notificacoes web
 
 - O backend envia Web Push pelo Firebase Admin Messaging; nenhuma credencial FCM fica no frontend.
+- Enviar Web Push como mensagem de dados. O Service Worker do frontend e o unico responsavel por montar a notificacao em segundo plano, evitando exibicao duplicada pelo SDK.
 - Tokens sao lidos de `FcmTokens`, usando `clientId == establishmentId` e no maximo 100 dispositivos por loja.
 - Tokens invalidos sao marcados com `active: false`; nunca registrar o valor do token em logs.
 - As rotas de notificacao sempre exigem Firebase Auth, mesmo quando `REQUIRE_FIREBASE_AUTH=false` em desenvolvimento.
@@ -105,3 +106,17 @@ Este backend atende o `web_gerenciador_plus`. Quando uma funcionalidade de IA de
 - `..\mobile_cliente`
 
 Se uma funcionalidade criar nova colecao/campo no Firestore, atualizar `../DATABASE.md` e registrar o impacto no projeto que captura ou consome esse dado.
+
+## Fronteira definitiva de dados
+
+- Este repositorio concentra IA, Firebase Admin, Firestore, Web Push e Cloud Functions do gerenciador.
+- O frontend usa Firebase no navegador somente para Auth, Messaging, Service Worker e uploads iniciados pelo usuario no Storage.
+- `GET /api/session` resolve a conta e o estabelecimento a partir do UID autenticado.
+- `/api/data/document`, `/api/data/query`, `/api/data/count`, `/api/data/mutate` e `/api/data/stream` formam o BFF de dados usado pelo React.
+- O BFF nunca pode aceitar acesso Firestore arbitrario. Toda nova colecao raiz deve ser explicitamente autorizada em `ManagerDataAccessPolicy.js` e coberta por teste.
+- Caminhos sob `estabelecimentos/{id}` so aceitam o `id` da conta autenticada. Pedidos, chats, clientes e conversas do agente possuem verificacao adicional de posse.
+- Perfis em `Users` sao limitados aos clientes derivados dos pedidos da loja; campos internos como `userAuthId` nao saem pela API.
+- Streams usam NDJSON e Firebase Admin `onSnapshot`; o cliente reconecta quando o App Hosting encerra uma conexao longa.
+- Tokens FCM sao registrados por `POST /api/notifications/web/register`; o documento usa hash SHA-256 como ID e guarda o token somente no campo `token`.
+- `functions/sendOrderNotification` envia novos pedidos mesmo com o painel fechado. `functions/aggregateOrderHourlySales` mantem agregacoes horarias.
+- `firebase deploy --only functions` publica somente os gatilhos. Nao publicar regras/indices sem autorizacao explicita.
