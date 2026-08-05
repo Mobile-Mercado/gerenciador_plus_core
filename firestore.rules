@@ -20,6 +20,13 @@ service cloud.firestore {
       allow create: if request.auth != null;
       allow update: if request.auth != null;
       allow delete: if false;
+
+      // AuditLog só é escrito pelas Cloud Functions (Admin SDK, ignora estas
+      // regras). Cliente nunca escreve aqui, senão o log de auditoria vira forjável.
+      match /AuditLog/{auditId} {
+        allow read: if request.auth != null;
+        allow write: if false;
+      }
     }
 
     // Estabelecimentos
