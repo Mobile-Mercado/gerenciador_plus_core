@@ -146,5 +146,13 @@ service cloud.firestore {
     match /{path=**}/mensagens/{mensagemId} {
       allow read: if request.auth != null;
     }
+
+    // Necessário para collectionGroup('AuditLog') funcionar (tela de
+    // histórico de alterações). Escrita continua negada — só a Cloud
+    // Function (Admin SDK) grava, como já vale na regra aninhada acima.
+    match /{path=**}/AuditLog/{auditId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
   }
 }
