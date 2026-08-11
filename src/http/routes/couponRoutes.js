@@ -14,11 +14,18 @@ const ruleSchema = z.union([
       value: z.number().positive(),
     }).optional(),
   }),
+  z.object({
+    type: z.literal('quantityRange'),
+    minQuantity: z.number().int().positive(),
+    maxQuantity: z.number().int().positive().nullable(),
+  }),
 ]);
 
 const createCouponSchema = z.object({
   code: z.string().min(3).max(30),
   description: z.string().min(1).max(200),
+  termsText: z.string().max(2000).optional(),
+  firstPurchaseOnly: z.boolean().default(false),
   establishmentIds: z.array(z.string()).min(1),
   rules: z.array(ruleSchema).default([]),
   discount: z.object({

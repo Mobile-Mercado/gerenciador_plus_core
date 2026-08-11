@@ -8,7 +8,7 @@ export class ManageCoupons {
   }
 
   async createCoupon({
-    actorUid, code, description, establishmentIds, rules, discount,
+    actorUid, code, description, termsText, firstPurchaseOnly, establishmentIds, rules, discount,
     startAt, endAt, perCustomerLimit, totalUsageLimit, stackable,
   }) {
     await this.assertAdmin(actorUid);
@@ -23,6 +23,8 @@ export class ManageCoupons {
     const coupon = {
       code: String(code || '').trim().toUpperCase(),
       description: String(description || '').trim(),
+      termsText: termsText ? String(termsText).trim() : null,
+      firstPurchaseOnly: Boolean(firstPurchaseOnly),
       active: true,
       startAt,
       endAt,

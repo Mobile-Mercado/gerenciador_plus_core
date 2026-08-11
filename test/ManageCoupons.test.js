@@ -5,6 +5,8 @@ import { ManageCoupons } from '../src/application/coupons/ManageCoupons.js';
 const validPayload = {
   code: 'PROMO10',
   description: '10% em bebidas',
+  termsText: 'Válido uma vez por CPF, não cumulativo com outras promoções.',
+  firstPurchaseOnly: false,
   establishmentIds: ['empresa-1'],
   rules: [{ type: 'category', categoryIds: ['cat-bebidas'] }],
   discount: { kind: 'percentage', value: 10 },
@@ -47,6 +49,26 @@ test('createCoupon rejeita establishmentIds vazio', async () => {
     manager.createCoupon({ actorUid: 'uid-admin', ...validPayload, establishmentIds: [] }),
     (error) => error.code === 'coupon_establishment_required' && error.statusCode === 400,
   );
+});
+
+test('createCoupon grava termsText e firstPurchaseOnly', async () => {
+  const created = [];
+  const manager = createManager({ created });
+
+  await manager.createCoupon({ actorUid: 'uid-admin', ...validPayload, firstPurchaseOnly: true });
+
+  assert.equal(created[0].termsText, validPayload.termsText);
+  assert.equal(created[0].firstPurchaseOnly, true);
+});
+
+test('createCoupon aceita termsText ausente como null', async () => {
+  const created = [];
+  const manager = createManager({ created });
+  const { termsText, ...payloadSemTermos } = validPayload;
+
+  await manager.createCoupon({ actorUid: 'uid-admin', ...payloadSemTermos });
+
+  assert.equal(created[0].termsText, null);
 });
 
 test('listCoupons retorna os cupons do repositorio para um admin', async () => {
