@@ -2,6 +2,7 @@ import { createApp } from './app.js';
 import { GenerateAiResponseUseCase } from './application/ai/GenerateAiResponseUseCase.js';
 import { GetDailyHomeOverviewUseCase } from './application/ai/GetDailyHomeOverviewUseCase.js';
 import { GetManagerSession } from './application/auth/GetManagerSession.js';
+import { ManageCoupons } from './application/coupons/ManageCoupons.js';
 import { ManageManagerData } from './application/data/ManageManagerData.js';
 import { ImportProductsFromCsvUseCase } from './application/implantacao/ImportProductsFromCsvUseCase.js';
 import { ManageImplantationPipelines } from './application/implantacao/ManageImplantationPipelines.js';
@@ -10,6 +11,7 @@ import { ManageWebNotifications } from './application/notifications/ManageWebNot
 import { env } from './config/env.js';
 import { FirebaseWebNotificationGateway } from './infra/firebase/FirebaseWebNotificationGateway.js';
 import { FirestoreDailyAiInsightRepository } from './infra/firebase/FirestoreDailyAiInsightRepository.js';
+import { FirestoreCouponRepository } from './infra/firebase/FirestoreCouponRepository.js';
 import { FirestoreEstablishmentAccessRepository } from './infra/firebase/FirestoreEstablishmentAccessRepository.js';
 import { FirestoreManagerDataGateway } from './infra/firebase/FirestoreManagerDataGateway.js';
 import { FirestoreWebNotificationTokenRepository } from './infra/firebase/FirestoreWebNotificationTokenRepository.js';
@@ -50,6 +52,12 @@ const updateImplantationApprovalUseCase = new UpdateImplantationApprovalUseCase(
   manageWebNotifications,
   logger,
 });
+const manageCoupons = new ManageCoupons({
+  couponRepository: new FirestoreCouponRepository({ firestore }),
+  adminAccessRepository: {
+    isAdmin: async (uid) => env.COUPON_ADMIN_UIDS.includes(uid),
+  },
+});
 const app = createApp({
   generateAiResponseUseCase,
   getDailyHomeOverviewUseCase,
@@ -57,6 +65,7 @@ const app = createApp({
   manageImplantationPipelines,
   updateImplantationApprovalUseCase,
   manageWebNotifications,
+  manageCoupons,
   getManagerSession,
   manageManagerData,
 });

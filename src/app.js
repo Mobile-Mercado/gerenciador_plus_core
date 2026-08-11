@@ -3,12 +3,14 @@ import express from 'express';
 import helmet from 'helmet';
 import { env } from './config/env.js';
 import { createAiRoutes } from './http/routes/aiRoutes.js';
+import { createCouponRoutes } from './http/routes/couponRoutes.js';
 import { createDataRoutes } from './http/routes/dataRoutes.js';
 import { createHealthRoutes } from './http/routes/healthRoutes.js';
 import { createImplantacaoRoutes } from './http/routes/implantacaoRoutes.js';
 import { createNotificationRoutes } from './http/routes/notificationRoutes.js';
 import { createSessionRoutes } from './http/routes/sessionRoutes.js';
 import { errorHandler, notFoundHandler } from './http/middlewares/errorHandler.js';
+import { createCouponAdminMiddleware } from './http/middlewares/couponAdmin.js';
 import { createFirebaseAuthMiddleware } from './http/middlewares/firebaseAuth.js';
 import { createImplantationAdminMiddleware } from './http/middlewares/implantationAdmin.js';
 import { requestLogger } from './http/middlewares/requestLogger.js';
@@ -20,6 +22,7 @@ export function createApp({
   manageImplantationPipelines,
   updateImplantationApprovalUseCase,
   manageWebNotifications,
+  manageCoupons,
   getManagerSession,
   manageManagerData,
 }) {
@@ -70,6 +73,16 @@ export function createApp({
     '/api/notifications',
     createFirebaseAuthMiddleware({ required: true }),
     createNotificationRoutes({ manageWebNotifications }),
+  );
+  app.use(
+    '/api/coupons',
+    createFirebaseAuthMiddleware({ required: true }),
+    createCouponRoutes({
+      manageCoupons,
+      couponAdminMiddleware: createCouponAdminMiddleware({
+        allowedUids: env.COUPON_ADMIN_UIDS,
+      }),
+    }),
   );
 
   app.use(notFoundHandler);
