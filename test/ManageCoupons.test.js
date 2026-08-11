@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { Timestamp } from 'firebase-admin/firestore';
 import { ManageCoupons } from '../src/application/coupons/ManageCoupons.js';
 
 const validPayload = {
@@ -69,6 +70,42 @@ test('createCoupon aceita termsText ausente como null', async () => {
   await manager.createCoupon({ actorUid: 'uid-admin', ...payloadSemTermos });
 
   assert.equal(created[0].termsText, null);
+});
+
+test('createCoupon grava startAt, endAt e createdAt como Timestamp do Firestore', async () => {
+  const created = [];
+  const manager = createManager({ created });
+
+  await manager.createCoupon({ actorUid: 'uid-admin', ...validPayload });
+
+  assert.ok(created[0].startAt instanceof Timestamp);
+  assert.ok(created[0].endAt instanceof Timestamp);
+  assert.ok(created[0].createdAt instanceof Timestamp);
+  assert.equal(created[0].startAt.toDate().toISOString(), validPayload.startAt);
+  assert.equal(created[0].endAt.toDate().toISOString(), validPayload.endAt);
+});
+
+test('createCoupon rejeita codigo ja usado por um cupom ativo', async () => {
+  const manager = createManager({
+    coupons: [{ id: 'c1', code: 'PROMO10', active: true }],
+  });
+
+  await assert.rejects(
+    manager.createCoupon({ actorUid: 'uid-admin', ...validPayload, code: 'promo10' }),
+    (error) => error.code === 'coupon_code_already_exists' && error.statusCode === 409,
+  );
+});
+
+test('createCoupon aceita codigo reutilizado de um cupom desativado', async () => {
+  const created = [];
+  const manager = createManager({
+    created,
+    coupons: [{ id: 'c1', code: 'PROMO10', active: false }],
+  });
+
+  await manager.createCoupon({ actorUid: 'uid-admin', ...validPayload, code: 'promo10' });
+
+  assert.equal(created[0].code, 'PROMO10');
 });
 
 test('listCoupons retorna os cupons do repositorio para um admin', async () => {

@@ -160,6 +160,16 @@ PATCH /api/implantacao/admin/pipelines/{establishmentId}/checks/{step}/{checkId}
 
 Além do token Firebase, o UID precisa existir em `IMPLANTATION_ADMIN_UIDS`. Separe múltiplos UIDs por vírgula. O painel lê e altera somente o documento compacto `implantacaoGrenciador/pipeline`.
 
+### Gestão de cupons
+
+```text
+GET  /api/coupons
+POST /api/coupons
+POST /api/coupons/{couponId}/deactivate
+```
+
+Além do token Firebase, o UID precisa existir em `COUPON_ADMIN_UIDS`. Separe múltiplos UIDs por vírgula. `startAt`, `endAt` e `createdAt` são gravados como `Timestamp` do Firestore, o mesmo tipo lido pela Cloud Function `aplicarCupom` no checkout.
+
 ### Notificacoes web
 
 ```text

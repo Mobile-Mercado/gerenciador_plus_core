@@ -1,3 +1,4 @@
+import { Timestamp } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 
 export class ManageCoupons {
@@ -20,14 +21,17 @@ export class ManageCoupons {
       });
     }
 
+    const normalizedCode = String(code || '').trim().toUpperCase();
+    await this.assertCodeNotActive(normalizedCode);
+
     const coupon = {
-      code: String(code || '').trim().toUpperCase(),
+      code: normalizedCode,
       description: String(description || '').trim(),
       termsText: termsText ? String(termsText).trim() : null,
       firstPurchaseOnly: Boolean(firstPurchaseOnly),
       active: true,
-      startAt,
-      endAt,
+      startAt: Timestamp.fromDate(new Date(startAt)),
+      endAt: Timestamp.fromDate(new Date(endAt)),
       establishmentIds,
       rules: rules || [],
       discount,
@@ -35,10 +39,21 @@ export class ManageCoupons {
       totalUsageLimit: totalUsageLimit ?? null,
       usageCount: 0,
       stackable: Boolean(stackable),
-      createdAt: this.clock().toISOString(),
+      createdAt: Timestamp.fromDate(this.clock()),
     };
 
     return this.couponRepository.create(coupon);
+  }
+
+  async assertCodeNotActive(code) {
+    const coupons = await this.couponRepository.list();
+    const duplicateActive = coupons.some((coupon) => coupon.code === code && coupon.active);
+    if (duplicateActive) {
+      throw new AppError('Ja existe um cupom ativo com este codigo.', {
+        statusCode: 409,
+        code: 'coupon_code_already_exists',
+      });
+    }
   }
 
   async listCoupons({ actorUid }) {

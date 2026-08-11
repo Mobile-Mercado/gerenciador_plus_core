@@ -54,6 +54,7 @@ npm run check
 - `POST /api/ai/home-overview`: resumo/insight automatico da Home, limitado a uma geracao diaria por estabelecimento e persistido em `estabelecimentos/{id}/AiDailyInsights/{aaaa-mm-dd}`.
 - `POST /api/implantacao/importar-produtos`: recebe CSV em texto, importa produtos/categorias/subcategorias via Firebase Admin e responde em NDJSON com progresso real para a tela Implantacao.
 - `/api/implantacao/admin/pipelines`: lista pipelines e aprova verificacoes manuais. Exige token Firebase e UID presente em `IMPLANTATION_ADMIN_UIDS`.
+- `/api/coupons`: cria, lista, atualiza e desativa cupons. Exige token Firebase e UID presente em `COUPON_ADMIN_UIDS`.
 - `GET /api/notifications/web/status/{establishmentId}`: informa se a loja possui navegadores ativos para Web Push.
 - `POST /api/notifications/web/test`: envia uma notificacao de teste apenas para a loja vinculada ao usuario autenticado.
 
@@ -95,6 +96,7 @@ npm run check
 - `REQUIRE_FIREBASE_AUTH`: `true` em producao.
 - `REQUEST_BODY_LIMIT`: limite do corpo JSON.
 - `IMPLANTATION_ADMIN_UIDS`: UIDs Firebase autorizados no painel interno, separados por virgula.
+- `COUPON_ADMIN_UIDS`: UIDs Firebase autorizados a gerenciar cupons em `/api/coupons`, separados por virgula.
 
 ## Contexto com outros projetos
 
