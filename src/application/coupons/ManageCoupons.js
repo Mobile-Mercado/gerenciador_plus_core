@@ -2,27 +2,20 @@ import { Timestamp } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 
 export class ManageCoupons {
-  constructor({ couponRepository, adminAccessRepository, clock = () => new Date() }) {
+  constructor({ couponRepository, accessRepository, clock = () => new Date() }) {
     this.couponRepository = couponRepository;
-    this.adminAccessRepository = adminAccessRepository;
+    this.accessRepository = accessRepository;
     this.clock = clock;
   }
 
   async createCoupon({
-    actorUid, code, description, termsText, firstPurchaseOnly, establishmentIds, rules, discount,
+    actorUid, code, description, termsText, firstPurchaseOnly, rules, discount,
     startAt, endAt, perCustomerLimit, totalUsageLimit, stackable,
   }) {
-    await this.assertAdmin(actorUid);
-
-    if (!Array.isArray(establishmentIds) || establishmentIds.length === 0) {
-      throw new AppError('Selecione ao menos um estabelecimento.', {
-        statusCode: 400,
-        code: 'coupon_establishment_required',
-      });
-    }
+    const account = await this.requireEstablishment(actorUid);
 
     const normalizedCode = String(code || '').trim().toUpperCase();
-    await this.assertCodeNotActive(normalizedCode);
+    await this.assertCodeNotActive(normalizedCode, account.establishmentId);
 
     const coupon = {
       code: normalizedCode,
@@ -32,7 +25,7 @@ export class ManageCoupons {
       active: true,
       startAt: Timestamp.fromDate(new Date(startAt)),
       endAt: Timestamp.fromDate(new Date(endAt)),
-      establishmentIds,
+      establishmentIds: [account.establishmentId],
       rules: rules || [],
       discount,
       perCustomerLimit: perCustomerLimit ?? 1,
@@ -45,9 +38,10 @@ export class ManageCoupons {
     return this.couponRepository.create(coupon);
   }
 
-  async assertCodeNotActive(code) {
+  async assertCodeNotActive(code, establishmentId) {
     const coupons = await this.couponRepository.list();
-    const duplicateActive = coupons.some((coupon) => coupon.code === code && coupon.active);
+    const duplicateActive = coupons.some((coupon) =>
+      coupon.code === code && coupon.active && coupon.establishmentIds?.includes(establishmentId));
     if (duplicateActive) {
       throw new AppError('Ja existe um cupom ativo com este codigo.', {
         statusCode: 409,
@@ -57,19 +51,22 @@ export class ManageCoupons {
   }
 
   async listCoupons({ actorUid }) {
-    await this.assertAdmin(actorUid);
-    return this.couponRepository.list();
+    const account = await this.requireEstablishment(actorUid);
+    const coupons = await this.couponRepository.list();
+    return coupons.filter((coupon) => coupon.establishmentIds?.includes(account.establishmentId));
   }
 
   async updateCoupon({ actorUid, couponId, patch }) {
-    await this.assertAdmin(actorUid);
-    await this.requireCoupon(couponId);
+    const account = await this.requireEstablishment(actorUid);
+    const coupon = await this.requireCoupon(couponId);
+    this.assertOwnership(coupon, account.establishmentId);
     await this.couponRepository.update(couponId, patch);
   }
 
   async deactivateCoupon({ actorUid, couponId }) {
-    await this.assertAdmin(actorUid);
-    await this.requireCoupon(couponId);
+    const account = await this.requireEstablishment(actorUid);
+    const coupon = await this.requireCoupon(couponId);
+    this.assertOwnership(coupon, account.establishmentId);
     await this.couponRepository.update(couponId, { active: false });
   }
 
@@ -84,13 +81,23 @@ export class ManageCoupons {
     return coupon;
   }
 
-  async assertAdmin(actorUid) {
-    const isAdmin = await this.adminAccessRepository.isAdmin(actorUid);
-    if (!isAdmin) {
-      throw new AppError('Esta conta nao possui acesso a gestao de cupons.', {
+  assertOwnership(coupon, establishmentId) {
+    if (!coupon.establishmentIds?.includes(establishmentId)) {
+      throw new AppError('Este cupom nao pertence ao seu estabelecimento.', {
         statusCode: 403,
-        code: 'coupon_admin_forbidden',
+        code: 'coupon_establishment_forbidden',
       });
     }
+  }
+
+  async requireEstablishment(actorUid) {
+    const account = await this.accessRepository.findAccountByUid(actorUid);
+    if (!account?.hasEstablishment) {
+      throw new AppError('Conta sem estabelecimento vinculado.', {
+        statusCode: 403,
+        code: 'coupon_no_establishment',
+      });
+    }
+    return account;
   }
 }

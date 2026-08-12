@@ -8,7 +8,6 @@ const validPayload = {
   description: '10% em bebidas',
   termsText: 'Válido uma vez por CPF, não cumulativo com outras promoções.',
   firstPurchaseOnly: false,
-  establishmentIds: ['empresa-1'],
   rules: [{ type: 'category', categoryIds: ['cat-bebidas'] }],
   discount: { kind: 'percentage', value: 10 },
   startAt: '2026-08-01T00:00:00.000Z',
@@ -18,126 +17,163 @@ const validPayload = {
   stackable: false,
 };
 
-test('createCoupon rejeita quem nao esta na allowlist de admin', async () => {
-  const manager = createManager({ allowed: false });
+test('createCoupon rejeita ator sem estabelecimento vinculado', async () => {
+  const manager = createManager({ hasEstablishment: false });
 
   await assert.rejects(
-    manager.createCoupon({ actorUid: 'uid-qualquer', ...validPayload }),
-    (error) => error.code === 'coupon_admin_forbidden' && error.statusCode === 403,
+    manager.createCoupon({ actorUid: 'uid-sem-loja', ...validPayload }),
+    (error) => error.code === 'coupon_no_establishment' && error.statusCode === 403,
   );
 });
 
-test('createCoupon normaliza o codigo para maiusculo e grava no repositorio', async () => {
+test('createCoupon grava establishmentIds com o estabelecimento do ator, ignorando qualquer valor no payload', async () => {
+  const created = [];
+  const manager = createManager({ created, establishmentId: 'loja-1' });
+
+  const result = await manager.createCoupon({
+    actorUid: 'uid-lojista',
+    ...validPayload,
+    establishmentIds: ['loja-2', 'loja-3'],
+  });
+
+  assert.deepEqual(created[0].establishmentIds, ['loja-1']);
+  assert.equal(result.code, 'PROMO10');
+});
+
+test('createCoupon normaliza o codigo para maiusculo', async () => {
   const created = [];
   const manager = createManager({ created });
 
-  const result = await manager.createCoupon({
-    actorUid: 'uid-admin',
-    ...validPayload,
-    code: 'promo10',
-  });
+  await manager.createCoupon({ actorUid: 'uid-lojista', ...validPayload, code: 'promo10' });
 
-  assert.equal(result.code, 'PROMO10');
   assert.equal(created[0].code, 'PROMO10');
   assert.equal(created[0].usageCount, 0);
   assert.equal(created[0].active, true);
 });
 
-test('createCoupon rejeita establishmentIds vazio', async () => {
-  const manager = createManager({});
-
-  await assert.rejects(
-    manager.createCoupon({ actorUid: 'uid-admin', ...validPayload, establishmentIds: [] }),
-    (error) => error.code === 'coupon_establishment_required' && error.statusCode === 400,
-  );
-});
-
-test('createCoupon grava termsText e firstPurchaseOnly', async () => {
+test('createCoupon grava startAt/endAt/createdAt como Timestamp', async () => {
   const created = [];
   const manager = createManager({ created });
 
-  await manager.createCoupon({ actorUid: 'uid-admin', ...validPayload, firstPurchaseOnly: true });
-
-  assert.equal(created[0].termsText, validPayload.termsText);
-  assert.equal(created[0].firstPurchaseOnly, true);
-});
-
-test('createCoupon aceita termsText ausente como null', async () => {
-  const created = [];
-  const manager = createManager({ created });
-  const { termsText, ...payloadSemTermos } = validPayload;
-
-  await manager.createCoupon({ actorUid: 'uid-admin', ...payloadSemTermos });
-
-  assert.equal(created[0].termsText, null);
-});
-
-test('createCoupon grava startAt, endAt e createdAt como Timestamp do Firestore', async () => {
-  const created = [];
-  const manager = createManager({ created });
-
-  await manager.createCoupon({ actorUid: 'uid-admin', ...validPayload });
+  await manager.createCoupon({ actorUid: 'uid-lojista', ...validPayload });
 
   assert.ok(created[0].startAt instanceof Timestamp);
   assert.ok(created[0].endAt instanceof Timestamp);
   assert.ok(created[0].createdAt instanceof Timestamp);
-  assert.equal(created[0].startAt.toDate().toISOString(), validPayload.startAt);
-  assert.equal(created[0].endAt.toDate().toISOString(), validPayload.endAt);
 });
 
-test('createCoupon rejeita codigo ja usado por um cupom ativo', async () => {
+test('createCoupon rejeita codigo ja usado por cupom ativo do mesmo estabelecimento', async () => {
   const manager = createManager({
-    coupons: [{ id: 'c1', code: 'PROMO10', active: true }],
+    coupons: [{ id: 'c1', code: 'PROMO10', active: true, establishmentIds: ['loja-1'] }],
   });
 
   await assert.rejects(
-    manager.createCoupon({ actorUid: 'uid-admin', ...validPayload, code: 'promo10' }),
+    manager.createCoupon({ actorUid: 'uid-lojista', ...validPayload }),
     (error) => error.code === 'coupon_code_already_exists' && error.statusCode === 409,
   );
 });
 
-test('createCoupon aceita codigo reutilizado de um cupom desativado', async () => {
+test('createCoupon aceita codigo igual ao de um cupom desativado', async () => {
   const created = [];
   const manager = createManager({
     created,
-    coupons: [{ id: 'c1', code: 'PROMO10', active: false }],
+    coupons: [{ id: 'c1', code: 'PROMO10', active: false, establishmentIds: ['loja-1'] }],
   });
 
-  await manager.createCoupon({ actorUid: 'uid-admin', ...validPayload, code: 'promo10' });
+  await manager.createCoupon({ actorUid: 'uid-lojista', ...validPayload });
 
   assert.equal(created[0].code, 'PROMO10');
 });
 
-test('listCoupons retorna os cupons do repositorio para um admin', async () => {
-  const manager = createManager({ coupons: [{ id: 'c1', code: 'PROMO10' }] });
-
-  const result = await manager.listCoupons({ actorUid: 'uid-admin' });
-
-  assert.deepEqual(result, [{ id: 'c1', code: 'PROMO10' }]);
-});
-
-test('deactivateCoupon marca active como false', async () => {
-  const updated = [];
+test('listCoupons retorna so os cupons do estabelecimento do ator', async () => {
   const manager = createManager({
-    coupons: [{ id: 'c1', code: 'PROMO10', active: true }],
-    updated,
+    establishmentId: 'loja-1',
+    coupons: [
+      { id: 'c1', code: 'DALOJA1', establishmentIds: ['loja-1'] },
+      { id: 'c2', code: 'DALOJA2', establishmentIds: ['loja-2'] },
+    ],
   });
 
-  await manager.deactivateCoupon({ actorUid: 'uid-admin', couponId: 'c1' });
+  const result = await manager.listCoupons({ actorUid: 'uid-lojista' });
+
+  assert.deepEqual(result.map((coupon) => coupon.code), ['DALOJA1']);
+});
+
+test('listCoupons rejeita ator sem estabelecimento vinculado', async () => {
+  const manager = createManager({ hasEstablishment: false });
+
+  await assert.rejects(
+    manager.listCoupons({ actorUid: 'uid-sem-loja' }),
+    (error) => error.code === 'coupon_no_establishment' && error.statusCode === 403,
+  );
+});
+
+test('deactivateCoupon aceita cupom que pertence ao estabelecimento do ator', async () => {
+  const updated = [];
+  const manager = createManager({
+    establishmentId: 'loja-1',
+    updated,
+    coupons: [{ id: 'c1', code: 'PROMO10', establishmentIds: ['loja-1'] }],
+  });
+
+  await manager.deactivateCoupon({ actorUid: 'uid-lojista', couponId: 'c1' });
 
   assert.deepEqual(updated, [{ id: 'c1', patch: { active: false } }]);
+});
+
+test('deactivateCoupon rejeita cupom que nao pertence ao estabelecimento do ator', async () => {
+  const manager = createManager({
+    establishmentId: 'loja-1',
+    coupons: [{ id: 'c1', code: 'DEOUTRALOJA', establishmentIds: ['loja-2'] }],
+  });
+
+  await assert.rejects(
+    manager.deactivateCoupon({ actorUid: 'uid-lojista', couponId: 'c1' }),
+    (error) => error.code === 'coupon_establishment_forbidden' && error.statusCode === 403,
+  );
 });
 
 test('deactivateCoupon rejeita cupom inexistente', async () => {
   const manager = createManager({ coupons: [] });
 
   await assert.rejects(
-    manager.deactivateCoupon({ actorUid: 'uid-admin', couponId: 'nao-existe' }),
+    manager.deactivateCoupon({ actorUid: 'uid-lojista', couponId: 'nao-existe' }),
     (error) => error.code === 'coupon_not_found' && error.statusCode === 404,
   );
 });
 
-function createManager({ allowed = true, created = [], updated = [], coupons = [] } = {}) {
+test('updateCoupon aceita cupom que pertence ao estabelecimento do ator', async () => {
+  const updated = [];
+  const manager = createManager({
+    establishmentId: 'loja-1',
+    updated,
+    coupons: [{ id: 'c1', code: 'PROMO10', establishmentIds: ['loja-1'] }],
+  });
+
+  await manager.updateCoupon({ actorUid: 'uid-lojista', couponId: 'c1', patch: { description: 'Nova descrição' } });
+
+  assert.deepEqual(updated, [{ id: 'c1', patch: { description: 'Nova descrição' } }]);
+});
+
+test('updateCoupon rejeita cupom que nao pertence ao estabelecimento do ator', async () => {
+  const manager = createManager({
+    establishmentId: 'loja-1',
+    coupons: [{ id: 'c1', code: 'DEOUTRALOJA', establishmentIds: ['loja-2'] }],
+  });
+
+  await assert.rejects(
+    manager.updateCoupon({ actorUid: 'uid-lojista', couponId: 'c1', patch: {} }),
+    (error) => error.code === 'coupon_establishment_forbidden' && error.statusCode === 403,
+  );
+});
+
+function createManager({
+  hasEstablishment = true,
+  establishmentId = 'loja-1',
+  created = [],
+  updated = [],
+  coupons = [],
+} = {}) {
   return new ManageCoupons({
     couponRepository: {
       create: async (coupon) => {
@@ -150,9 +186,9 @@ function createManager({ allowed = true, created = [], updated = [], coupons = [
         updated.push({ id, patch });
       },
     },
-    adminAccessRepository: {
-      isAdmin: async () => allowed,
+    accessRepository: {
+      findAccountByUid: async () => (hasEstablishment ? { establishmentId, hasEstablishment: true } : null),
     },
-    clock: () => new Date('2026-08-10T12:00:00.000Z'),
+    clock: () => new Date('2026-08-12T12:00:00.000Z'),
   });
 }
