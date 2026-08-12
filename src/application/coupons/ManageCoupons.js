@@ -60,7 +60,23 @@ export class ManageCoupons {
     const account = await this.requireEstablishment(actorUid);
     const coupon = await this.requireCoupon(couponId);
     this.assertOwnership(coupon, account.establishmentId);
-    await this.couponRepository.update(couponId, patch);
+
+    const normalizedPatch = { ...patch };
+    if (normalizedPatch.code != null) {
+      const normalizedCode = String(normalizedPatch.code).trim().toUpperCase();
+      if (normalizedCode !== coupon.code) {
+        await this.assertCodeNotActive(normalizedCode, account.establishmentId);
+      }
+      normalizedPatch.code = normalizedCode;
+    }
+    if (normalizedPatch.startAt != null) {
+      normalizedPatch.startAt = Timestamp.fromDate(new Date(normalizedPatch.startAt));
+    }
+    if (normalizedPatch.endAt != null) {
+      normalizedPatch.endAt = Timestamp.fromDate(new Date(normalizedPatch.endAt));
+    }
+
+    await this.couponRepository.update(couponId, normalizedPatch);
   }
 
   async deactivateCoupon({ actorUid, couponId }) {

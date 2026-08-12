@@ -42,6 +42,26 @@ const couponIdParamsSchema = z.object({
   couponId: z.string().min(1),
 });
 
+const updateCouponSchema = z.object({
+  code: z.string().min(3).max(30).optional(),
+  description: z.string().min(1).max(200).optional(),
+  termsText: z.string().max(2000).optional(),
+  firstPurchaseOnly: z.boolean().optional(),
+  rules: z.array(ruleSchema).optional(),
+  discount: z.object({
+    kind: z.enum(['percentage', 'fixed']),
+    value: z.number().positive(),
+  }).optional(),
+  startAt: z.string().optional(),
+  endAt: z.string().optional(),
+  perCustomerLimit: z.number().int().positive().optional(),
+  totalUsageLimit: z.number().int().positive().nullable().optional(),
+  stackable: z.boolean().optional(),
+}).refine(
+  (patch) => Object.keys(patch).length > 0,
+  { message: 'Envie ao menos um campo para atualizar.' },
+);
+
 export function createCouponRoutes({ manageCoupons }) {
   const router = Router();
 
@@ -59,6 +79,16 @@ export function createCouponRoutes({ manageCoupons }) {
       const payload = createCouponSchema.parse(request.body);
       const result = await manageCoupons.createCoupon({ actorUid: request.auth.uid, ...payload });
       response.status(201).json({ data: result });
+    }),
+  );
+
+  router.patch(
+    '/:couponId',
+    asyncHandler(async (request, response) => {
+      const { couponId } = couponIdParamsSchema.parse(request.params);
+      const patch = updateCouponSchema.parse(request.body);
+      await manageCoupons.updateCoupon({ actorUid: request.auth.uid, couponId, patch });
+      response.json({ data: { couponId, ...patch } });
     }),
   );
 

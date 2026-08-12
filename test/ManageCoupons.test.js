@@ -167,6 +167,53 @@ test('updateCoupon rejeita cupom que nao pertence ao estabelecimento do ator', a
   );
 });
 
+test('updateCoupon converte startAt/endAt em Timestamp quando presentes no patch', async () => {
+  const updated = [];
+  const manager = createManager({
+    establishmentId: 'loja-1',
+    updated,
+    coupons: [{ id: 'c1', code: 'PROMO10', establishmentIds: ['loja-1'] }],
+  });
+
+  await manager.updateCoupon({
+    actorUid: 'uid-lojista',
+    couponId: 'c1',
+    patch: { startAt: '2026-08-01T00:00:00.000Z', endAt: '2026-12-31T23:59:59.000Z' },
+  });
+
+  assert.equal(updated.length, 1);
+  assert.ok(updated[0].patch.startAt instanceof Timestamp);
+  assert.ok(updated[0].patch.endAt instanceof Timestamp);
+});
+
+test('updateCoupon normaliza o codigo para maiusculo quando presente no patch', async () => {
+  const updated = [];
+  const manager = createManager({
+    establishmentId: 'loja-1',
+    updated,
+    coupons: [{ id: 'c1', code: 'PROMO10', establishmentIds: ['loja-1'] }],
+  });
+
+  await manager.updateCoupon({ actorUid: 'uid-lojista', couponId: 'c1', patch: { code: 'novocodigo' } });
+
+  assert.deepEqual(updated, [{ id: 'c1', patch: { code: 'NOVOCODIGO' } }]);
+});
+
+test('updateCoupon rejeita novo codigo ja usado por outro cupom ativo do mesmo estabelecimento', async () => {
+  const manager = createManager({
+    establishmentId: 'loja-1',
+    coupons: [
+      { id: 'c1', code: 'PROMO10', active: true, establishmentIds: ['loja-1'] },
+      { id: 'c2', code: 'PROMO20', active: true, establishmentIds: ['loja-1'] },
+    ],
+  });
+
+  await assert.rejects(
+    manager.updateCoupon({ actorUid: 'uid-lojista', couponId: 'c1', patch: { code: 'promo20' } }),
+    (error) => error.code === 'coupon_code_already_exists' && error.statusCode === 409,
+  );
+});
+
 function createManager({
   hasEstablishment = true,
   establishmentId = 'loja-1',
