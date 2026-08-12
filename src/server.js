@@ -54,9 +54,7 @@ const updateImplantationApprovalUseCase = new UpdateImplantationApprovalUseCase(
 });
 const manageCoupons = new ManageCoupons({
   couponRepository: new FirestoreCouponRepository({ firestore }),
-  adminAccessRepository: {
-    isAdmin: async (uid) => env.COUPON_ADMIN_UIDS.includes(uid),
-  },
+  accessRepository,
 });
 const app = createApp({
   generateAiResponseUseCase,

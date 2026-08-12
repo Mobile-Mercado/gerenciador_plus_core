@@ -168,7 +168,7 @@ POST /api/coupons
 POST /api/coupons/{couponId}/deactivate
 ```
 
-Além do token Firebase, o UID precisa existir em `COUPON_ADMIN_UIDS`. Separe múltiplos UIDs por vírgula. `startAt`, `endAt` e `createdAt` são gravados como `Timestamp` do Firestore, o mesmo tipo lido pela Cloud Function `aplicarCupom` no checkout.
+O cupom criado fica restrito ao estabelecimento vinculado ao UID autenticado (mesma resolução de `EstablishmentAccessRepository` usada por `/api/notifications`), sem allowlist separada. `startAt`, `endAt` e `createdAt` são gravados como `Timestamp` do Firestore, o mesmo tipo lido pela Cloud Function `aplicarCupom` no checkout.
 
 ### Notificacoes web
 

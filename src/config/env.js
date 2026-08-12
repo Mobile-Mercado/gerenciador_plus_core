@@ -69,7 +69,6 @@ export const env = Object.freeze({
     nodeEnv === 'production',
   ),
   IMPLANTATION_ADMIN_UIDS: parseList(process.env.IMPLANTATION_ADMIN_UIDS),
-  COUPON_ADMIN_UIDS: parseList(process.env.COUPON_ADMIN_UIDS),
 });
 
 export function isProduction() {

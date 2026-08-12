@@ -10,7 +10,6 @@ import { createImplantacaoRoutes } from './http/routes/implantacaoRoutes.js';
 import { createNotificationRoutes } from './http/routes/notificationRoutes.js';
 import { createSessionRoutes } from './http/routes/sessionRoutes.js';
 import { errorHandler, notFoundHandler } from './http/middlewares/errorHandler.js';
-import { createCouponAdminMiddleware } from './http/middlewares/couponAdmin.js';
 import { createFirebaseAuthMiddleware } from './http/middlewares/firebaseAuth.js';
 import { createImplantationAdminMiddleware } from './http/middlewares/implantationAdmin.js';
 import { requestLogger } from './http/middlewares/requestLogger.js';
@@ -77,12 +76,7 @@ export function createApp({
   app.use(
     '/api/coupons',
     createFirebaseAuthMiddleware({ required: true }),
-    createCouponRoutes({
-      manageCoupons,
-      couponAdminMiddleware: createCouponAdminMiddleware({
-        allowedUids: env.COUPON_ADMIN_UIDS,
-      }),
-    }),
+    createCouponRoutes({ manageCoupons }),
   );
 
   app.use(notFoundHandler);
