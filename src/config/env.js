@@ -5,6 +5,9 @@ dotenv.config();
 const REQUIRED_CORS_ORIGINS = Object.freeze([
   'https://gerenciadormobile.web.app',
   'https://gerenciadormobile.firebaseapp.com',
+  'https://gerenciador-691f9.web.app',
+  'https://gerenciador-691f9.firebaseapp.com',
+  'https://mobilegerenciador.com.br',
   'https://appmobileprod-19505.web.app',
   'http://localhost:5173',
   'http://127.0.0.1:5173',
