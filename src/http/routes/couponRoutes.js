@@ -26,7 +26,6 @@ const createCouponSchema = z.object({
   description: z.string().min(1).max(200),
   termsText: z.string().max(2000).optional(),
   firstPurchaseOnly: z.boolean().default(false),
-  establishmentIds: z.array(z.string()).min(1),
   rules: z.array(ruleSchema).default([]),
   discount: z.object({
     kind: z.enum(['percentage', 'fixed']),
@@ -43,9 +42,8 @@ const couponIdParamsSchema = z.object({
   couponId: z.string().min(1),
 });
 
-export function createCouponRoutes({ manageCoupons, couponAdminMiddleware }) {
+export function createCouponRoutes({ manageCoupons }) {
   const router = Router();
-  router.use(couponAdminMiddleware);
 
   router.get(
     '/',
