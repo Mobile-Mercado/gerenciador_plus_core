@@ -9,7 +9,7 @@ export class ManageCoupons {
   }
 
   async createCoupon({
-    actorUid, code, description, termsText, firstPurchaseOnly, rules, discount,
+    actorUid, code, description, termsText, scopeName, firstPurchaseOnly, rules, discount,
     startAt, endAt, perCustomerLimit, totalUsageLimit, stackable,
   }) {
     const account = await this.requireEstablishment(actorUid);
@@ -21,6 +21,7 @@ export class ManageCoupons {
       code: normalizedCode,
       description: String(description || '').trim(),
       termsText: termsText ? String(termsText).trim() : null,
+      scopeName: scopeName ? String(scopeName).trim() : null,
       firstPurchaseOnly: Boolean(firstPurchaseOnly),
       active: true,
       startAt: Timestamp.fromDate(new Date(startAt)),

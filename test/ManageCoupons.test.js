@@ -40,6 +40,17 @@ test('createCoupon grava establishmentIds com o estabelecimento do ator, ignoran
   assert.equal(result.code, 'PROMO10');
 });
 
+test('createCoupon persiste o scopeName informado e null quando ausente', async () => {
+  const created = [];
+  const manager = createManager({ created });
+
+  await manager.createCoupon({ actorUid: 'uid-lojista', ...validPayload, scopeName: '  Mercado  ' });
+  await manager.createCoupon({ actorUid: 'uid-lojista', ...validPayload, code: 'OUTRO1' });
+
+  assert.equal(created[0].scopeName, 'Mercado');
+  assert.equal(created[1].scopeName, null);
+});
+
 test('createCoupon normaliza o codigo para maiusculo', async () => {
   const created = [];
   const manager = createManager({ created });

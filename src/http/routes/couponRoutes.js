@@ -25,6 +25,7 @@ const createCouponSchema = z.object({
   code: z.string().min(3).max(30),
   description: z.string().min(1).max(200),
   termsText: z.string().max(2000).optional(),
+  scopeName: z.string().max(60).optional(),
   firstPurchaseOnly: z.boolean().default(false),
   rules: z.array(ruleSchema).default([]),
   discount: z.object({
@@ -46,6 +47,7 @@ const updateCouponSchema = z.object({
   code: z.string().min(3).max(30).optional(),
   description: z.string().min(1).max(200).optional(),
   termsText: z.string().max(2000).optional(),
+  scopeName: z.string().max(60).optional(),
   firstPurchaseOnly: z.boolean().optional(),
   rules: z.array(ruleSchema).optional(),
   discount: z.object({
