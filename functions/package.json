@@ -11,7 +11,7 @@
     "build": "echo \"No build step\"",
     "test": "node --test",
     "backfill:hourly-sales": "node scripts/backfillHourlySales.js",
-    "deploy": "firebase deploy --only functions",
+    "deploy": "node deploy.js",
     "serve": "firebase emulators:start --only functions"
   },
   "dependencies": {
