@@ -91,3 +91,50 @@ test("mostra o projeto pedido no comando", () => {
 test("cai no projeto padrão do .firebaserc quando ninguém pediu outro", () => {
     assert.equal(resolveProjectName([], "appmobileprod-19505"), "appmobileprod-19505");
 });
+
+test("mostra o projeto pedido com --project=valor", () => {
+    assert.equal(
+        resolveProjectName(["--project=meu-projeto"], "padrao"),
+        "meu-projeto",
+    );
+});
+
+test("mostra o projeto pedido com -P valor", () => {
+    assert.equal(resolveProjectName(["-P", "meu-projeto"], "padrao"), "meu-projeto");
+});
+
+test("mostra o projeto pedido com -P=valor", () => {
+    assert.equal(resolveProjectName(["-P=meu-projeto"], "padrao"), "meu-projeto");
+});
+
+test("não expande um export que é array", () => {
+    const names = publishableFunctionNames({
+        rotasAntigas: [() => undefined, () => undefined],
+    });
+    assert.deepEqual(names, []);
+});
+
+test("não expande um export que é instância de classe", () => {
+    class ModuloDeProdutos {
+        onProductCreate() {}
+    }
+    const names = publishableFunctionNames({
+        produtosModule: new ModuloDeProdutos(),
+    });
+    assert.deepEqual(names, []);
+});
+
+test("ignora export nulo em vez de quebrar", () => {
+    const names = publishableFunctionNames({
+        findProducts: () => undefined,
+        featureDesativada: null,
+    });
+    assert.deepEqual(names, ["findProducts"]);
+});
+
+test("recusa um --only=functions:x vindo de quem chamou", () => {
+    assert.throws(
+        () => buildDeployArgs(["findProducts"], ["--only=functions:findProducts"]),
+        /--only/,
+    );
+});

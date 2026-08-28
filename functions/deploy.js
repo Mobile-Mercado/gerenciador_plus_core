@@ -2,13 +2,20 @@ const { execFileSync } = require("node:child_process");
 const { readFileSync } = require("node:fs");
 const path = require("node:path");
 
+function isPlainObject(value) {
+    if (value === null || typeof value !== "object") return false;
+    if (Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+}
+
 function publishableFunctionNames(mod) {
     const names = [];
     for (const [name, value] of Object.entries(mod)) {
         if (name === "default") continue;
         if (typeof value === "function") {
             names.push(name);
-        } else if (value !== null && typeof value === "object") {
+        } else if (isPlainObject(value)) {
             for (const [childName, childValue] of Object.entries(value)) {
                 if (typeof childValue === "function") {
                     names.push(`${name}-${childName}`);
@@ -34,9 +41,18 @@ function buildDeployArgs(names, extraArgs) {
 }
 
 function resolveProjectName(extraArgs, fallback) {
-    const flagIndex = extraArgs.indexOf("--project");
-    const chosen = flagIndex >= 0 ? extraArgs[flagIndex + 1] : undefined;
-    return chosen ?? fallback ?? "não declarado";
+    for (let index = 0; index < extraArgs.length; index++) {
+        const arg = extraArgs[index];
+        if (arg === "--project" || arg === "-P") {
+            const value = extraArgs[index + 1];
+            if (value !== undefined) return value;
+        } else if (arg.startsWith("--project=")) {
+            return arg.slice("--project=".length);
+        } else if (arg.startsWith("-P=")) {
+            return arg.slice("-P=".length);
+        }
+    }
+    return fallback ?? "não declarado";
 }
 
 function defaultProjectFromConfig() {
