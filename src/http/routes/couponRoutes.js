@@ -103,5 +103,14 @@ export function createCouponRoutes({ manageCoupons }) {
     }),
   );
 
+  router.delete(
+    '/:couponId',
+    asyncHandler(async (request, response) => {
+      const { couponId } = couponIdParamsSchema.parse(request.params);
+      await manageCoupons.deleteCoupon({ actorUid: request.auth.uid, couponId });
+      response.json({ data: { couponId } });
+    }),
+  );
+
   return router;
 }

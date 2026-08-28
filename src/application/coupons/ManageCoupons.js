@@ -87,6 +87,21 @@ export class ManageCoupons {
     await this.couponRepository.update(couponId, { active: false });
   }
 
+  async deleteCoupon({ actorUid, couponId }) {
+    const account = await this.requireEstablishment(actorUid);
+    const coupon = await this.requireCoupon(couponId);
+    this.assertOwnership(coupon, account.establishmentId);
+
+    if (coupon.usageCount > 0) {
+      throw new AppError('Cupom ja possui uso registrado; desative-o em vez de excluir.', {
+        statusCode: 409,
+        code: 'coupon_has_usage',
+      });
+    }
+
+    await this.couponRepository.delete(couponId);
+  }
+
   async requireCoupon(couponId) {
     const coupon = await this.couponRepository.findById(couponId);
     if (!coupon) {

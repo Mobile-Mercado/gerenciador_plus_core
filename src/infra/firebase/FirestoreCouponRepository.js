@@ -29,4 +29,8 @@ export class FirestoreCouponRepository extends CouponRepository {
   async update(couponId, patch) {
     await this.collection.doc(couponId).update(patch);
   }
+
+  async delete(couponId) {
+    await this.collection.doc(couponId).delete();
+  }
 }

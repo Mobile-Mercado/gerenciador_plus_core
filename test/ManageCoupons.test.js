@@ -225,11 +225,61 @@ test('updateCoupon rejeita novo codigo ja usado por outro cupom ativo do mesmo e
   );
 });
 
+test('deleteCoupon exclui cupom sem uso registrado que pertence ao estabelecimento do ator', async () => {
+  const deleted = [];
+  const manager = createManager({
+    establishmentId: 'loja-1',
+    deleted,
+    coupons: [{ id: 'c1', code: 'PROMO10', usageCount: 0, establishmentIds: ['loja-1'] }],
+  });
+
+  await manager.deleteCoupon({ actorUid: 'uid-lojista', couponId: 'c1' });
+
+  assert.deepEqual(deleted, ['c1']);
+});
+
+test('deleteCoupon rejeita cupom com uso registrado', async () => {
+  const deleted = [];
+  const manager = createManager({
+    establishmentId: 'loja-1',
+    deleted,
+    coupons: [{ id: 'c1', code: 'PROMO10', usageCount: 3, establishmentIds: ['loja-1'] }],
+  });
+
+  await assert.rejects(
+    manager.deleteCoupon({ actorUid: 'uid-lojista', couponId: 'c1' }),
+    (error) => error.code === 'coupon_has_usage' && error.statusCode === 409,
+  );
+  assert.deepEqual(deleted, []);
+});
+
+test('deleteCoupon rejeita cupom que nao pertence ao estabelecimento do ator', async () => {
+  const manager = createManager({
+    establishmentId: 'loja-1',
+    coupons: [{ id: 'c1', code: 'DEOUTRALOJA', usageCount: 0, establishmentIds: ['loja-2'] }],
+  });
+
+  await assert.rejects(
+    manager.deleteCoupon({ actorUid: 'uid-lojista', couponId: 'c1' }),
+    (error) => error.code === 'coupon_establishment_forbidden' && error.statusCode === 403,
+  );
+});
+
+test('deleteCoupon rejeita cupom inexistente', async () => {
+  const manager = createManager({ coupons: [] });
+
+  await assert.rejects(
+    manager.deleteCoupon({ actorUid: 'uid-lojista', couponId: 'nao-existe' }),
+    (error) => error.code === 'coupon_not_found' && error.statusCode === 404,
+  );
+});
+
 function createManager({
   hasEstablishment = true,
   establishmentId = 'loja-1',
   created = [],
   updated = [],
+  deleted = [],
   coupons = [],
 } = {}) {
   return new ManageCoupons({
@@ -242,6 +292,9 @@ function createManager({
       findById: async (id) => coupons.find((coupon) => coupon.id === id) || null,
       update: async (id, patch) => {
         updated.push({ id, patch });
+      },
+      delete: async (id) => {
+        deleted.push(id);
       },
     },
     accessRepository: {

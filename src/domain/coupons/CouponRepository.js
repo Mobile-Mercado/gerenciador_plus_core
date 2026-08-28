@@ -14,4 +14,8 @@ export class CouponRepository {
   async update(_couponId, _patch) {
     throw new Error('CouponRepository.update nao implementado.');
   }
+
+  async delete(_couponId) {
+    throw new Error('CouponRepository.delete nao implementado.');
+  }
 }
