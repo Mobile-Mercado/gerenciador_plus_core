@@ -3,6 +3,7 @@ import express from 'express';
 import helmet from 'helmet';
 import { env } from './config/env.js';
 import { createAiRoutes } from './http/routes/aiRoutes.js';
+import { createBugReportRoutes } from './http/routes/bugReportRoutes.js';
 import { createCouponRoutes } from './http/routes/couponRoutes.js';
 import { createDataRoutes } from './http/routes/dataRoutes.js';
 import { createHealthRoutes } from './http/routes/healthRoutes.js';
@@ -22,6 +23,7 @@ export function createApp({
   updateImplantationApprovalUseCase,
   manageWebNotifications,
   manageCoupons,
+  manageBugReports,
   getManagerSession,
   manageManagerData,
 }) {
@@ -77,6 +79,11 @@ export function createApp({
     '/api/coupons',
     createFirebaseAuthMiddleware({ required: true }),
     createCouponRoutes({ manageCoupons }),
+  );
+  app.use(
+    '/api/bug-reports',
+    createFirebaseAuthMiddleware({ required: true }),
+    createBugReportRoutes({ manageBugReports }),
   );
 
   app.use(notFoundHandler);

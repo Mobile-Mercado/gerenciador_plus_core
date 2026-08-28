@@ -2,6 +2,7 @@ import { createApp } from './app.js';
 import { GenerateAiResponseUseCase } from './application/ai/GenerateAiResponseUseCase.js';
 import { GetDailyHomeOverviewUseCase } from './application/ai/GetDailyHomeOverviewUseCase.js';
 import { GetManagerSession } from './application/auth/GetManagerSession.js';
+import { ManageBugReports } from './application/bugReports/ManageBugReports.js';
 import { ManageCoupons } from './application/coupons/ManageCoupons.js';
 import { ManageManagerData } from './application/data/ManageManagerData.js';
 import { ImportProductsFromCsvUseCase } from './application/implantacao/ImportProductsFromCsvUseCase.js';
@@ -11,6 +12,7 @@ import { ManageWebNotifications } from './application/notifications/ManageWebNot
 import { env } from './config/env.js';
 import { FirebaseWebNotificationGateway } from './infra/firebase/FirebaseWebNotificationGateway.js';
 import { FirestoreDailyAiInsightRepository } from './infra/firebase/FirestoreDailyAiInsightRepository.js';
+import { FirestoreBugReportRepository } from './infra/firebase/FirestoreBugReportRepository.js';
 import { FirestoreCouponRepository } from './infra/firebase/FirestoreCouponRepository.js';
 import { FirestoreEstablishmentAccessRepository } from './infra/firebase/FirestoreEstablishmentAccessRepository.js';
 import { FirestoreManagerDataGateway } from './infra/firebase/FirestoreManagerDataGateway.js';
@@ -56,6 +58,10 @@ const manageCoupons = new ManageCoupons({
   couponRepository: new FirestoreCouponRepository({ firestore }),
   accessRepository,
 });
+const manageBugReports = new ManageBugReports({
+  bugReportRepository: new FirestoreBugReportRepository({ firestore }),
+  accessRepository,
+});
 const app = createApp({
   generateAiResponseUseCase,
   getDailyHomeOverviewUseCase,
@@ -64,6 +70,7 @@ const app = createApp({
   updateImplantationApprovalUseCase,
   manageWebNotifications,
   manageCoupons,
+  manageBugReports,
   getManagerSession,
   manageManagerData,
 });
