@@ -11,7 +11,27 @@ service cloud.firestore {
     // Users - apenas o próprio usuário pode ler seus dados
     match /Users/{userId} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == resource.data.userAuthId;
+      allow create: if request.auth != null
+                    && request.resource.data.userAuthId == request.auth.uid;
+      allow update, delete: if request.auth != null
+                    && request.auth.uid == resource.data.userAuthId;
+
+      // ShoppingCart - apenas o próprio dono
+      match /ShoppingCart/{cartId} {
+        allow read, write: if request.auth != null &&
+          request.auth.uid == get(/databases/$(database)/documents/Users/$(userId)).data.userAuthId;
+
+        match /Items/{itemId} {
+          allow read, write: if request.auth != null &&
+            request.auth.uid == get(/databases/$(database)/documents/Users/$(userId)).data.userAuthId;
+        }
+      }
+
+      // Addresses - apenas o próprio dono
+      match /Addresses/{addressId} {
+        allow read, write: if request.auth != null &&
+          request.auth.uid == get(/databases/$(database)/documents/Users/$(userId)).data.userAuthId;
+      }
     }
 
     // PurchaseRequests - apenas usuários autenticados do estabelecimento
@@ -29,14 +49,121 @@ service cloud.firestore {
       }
     }
 
+    // Coupons - leitura para clientes autenticados (tela de cupons e checkout);
+    // escrita só pela Cloud Function de gestão (Admin SDK, ignora estas regras).
+    match /Coupons/{couponId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+
+      // Redemptions guarda histórico de uso por cliente - nunca lido/escrito
+      // pelo client, só pelas Cloud Functions aplicarCupom/confirmarPedido.
+      match /Redemptions/{userId} {
+        allow read, write: if false;
+      }
+    }
+
+    // CouponRequests - pedido de cupom automático pelo sininho da tela de
+    // cupons do app do cliente. O client só cria; leitura fica para o
+    // gerenciador via backend (Admin SDK, ignora estas regras).
+    match /CouponRequests/{requestId} {
+      allow create: if request.auth != null;
+      allow read, update, delete: if false;
+    }
+
+    // PaymentMethods - catálogo de formas de pagamento, só leitura
+    // (mesmo padrão de CardFlags); sem esta regra a tela Formas de
+    // pagamento do gerenciador fica em branco.
+    match /PaymentMethods/{methodId} {
+      allow read: if request.auth != null;
+    }
+
+    // Avaliações de pedido - usuários autenticados
+    match /PurchaseReviews/{reviewId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+    }
+
+    // Bandeiras de cartão - referência, só leitura
+    match /CardFlags/{flagId} {
+      allow read: if request.auth != null;
+    }
+
+    // Categorias de estabelecimento - referência, só leitura
+    match /categoriasEstabelecimento/{categoryId} {
+      allow read: if request.auth != null;
+    }
+
+    // Cidades - referência, só leitura
+    match /cidades/{cityId} {
+      allow read: if request.auth != null;
+    }
+
     // Estabelecimentos
     match /estabelecimentos/{estabId} {
+      // isAdminOf lê só o claim do token - sem get(), gratuita.
+      function isAdminOf(estId) {
+        return request.auth != null && request.auth.token.adminOf == estId;
+      }
+      // isFullAdmin e hasPermission fazem get() em PermissionGroups -
+      // usar só em escrita sensível, nunca em leitura de alto volume.
+      function isFullAdmin(estId) {
+        return isAdminOf(estId) &&
+          get(/databases/$(database)/documents/estabelecimentos/$(estId)/PermissionGroups/$(request.auth.token.groupId)).data.isAdmin == true;
+      }
+      function hasPermission(estId, perm) {
+        return isAdminOf(estId) && (
+          isFullAdmin(estId) ||
+          perm in get(/databases/$(database)/documents/estabelecimentos/$(estId)/PermissionGroups/$(request.auth.token.groupId)).data.permissions
+        );
+      }
+
+      // Leitura intocada: o boot anônimo do whitelabel depende dela
+      // (caso whitelabel-boot-sem-sessao). Create liberado para autenticado
+      // porque o cadastro de estabelecimento novo pelo painel acontece antes
+      // de a conta ter claim adminOf; update só para o admin do próprio.
       allow read: if request.auth != null;
-      allow write: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if isAdminOf(estabId);
+      allow delete: if false;
+
+      // Coleções administrativas do sistema de grupos de permissão.
+      // Escrita sempre negada: só as Cloud Functions (Admin SDK) gravam.
+      match /AdminUsers/{uid} {
+        allow read: if isAdminOf(estabId);
+        allow write: if false;
+      }
+
+      match /PermissionGroups/{groupId} {
+        allow read: if isAdminOf(estabId);
+        allow write: if false;
+      }
+
+      match /AdminAuditLogs/{logId} {
+        allow read: if hasPermission(estabId, 'admin_users.view');
+        allow write: if false;
+      }
 
       match /Products/{productId} {
         allow read: if request.auth != null;
-        allow write: if request.auth != null;
+        allow write: if hasPermission(estabId, 'products.edit');
+      }
+
+      match /Products/{productId}/barCode/{codeId} {
+        allow read: if request.auth != null;
+        allow write: if hasPermission(estabId, 'products.edit');
+      }
+
+      match /paymentMethods/{methodId} {
+        allow read: if request.auth != null;
+        allow write: if isAdminOf(estabId);
+      }
+
+      match /PurchaseRequests/{orderId} {
+        allow read: if request.auth != null;
+        allow create: if request.auth != null;
+        allow update: if request.auth != null;
+        allow delete: if false;
       }
 
       match /Categories/{categoryId} {
@@ -51,9 +178,11 @@ service cloud.firestore {
 
       match /Stats/{statId} {
         allow read: if request.auth != null;
-        allow write: if request.auth != null;
+        allow write: if isAdminOf(estabId);
       }
 
+      // DailyStats fica aberta a autenticado: o app do cliente grava a
+      // visita do dia aqui (company_visits_service.dart), sem claim.
       match /DailyStats/{statId} {
         allow read: if request.auth != null;
         allow write: if request.auth != null;
@@ -61,7 +190,7 @@ service cloud.firestore {
 
       match /MonthlyStats/{statId} {
         allow read: if request.auth != null;
-        allow write: if request.auth != null;
+        allow write: if isAdminOf(estabId);
       }
 
       match /Banners/{bannerId} {
@@ -71,12 +200,12 @@ service cloud.firestore {
 
       match /ProductCategories/{categoryId} {
         allow read: if request.auth != null;
-        allow write: if request.auth != null;
+        allow write: if isAdminOf(estabId);
       }
 
       match /ProductSubcategories/{subcategoryId} {
         allow read: if request.auth != null;
-        allow write: if request.auth != null;
+        allow write: if isAdminOf(estabId);
       }
 
       match /NotificationViewState/{group} {
@@ -87,6 +216,24 @@ service cloud.firestore {
       match /implantacaoGrenciador/{automationId} {
         allow read: if request.auth != null;
         allow write: if request.auth != null;
+      }
+
+      // Logs do integrador - escritos so pelo Admin SDK, nas Cloud Functions
+      // saveIntegrationCycleLog e saveIntegrationHeartbeat, que ignoram estas
+      // regras. Cliente nunca escreve.
+      match /IntegrationStatus/{docId} {
+        allow read: if request.auth != null;
+        allow write: if false;
+      }
+
+      match /IntegrationLogs/{cycleId} {
+        allow read: if request.auth != null;
+        allow write: if false;
+      }
+
+      match /IntegrationLogItems/{itemId} {
+        allow read: if request.auth != null;
+        allow write: if false;
       }
     }
 
