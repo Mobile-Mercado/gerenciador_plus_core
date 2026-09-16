@@ -235,6 +235,16 @@ service cloud.firestore {
         allow read: if request.auth != null;
         allow write: if false;
       }
+
+      // Sugestões de melhoria enviadas pelo cliente na tela Ajustes do app.
+      // Só cria; leitura e marcação de lida ficam no painel, via Admin SDK.
+      match /Suggestions/{suggestionId} {
+        allow create: if request.auth != null
+          && request.resource.data.text is string
+          && request.resource.data.text.size() >= 30
+          && request.resource.data.text.size() <= 500;
+        allow read, update, delete: if false;
+      }
     }
 
     // Base publica de produtos (produtos/{id}) - usada como referencia compartilhada
