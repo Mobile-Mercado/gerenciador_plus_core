@@ -140,7 +140,26 @@ function zonedParts(date) {
   };
 }
 
-function contributionFromOrder(order = {}) {
+// Cliente do pedido: clientId (texto) ou o id de clientReference (Users/{id}).
+function orderClientId(order = {}) {
+  if (order.clientId) return String(order.clientId);
+  const reference = order.clientReference;
+  if (!reference) return '';
+  if (typeof reference === 'string') return reference.split('/').filter(Boolean).at(-1) || '';
+  if (reference.id) return String(reference.id);
+  if (reference.path) return String(reference.path).split('/').filter(Boolean).at(-1) || '';
+  return '';
+}
+
+// Pedido de teste, ou de conta de teste, nao entra em nenhum numero. A conta de
+// teste vem do espelho gravado no pedido (isTestAccount) ou, para pedido antigo
+// sem espelho, do cruzamento com o cliente (testAccount).
+function isTestOrder(order = {}, { testAccount = false } = {}) {
+  return order.isTest === true || order.isTestAccount === true || testAccount === true;
+}
+
+function contributionFromOrder(order = {}, { testAccount = false } = {}) {
+  if (isTestOrder(order, { testAccount })) return null;
   const status = order.currentPurchaseStatus
     || order.purchaseStatus
     || order.status
@@ -249,8 +268,14 @@ async function reconcileOrderHourlySales({ db, FieldValue, orderRef }) {
     const previous = contributionSnapshot.exists
       ? normalizeStoredContribution(contributionSnapshot.data())
       : null;
-    const current = orderSnapshot.exists
-      ? contributionFromOrder(orderSnapshot.data())
+    const order = orderSnapshot.exists ? orderSnapshot.data() : null;
+    const clientId = order ? orderClientId(order) : '';
+    const clientSnapshot = clientId
+      ? await transaction.get(db.collection('Users').doc(clientId))
+      : null;
+    const testAccount = Boolean(clientSnapshot?.exists && clientSnapshot.get('isTestAccount') === true);
+    const current = order
+      ? contributionFromOrder(order, { testAccount })
       : null;
 
     if (contributionFingerprint(previous) === contributionFingerprint(current)) {
@@ -304,8 +329,10 @@ module.exports = {
   contributionFromOrder,
   handleOrderHourlySalesWrite,
   isConfirmedStatus,
+  isTestOrder,
   normalizeStoredContribution,
   orderChannel,
+  orderClientId,
   orderTotal,
   reconcileOrderHourlySales,
 };

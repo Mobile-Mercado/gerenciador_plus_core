@@ -20,6 +20,9 @@ export function errorHandler(error, request, response, _next) {
     method: request.method,
     path: request.originalUrl,
     statusCode: normalized.statusCode,
+    originalMessage: error?.message,
+    originalCode: error?.code,
+    stack: error?.stack,
   });
 
   response.status(normalized.statusCode).json({

@@ -12,7 +12,11 @@ const ORDER_UPDATE_FIELDS = new Set([
   'separatedAt',
   'separationChecklist',
   'deliveryPerson',
+  'isTest',
+  'isTestAccount',
 ]);
+const USER_UPDATE_FIELDS = new Set(['segmento', 'isTestAccount']);
+const BOOLEAN_MUTATION_FIELDS = new Set(['isTest', 'isTestAccount']);
 const CHAT_UPDATE_FIELDS = new Set(['lastMessage', 'updatedAt']);
 const SAFE_USER_FIELDS = new Set([
   'id',
@@ -23,6 +27,7 @@ const SAFE_USER_FIELDS = new Set([
   'telefone',
   'image',
   'segmento',
+  'isTestAccount',
   'createAt',
   'createdAt',
   'birthDate',
@@ -93,13 +98,15 @@ export class ManagerDataAccessPolicy {
       if (mutation.operation !== 'update') throw forbidden();
       await this.assertOrderDocument(actor, path);
       assertOnlyFields(mutation.data, ORDER_UPDATE_FIELDS, 'data_order_fields_forbidden');
+      assertBooleanFields(mutation.data, 'data_order_fields_forbidden');
       return;
     }
 
     if (root === 'Users') {
       if (mutation.operation !== 'update') throw forbidden();
       await this.assertUserPath(actor, path);
-      assertOnlyFields(mutation.data, new Set(['segmento']), 'data_user_fields_forbidden');
+      assertOnlyFields(mutation.data, USER_UPDATE_FIELDS, 'data_user_fields_forbidden');
+      assertBooleanFields(mutation.data, 'data_user_fields_forbidden');
       return;
     }
 
@@ -441,6 +448,15 @@ function referenceId(value) {
 function assertOnlyFields(data, allowed, code) {
   const fields = Object.keys(data || {});
   if (!fields.length || fields.some((field) => !allowed.has(field))) {
+    throw forbidden('A alteracao contem campos nao permitidos.', code);
+  }
+}
+
+// isTest e isTestAccount so aceitam true ou false.
+function assertBooleanFields(data, code) {
+  const invalid = Object.entries(data || {})
+    .some(([field, value]) => BOOLEAN_MUTATION_FIELDS.has(field) && typeof value !== 'boolean');
+  if (invalid) {
     throw forbidden('A alteracao contem campos nao permitidos.', code);
   }
 }
