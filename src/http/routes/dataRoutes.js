@@ -15,6 +15,7 @@ export function createDataRoutes({ manageManagerData }) {
       const { target } = targetBodySchema.parse(request.body);
       const result = await manageManagerData.getDocument({
         actorUid: request.auth.uid,
+        claims: request.auth,
         target,
       });
       response.json({ data: result });
@@ -27,6 +28,7 @@ export function createDataRoutes({ manageManagerData }) {
       const { target } = targetBodySchema.parse(request.body);
       const result = await manageManagerData.getDocuments({
         actorUid: request.auth.uid,
+        claims: request.auth,
         target,
       });
       response.json({ data: result });
@@ -39,6 +41,7 @@ export function createDataRoutes({ manageManagerData }) {
       const { target } = targetBodySchema.parse(request.body);
       const result = await manageManagerData.countDocuments({
         actorUid: request.auth.uid,
+        claims: request.auth,
         target,
       });
       response.json({ data: result });
@@ -51,6 +54,7 @@ export function createDataRoutes({ manageManagerData }) {
       const mutation = mutationBodySchema.parse(request.body);
       const result = await manageManagerData.mutate({
         actorUid: request.auth.uid,
+        claims: request.auth,
         request: mutation,
       });
       response.json({ data: result });
@@ -85,6 +89,7 @@ export function createDataRoutes({ manageManagerData }) {
 
         unsubscribe = await manageManagerData.subscribe({
           actorUid: request.auth.uid,
+          claims: request.auth,
           target,
           onSnapshot: (snapshot) => writeLine(response, { type: 'snapshot', snapshot }),
           onError: (error) => {

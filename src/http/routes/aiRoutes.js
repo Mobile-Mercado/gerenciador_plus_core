@@ -25,11 +25,14 @@ const homeOverviewRequestSchema = z.object({
   context: z.unknown(),
 });
 
-export function createAiRoutes({ generateAiResponseUseCase, getDailyHomeOverviewUseCase }) {
+export function createAiRoutes({
+  generateAiResponseUseCase, getDailyHomeOverviewUseCase, requirePermission,
+}) {
   const router = Router();
 
   router.post(
     '/home-overview',
+    requirePermission('dashboard.view'),
     asyncHandler(async (request, response) => {
       const input = homeOverviewRequestSchema.parse(request.body);
       const result = await getDailyHomeOverviewUseCase.execute({

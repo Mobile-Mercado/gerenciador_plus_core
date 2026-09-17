@@ -1,6 +1,12 @@
 import { AppError } from '../../domain/errors/AppError.js';
+import { assertPermission } from '../../http/middlewares/requirePermission.js';
 
 const CUSTOMER_CACHE_TTL_MS = 5 * 60 * 1000;
+// Status que contam como cancelamento do pedido: exigem requests.cancel.
+const CANCEL_STATUSES = new Set(['canceled', 'cancelled', 'cancelado', 'denied', 'giveUp']);
+const PRICE_FIELDS = new Set(['price', 'promotionPrice', 'historyPrice', 'previewPrice']);
+const PRODUCT_EDIT_COLLECTIONS = new Set(['implantacaoGrenciador', 'ProductCategories', 'ProductSubcategories']);
+const COUPON_COLLECTIONS = new Set(['Cupons', 'Campaigns']);
 const ALLOWED_AUTOMATIONS = new Set([
   'padronizador_nomes',
   'taggeador',
@@ -36,6 +42,40 @@ const SAFE_USER_FIELDS = new Set([
   'dataNascimento',
   'deliveryAddressSelected',
 ]);
+
+// Chave de permissao de cada escrita do proxy. Leitura nao e barrada nesta rodada.
+export function permissionKeyForMutation(mutation, establishmentId) {
+  const parts = pathParts(mutation?.target?.path || '');
+  const data = mutation?.data && typeof mutation.data === 'object' ? mutation.data : {};
+  const criando = mutation?.operation === 'set' && mutation?.options?.merge !== true;
+
+  if (parts[0] === 'PurchaseRequests') {
+    const status = String(data.currentPurchaseStatus || '').replace('PurchaseStatus.', '');
+    return CANCEL_STATUSES.has(status) ? 'requests.cancel' : 'requests.update_status';
+  }
+  if (parts[0] === 'Users') return 'requests.update_status';
+  if (parts[0] === 'Chats') return 'chat.send';
+  if (parts[0] === 'AgenteVendas') return 'chat.send';
+
+  if (parts[0] === 'estabelecimentos' && parts[1] === establishmentId) {
+    const colecao = parts[2];
+    // Documento da loja: campos da loja e ajustes.
+    if (!colecao) return 'settings.edit';
+    if (colecao === 'Products') {
+      if (mutation.operation === 'delete') return 'products.delete';
+      if (criando) return 'products.create';
+      if (Object.keys(data).some((campo) => PRICE_FIELDS.has(campo))) return 'products.edit_price';
+      if (data.isTrashed === true) return 'products.delete';
+      return 'products.edit';
+    }
+    if (PRODUCT_EDIT_COLLECTIONS.has(colecao)) return 'products.edit';
+    if (COUPON_COLLECTIONS.has(colecao)) return 'coupons.manage';
+    // deliveryMenList, paymentMethods e as demais subcolecoes de ajustes.
+    return 'settings.edit';
+  }
+
+  return 'settings.edit';
+}
 
 export class ManagerDataAccessPolicy {
   constructor({ firestore, clock = () => Date.now() }) {
@@ -90,6 +130,12 @@ export class ManagerDataAccessPolicy {
     this.assertActor(actor);
     const path = mutation?.target?.path;
     if (!path) throw invalidTarget();
+
+    // Barreira por chave. Ator sem `permissions` e o dono, que passa em tudo.
+    assertPermission(
+      actor.permissions || { isAdmin: true, groupId: null, keys: [] },
+      permissionKeyForMutation(mutation, actor.establishmentId),
+    );
 
     if (isOwnEstablishmentPath(path, actor.establishmentId)) return;
 

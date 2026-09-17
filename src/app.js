@@ -12,6 +12,7 @@ import { createSessionRoutes } from './http/routes/sessionRoutes.js';
 import { errorHandler, notFoundHandler } from './http/middlewares/errorHandler.js';
 import { createFirebaseAuthMiddleware } from './http/middlewares/firebaseAuth.js';
 import { createImplantationAdminMiddleware } from './http/middlewares/implantationAdmin.js';
+import { createPermissionGuard } from './http/middlewares/requirePermission.js';
 import { requestLogger } from './http/middlewares/requestLogger.js';
 
 export function createApp({
@@ -24,8 +25,11 @@ export function createApp({
   manageCoupons,
   getManagerSession,
   manageManagerData,
+  accessRepository,
 }) {
   const app = express();
+  // Barreira de escrita por chave de permissao, com cache por token.
+  const { requirePermission } = createPermissionGuard({ accessRepository });
 
   app.disable('x-powered-by');
   app.use(helmet());
@@ -54,7 +58,7 @@ export function createApp({
   app.use(
     '/api/ai',
     createFirebaseAuthMiddleware({ required: env.REQUIRE_FIREBASE_AUTH }),
-    createAiRoutes({ generateAiResponseUseCase, getDailyHomeOverviewUseCase }),
+    createAiRoutes({ generateAiResponseUseCase, getDailyHomeOverviewUseCase, requirePermission }),
   );
   app.use(
     '/api/implantacao',
@@ -66,17 +70,18 @@ export function createApp({
       implantationAdminMiddleware: createImplantationAdminMiddleware({
         allowedUids: env.IMPLANTATION_ADMIN_UIDS,
       }),
+      requirePermission,
     }),
   );
   app.use(
     '/api/notifications',
     createFirebaseAuthMiddleware({ required: true }),
-    createNotificationRoutes({ manageWebNotifications }),
+    createNotificationRoutes({ manageWebNotifications, requirePermission }),
   );
   app.use(
     '/api/coupons',
     createFirebaseAuthMiddleware({ required: true }),
-    createCouponRoutes({ manageCoupons }),
+    createCouponRoutes({ manageCoupons, requirePermission }),
   );
 
   app.use(notFoundHandler);

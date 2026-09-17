@@ -30,6 +30,7 @@ export function errorHandler(error, request, response, _next) {
       code: normalized.code,
       message: normalized.message,
       details: normalized.details,
+      key: normalized.details?.key,
     },
   });
 }

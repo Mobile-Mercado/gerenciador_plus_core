@@ -7,7 +7,10 @@ export function createSessionRoutes({ getManagerSession }) {
   router.get(
     '/',
     asyncHandler(async (request, response) => {
-      const result = await getManagerSession.execute({ actorUid: request.auth.uid });
+      const result = await getManagerSession.execute({
+        actorUid: request.auth.uid,
+        claims: request.auth,
+      });
       response.json({ data: result });
     }),
   );
