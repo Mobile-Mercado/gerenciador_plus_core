@@ -349,12 +349,17 @@ test('counts what is for sale inside each set without changing the id lists', as
   assert.ok(summary.idsAVenda.every((id) => !summary.idsForaDeVenda.includes(id)));
 });
 
-test('search is broken only when every key with a letter is lowercase', () => {
-  assert.equal(hasBrokenSearch({ wordKeys: ['ma', 'maionese'], searchIndex: ['hellmann\'s'] }), true);
-  assert.equal(hasBrokenSearch({ wordKeys: ['maçã'], searchIndex: ['7891050004604'] }), true);
-  assert.equal(hasBrokenSearch({ wordKeys: ['VODK', 'VODKA'], searchIndex: ['7891050004604'] }), false);
-  assert.equal(hasBrokenSearch({ wordKeys: ['vodka'], searchIndex: ['VODKA'] }), false);
-  assert.equal(hasBrokenSearch({ wordKeys: ['7891050004604'] }), false);
+test('search is broken when some word of the name has no canonical key stored', () => {
+  assert.equal(hasBrokenSearch({ name: 'Maionese Hellmanns', wordKeys: ['ma', 'maionese'], searchIndex: ['hellmanns'] }), true);
+  assert.equal(hasBrokenSearch({ name: 'Maçã', wordKeys: ['maçã'], searchIndex: ['7891050004604'] }), true);
+  assert.equal(hasBrokenSearch({ name: 'Suco Lua Nova', wordKeys: ['CACH', 'CACHA', 'CACHACA'] }), true);
+  assert.equal(hasBrokenSearch({ name: 'Vodka', wordKeys: ['VODK', 'VODKA'], searchIndex: ['7891050004604'] }), false);
+  assert.equal(hasBrokenSearch({ name: 'Vodka', wordKeys: ['vodka'], searchIndex: ['VODKA'] }), false);
+  assert.equal(hasBrokenSearch({ name: 'Coca 2l', wordKeys: ['COCA', '2L'] }), false);
+  assert.equal(hasBrokenSearch({ name: 'Coca 2l', wordKeys: ['COCA'] }), true);
+  assert.equal(hasBrokenSearch({ name: 'Ruffles C/cebola', wordKeys: ['RUFFLES', 'CEBOLA'] }), false);
+  assert.equal(hasBrokenSearch({ name: 'Ruffles C/cebola', wordKeys: ['RUFFLES', 'C/CEBOLA'] }), true);
+  assert.equal(hasBrokenSearch({ name: '', wordKeys: ['7891050004604'] }), false);
   assert.equal(hasBrokenSearch({}), false);
 });
 
@@ -386,10 +391,10 @@ test('shelf, search and blocked-that-sold lists only take products that match th
   const index = createStorageIndex({ listNames: listingOf({ 'produtosMobile/': ['produtosMobile/1.webp'] }) });
   const url = storageUrl('produtosMobile/1.webp');
   const storeRef = fakeStoreRef([
-    { id: 'a', url, shelvesIds: ['mercearia_sub1'], wordKeys: ['MAIONESE'] },
-    { id: 'b', url, shelvesIds: [], wordKeys: ['maionese'] },
-    { id: 'c', url, shelvesIds: ['mercearia_apagada'], searchIndex: ['batata'] },
-    { id: 'd', url, shelvesIds: [], wordKeys: ['vodka'], isActive: false },
+    { id: 'a', url, name: 'Maionese', shelvesIds: ['mercearia_sub1'], wordKeys: ['MAIONESE'] },
+    { id: 'b', url, name: 'Maionese', shelvesIds: [], wordKeys: ['maionese'] },
+    { id: 'c', url, name: 'Batata', shelvesIds: ['mercearia_apagada'], searchIndex: ['batata'] },
+    { id: 'd', url, name: 'Vodka', shelvesIds: [], wordKeys: ['vodka'], isActive: false },
   ], {
     categories: [{ id: 'mercearia' }],
     subcategories: [{ id: 'sub1', categoryId: 'mercearia', isActive: true }],
@@ -576,7 +581,7 @@ test('writes every list, then the summary without ids, then removes leftover pag
     'vendas30', 'vendas90', 'version',
   ]);
   assert.equal(summary.falhasTemporarias, 0);
-  assert.equal(summary.version, 6);
+  assert.equal(summary.version, 7);
   assert.equal(summary.checkedAt, 'agora');
   assert.ok(Buffer.byteLength(JSON.stringify(summary)) < 1024);
 });

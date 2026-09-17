@@ -1,6 +1,7 @@
 const { isTestOrder, orderClientId } = require('./hourlySalesAggregation');
+const { hasBrokenSearch } = require('./searchKeys');
 
-const CHECK_VERSION = 6;
+const CHECK_VERSION = 7;
 const DEFAULT_TIMEOUT_MS = 15000;
 const CLIENT_FETCH_CHUNK = 300;
 const SALES_WINDOW_DAYS = Object.freeze({ vendas30: 30, vendas90: 90 });
@@ -117,19 +118,6 @@ function shelfStatusOf(product = {}, validKeys = new Set()) {
   if (!hasFilledList(product.shelvesIds)) return 'semShelvesIds';
   const ids = product.shelvesIds.map((id) => String(id ?? '').trim());
   return ids.some((id) => validKeys.has(id)) ? 'ok' : 'inexistente';
-}
-
-// A busca do app passa o termo para maiusculas e compara com arrayContainsAny
-// em wordKeys e searchIndex. Se todas as chaves com letra estao em minusculas,
-// o produto nunca casa. Chave sem letra (codigo de barras) nao entra na conta.
-function hasBrokenSearch(product = {}) {
-  const keys = [
-    ...(Array.isArray(product.wordKeys) ? product.wordKeys : []),
-    ...(Array.isArray(product.searchIndex) ? product.searchIndex : []),
-  ].map((key) => String(key ?? ''))
-    .filter((key) => /\p{L}/u.test(key));
-  return keys.length > 0
-    && keys.every((key) => key === key.toLowerCase() && key !== key.toUpperCase());
 }
 
 function stockBandOf(product = {}) {
@@ -540,7 +528,7 @@ async function runEstablishmentPass({
       products.push({
         id: productDocument.id,
         product,
-        searchBroken: hasBrokenSearch({ wordKeys, searchIndex }),
+        searchBroken: hasBrokenSearch({ name: product.name, wordKeys, searchIndex }),
       });
     });
     onPage?.(products.length);
