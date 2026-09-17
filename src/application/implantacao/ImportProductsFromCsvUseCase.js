@@ -1,5 +1,5 @@
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import { buildSearchIndex, buildWordKeys } from './catalogSearchIndex.js';
+import { productSearchKeys } from './catalogSearchIndex.js';
 
 const BATCH_OP_LIMIT = 400;
 const PROGRESS_LOG_EVERY = 25;
@@ -219,6 +219,7 @@ export class ImportProductsFromCsvUseCase {
       const description = pick(row, ['Descrição', 'descrição', 'Descricao', 'descricao']);
       const priceRaw = pick(row, ['Preço', 'preço', 'Preco', 'preco']);
       const ean = pick(row, ['EAN', 'ean']);
+      const searchKeys = productSearchKeys({ name, barCode: ean });
       const categoryName = pick(row, ['Mercadológico nível 1', 'Mercadologico nivel 1', 'mercadológico nível 1', 'mercadologico nivel 1']);
       const subcategoryName = pick(row, ['Mercadológico nível 2', 'Mercadologico nivel 2', 'mercadológico nível 2', 'mercadologico nivel 2']);
       const photoUrl = pick(row, ['Foto do produto', 'foto do produto']);
@@ -302,8 +303,8 @@ export class ImportProductsFromCsvUseCase {
           unityType: 'un',
           images: sharedFields.images || [],
           historyPrice: [{ createdAt: historyTimestamp, price, fromPrice: price }],
-          searchIndex: buildSearchIndex(name, description),
-          wordKeys: buildWordKeys(name),
+          searchIndex: searchKeys,
+          wordKeys: searchKeys,
           deletedAt: null,
           createdAt: timestamp,
         });
@@ -322,7 +323,7 @@ export class ImportProductsFromCsvUseCase {
           name,
           description,
           barCode: ean,
-          searchIndex: buildSearchIndex(name, description),
+          searchIndex: searchKeys,
         });
         opsInBatch += 1;
 

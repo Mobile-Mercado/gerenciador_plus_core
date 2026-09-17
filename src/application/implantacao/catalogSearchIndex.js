@@ -1,78 +1,42 @@
-function replaceAccents(value) {
+const WITH_ACCENT = 'ÀÁÂÃÄÅàáâãäåÒÓÔÕÖØòóôõöøÈÉÊËèéêëðÇçÐÌÍÎÏìíîïÙÚÛÜùúûüÑñŠšŸÿýŽž';
+const WITHOUT_ACCENT = 'AAAAAAaaaaaaOOOOOOooooooEEEEeeeeeCcDIIIIiiiiUUUUuuuuNnSsYyyZz';
+const MIN_PREFIX_LENGTH = 4;
+
+export function replaceAccents(value) {
   if (value === null || value === undefined) return null;
-  let next = value;
-  const withAccent = 'ÀÁÂÃÄÅàáâãäåÒÓÔÕÕÖØòóôõöøÈÉÊËèéêëðÇçÐÌÍÎÏìíîïÙÚÛÜùúûüÑñŠšŸÿýŽž';
-  const withoutAccent = 'AAAAAAaaaaaaOOOOOOOooooooEEEEeeeeeCcDIIIIiiiiUUUUuuuuNnSsYyyZz';
-  for (let i = 0; i < withAccent.length; i += 1) {
-    next = next.replaceAll(withAccent[i], withoutAccent[i]);
+  let next = '';
+  for (const char of String(value)) {
+    const index = WITH_ACCENT.indexOf(char);
+    next += index >= 0 ? WITHOUT_ACCENT[index] : char;
   }
   return next;
 }
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export function searchWords(text) {
+  return replaceAccents(String(text ?? ''))
+    .toUpperCase()
+    .replace(/['\u2019]/g, '')
+    .split(/[^A-Z0-9]+/)
+    .filter(Boolean);
 }
 
-function generateForSingleWord(value) {
-  if (!value || value.length <= 2) {
-    if (value && /\d/.test(value)) return [value.toLowerCase()];
-    return [];
-  }
-  if (value.length <= 4) return [value.toLowerCase()];
-  if (/^\d+$/.test(value)) return [value.toLowerCase()];
-
-  const minCharacters = 4;
-  const rest = value.length - minCharacters;
-  const out = [];
-  for (let i = 0; i <= rest; i += 1) {
-    out.push(value.substring(0, minCharacters + i).toLowerCase());
-  }
-  return out;
-}
-
-function generateForSentence(value, separator = ' ', excludedCharacters = []) {
-  const withoutAccent = replaceAccents(value) || '';
-  let replaced = withoutAccent;
-  for (const exclude of excludedCharacters) {
-    replaced = replaced.replace(new RegExp(escapeRegExp(exclude), 'g'), '');
-  }
-  return replaced.split(separator).flatMap((word) => generateForSingleWord(word));
-}
-
-function generateSearchIndex(value, minLength = 2) {
-  if (!value) return [];
-  const normalized = replaceAccents(value) || '';
-  const sentences = normalized.replace(/,/g, ' ').split(' ');
-  const indexes = [];
-  for (const sentence of sentences) {
-    if (!sentence.trim()) continue;
-    for (let start = 0; start < sentence.length - 1; start += 1) {
-      for (let end = start + 1; end <= sentence.length; end += 1) {
-        indexes.push(sentence.substring(start, end).toLowerCase());
-      }
-    }
-  }
-  return [...new Set(indexes.filter((item) => item.length >= minLength))];
-}
-
-export function buildSearchIndex(nome, descricao) {
-  const textoCompleto = `${nome} ${descricao}`.toLowerCase();
-  const textoNormalizado = replaceAccents(textoCompleto) || '';
-  const palavrasBasicas = textoNormalizado
-    .split(/\s+/)
-    .filter((palavra) => palavra.length > 2)
-    .map((palavra) => palavra.toUpperCase());
-  const indiceAprimorado = generateSearchIndex(textoCompleto, 2);
-  const indiceFrases = generateForSentence(textoCompleto, ' ', [',', '.', '!', '?', ';']);
-  const todos = new Set([...palavrasBasicas, ...indiceAprimorado, ...indiceFrases]);
-  return [...todos].map((item) => String(item).toLowerCase());
-}
-
-export function buildWordKeys(nome) {
-  const palavras = String(nome || '').toLowerCase().split(/\s+/);
+function keysForWord(word) {
+  if (word.length <= 2) return /\d/.test(word) ? [word] : [];
+  if (word.length <= MIN_PREFIX_LENGTH) return [word];
   const keys = [];
-  palavras.forEach((palavra) => {
-    for (let i = 1; i <= palavra.length; i += 1) keys.push(palavra.substring(0, i));
-  });
-  return [...new Set(keys)];
+  for (let end = MIN_PREFIX_LENGTH; end <= word.length; end += 1) {
+    keys.push(word.substring(0, end));
+  }
+  return keys;
 }
+
+export function searchKeysForName(name) {
+  return [...new Set(searchWords(name).flatMap(keysForWord))];
+}
+
+export function productSearchKeys({ name, barCode } = {}) {
+  const code = typeof barCode === 'string' ? barCode.trim() : '';
+  const keys = searchKeysForName(name);
+  return code ? [code, ...keys.filter((key) => key !== code)] : keys;
+}
+
