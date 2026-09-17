@@ -6,33 +6,40 @@ export class ManageManagerData {
     this.gateway = gateway;
   }
 
-  async getDocument({ actorUid, target }) {
-    return this.gateway.getDocument({ actor: await this.actor(actorUid), target });
+  async getDocument({ actorUid, claims, target }) {
+    return this.gateway.getDocument({ actor: await this.actor(actorUid, claims), target });
   }
 
-  async getDocuments({ actorUid, target }) {
-    return this.gateway.getDocuments({ actor: await this.actor(actorUid), target });
+  async getDocuments({ actorUid, claims, target }) {
+    return this.gateway.getDocuments({ actor: await this.actor(actorUid, claims), target });
   }
 
-  async countDocuments({ actorUid, target }) {
-    return this.gateway.countDocuments({ actor: await this.actor(actorUid), target });
+  async countDocuments({ actorUid, claims, target }) {
+    return this.gateway.countDocuments({ actor: await this.actor(actorUid, claims), target });
   }
 
-  async mutate({ actorUid, request }) {
-    return this.gateway.mutate({ actor: await this.actor(actorUid), request });
+  async mutate({ actorUid, claims, request }) {
+    return this.gateway.mutate({ actor: await this.actor(actorUid, claims), request });
   }
 
-  async subscribe({ actorUid, target, onSnapshot, onError }) {
+  async subscribe({
+    actorUid, claims, target, onSnapshot, onError,
+  }) {
     return this.gateway.subscribe({
-      actor: await this.actor(actorUid),
+      actor: await this.actor(actorUid, claims),
       target,
       onSnapshot,
       onError,
     });
   }
 
-  async actor(uid) {
-    const account = await this.accessRepository.findAccountByUid(uid);
+  // O ator carrega as permissoes: a barreira de escrita da politica le `actor.permissions`.
+  async actor(uid, claims) {
+    const account = await this.accessRepository.findAccountByClaims({
+      uid,
+      adminOf: claims?.adminOf,
+      groupId: claims?.groupId,
+    });
     if (!account?.hasEstablishment) {
       throw new AppError('Conta sem estabelecimento ativo.', {
         statusCode: 403,

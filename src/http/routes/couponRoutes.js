@@ -64,7 +64,7 @@ const updateCouponSchema = z.object({
   { message: 'Envie ao menos um campo para atualizar.' },
 );
 
-export function createCouponRoutes({ manageCoupons }) {
+export function createCouponRoutes({ manageCoupons, requirePermission }) {
   const router = Router();
 
   router.get(
@@ -77,6 +77,7 @@ export function createCouponRoutes({ manageCoupons }) {
 
   router.post(
     '/',
+    requirePermission('coupons.manage'),
     asyncHandler(async (request, response) => {
       const payload = createCouponSchema.parse(request.body);
       const result = await manageCoupons.createCoupon({ actorUid: request.auth.uid, ...payload });
@@ -86,6 +87,7 @@ export function createCouponRoutes({ manageCoupons }) {
 
   router.patch(
     '/:couponId',
+    requirePermission('coupons.manage'),
     asyncHandler(async (request, response) => {
       const { couponId } = couponIdParamsSchema.parse(request.params);
       const patch = updateCouponSchema.parse(request.body);
@@ -96,6 +98,7 @@ export function createCouponRoutes({ manageCoupons }) {
 
   router.post(
     '/:couponId/deactivate',
+    requirePermission('coupons.manage'),
     asyncHandler(async (request, response) => {
       const { couponId } = couponIdParamsSchema.parse(request.params);
       await manageCoupons.deactivateCoupon({ actorUid: request.auth.uid, couponId });
@@ -105,6 +108,7 @@ export function createCouponRoutes({ manageCoupons }) {
 
   router.delete(
     '/:couponId',
+    requirePermission('coupons.manage'),
     asyncHandler(async (request, response) => {
       const { couponId } = couponIdParamsSchema.parse(request.params);
       await manageCoupons.deleteCoupon({ actorUid: request.auth.uid, couponId });

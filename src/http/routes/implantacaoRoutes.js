@@ -23,6 +23,7 @@ export function createImplantacaoRoutes({
   manageImplantationPipelines,
   updateImplantationApprovalUseCase,
   implantationAdminMiddleware,
+  requirePermission,
 }) {
   const router = Router();
 
@@ -59,7 +60,7 @@ export function createImplantacaoRoutes({
     }
   });
 
-  router.post('/importar-produtos', async (request, response, next) => {
+  router.post('/importar-produtos', requirePermission('products.edit'), async (request, response, next) => {
     let streamStarted = false;
 
     const writeEvent = (event) => {

@@ -1,4 +1,8 @@
+import { AppError } from '../../domain/errors/AppError.js';
 import { EstablishmentAccessRepository } from '../../domain/auth/EstablishmentAccessRepository.js';
+
+// Dono da loja: manda em tudo, sem grupo.
+const OWNER_PERMISSIONS = { isAdmin: true, groupId: null, keys: [] };
 
 export class FirestoreEstablishmentAccessRepository extends EstablishmentAccessRepository {
   constructor({ firestore }) {
@@ -43,6 +47,65 @@ export class FirestoreEstablishmentAccessRepository extends EstablishmentAccessR
         ? sessionEstablishment(establishmentSnapshot.id, establishmentSnapshot.data())
         : null,
       hasEstablishment: establishmentSnapshot.exists,
+    };
+  }
+
+  // Duas vias: funcionario com claim adminOf (AdminUsers + PermissionGroups) ou o
+  // dono, pelo documento em Users. Sem AdminUsers para a claim, cai na via do dono,
+  // que e o comportamento de hoje.
+  async findAccountByClaims({ uid, adminOf, groupId } = {}) {
+    if (!uid) return null;
+    if (adminOf) {
+      const admin = await this.findAdminAccount({ uid, adminOf, groupId });
+      if (admin) return admin;
+    }
+    const account = await this.findAccountByUid(uid);
+    return account ? { ...account, permissions: { ...OWNER_PERMISSIONS } } : null;
+  }
+
+  async findAdminAccount({ uid, adminOf, groupId }) {
+    const establishmentReference = this.firestore.collection('estabelecimentos').doc(adminOf);
+    const adminSnapshot = await establishmentReference.collection('AdminUsers').doc(uid).get();
+    if (!adminSnapshot.exists) return null;
+
+    const adminData = adminSnapshot.data() || {};
+    if (adminData.active === false) {
+      throw new AppError('Esta conta de funcionario esta desativada.', {
+        statusCode: 403,
+        code: 'admin_user_disabled',
+      });
+    }
+
+    const [groupSnapshot, establishmentSnapshot] = await Promise.all([
+      groupId
+        ? establishmentReference.collection('PermissionGroups').doc(groupId).get()
+        : Promise.resolve(null),
+      establishmentReference.get(),
+    ]);
+    const groupData = groupSnapshot?.exists ? groupSnapshot.data() : null;
+    const nome = [adminData.firstName, adminData.lastName].filter(Boolean).join(' ');
+
+    return {
+      uid,
+      userId: uid,
+      establishmentId: adminOf,
+      userDocument: {
+        id: uid,
+        name: nome || null,
+        nome: nome || null,
+        email: adminData.email || null,
+        image: null,
+        userType: null,
+      },
+      establishmentDocument: establishmentSnapshot.exists
+        ? sessionEstablishment(establishmentSnapshot.id, establishmentSnapshot.data())
+        : null,
+      hasEstablishment: establishmentSnapshot.exists,
+      permissions: {
+        isAdmin: groupData?.isAdmin === true,
+        groupId: groupId || null,
+        keys: Array.isArray(groupData?.permissions) ? groupData.permissions : [],
+      },
     };
   }
 

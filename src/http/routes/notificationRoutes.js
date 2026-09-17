@@ -14,11 +14,12 @@ const registerTokenSchema = z.object({
   userAgent: z.string().max(500).optional(),
 });
 
-export function createNotificationRoutes({ manageWebNotifications }) {
+export function createNotificationRoutes({ manageWebNotifications, requirePermission }) {
   const router = Router();
 
   router.post(
     '/web/register',
+    requirePermission('settings.edit'),
     asyncHandler(async (request, response) => {
       const payload = registerTokenSchema.parse(request.body);
       const result = await manageWebNotifications.registerToken({
@@ -44,6 +45,7 @@ export function createNotificationRoutes({ manageWebNotifications }) {
 
   router.post(
     '/web/test',
+    requirePermission('settings.edit'),
     asyncHandler(async (request, response) => {
       const { establishmentId } = testNotificationSchema.parse(request.body);
       const result = await manageWebNotifications.sendTest({

@@ -57,6 +57,7 @@ const manageCoupons = new ManageCoupons({
   accessRepository,
 });
 const app = createApp({
+  accessRepository,
   generateAiResponseUseCase,
   getDailyHomeOverviewUseCase,
   importProductsFromCsvUseCase,
