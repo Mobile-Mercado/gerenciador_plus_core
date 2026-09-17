@@ -1,6 +1,6 @@
 const WITH_ACCENT = 'ÀÁÂÃÄÅàáâãäåÒÓÔÕÖØòóôõöøÈÉÊËèéêëðÇçÐÌÍÎÏìíîïÙÚÛÜùúûüÑñŠšŸÿýŽž';
 const WITHOUT_ACCENT = 'AAAAAAaaaaaaOOOOOOooooooEEEEeeeeeCcDIIIIiiiiUUUUuuuuNnSsYyyZz';
-const MIN_PREFIX_LENGTH = 4;
+const MIN_PREFIX_LENGTH = 3;
 
 export function replaceAccents(value) {
   if (value === null || value === undefined) return null;
@@ -22,7 +22,6 @@ export function searchWords(text) {
 
 function keysForWord(word) {
   if (word.length <= 2) return /\d/.test(word) ? [word] : [];
-  if (word.length <= MIN_PREFIX_LENGTH) return [word];
   const keys = [];
   for (let end = MIN_PREFIX_LENGTH; end <= word.length; end += 1) {
     keys.push(word.substring(0, end));
