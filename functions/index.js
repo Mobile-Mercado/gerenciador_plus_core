@@ -19,6 +19,11 @@ const {
   windowStart,
   writeSummary,
 } = require('./productImageFileCheck');
+const {
+  loadAgentConversationData,
+  summarizeConversations,
+  writeAgentConversationsSummary,
+} = require('./agenteConversas');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -325,6 +330,71 @@ exports.verifyProductImageFilesNightly = onSchedule(
       segundos: Math.round((Date.now() - startedAt) / 1000),
     };
     console.log('[verifyProductImageFilesNightly] Passada concluida', result);
+    return result;
+  },
+);
+
+// Resumo das conversas do agente por loja, em estabelecimentos/{id}/Stats/agenteConversas.
+// Mesmas lojas e horario da rotina de imagens. Guarda so termos e contagens.
+exports.summarizeAgentConversationsNightly = onSchedule(
+  {
+    schedule: '0 3 * * *',
+    timeZone: 'America/Sao_Paulo',
+    region: 'us-central1',
+    memory: '512MiB',
+    timeoutSeconds: 1800,
+    retryCount: 0,
+  },
+  async () => {
+    const startedAt = Date.now();
+    const configSnapshot = await db.doc(IMAGE_CHECK_CONFIG_PATH).get();
+    const configuredIds = configuredEstablishmentIds(configSnapshot.data());
+    if (!configuredIds.length) {
+      console.log('[summarizeAgentConversationsNightly] Nenhuma loja habilitada em', IMAGE_CHECK_CONFIG_PATH);
+      return;
+    }
+
+    const storeSnapshots = await db.getAll(
+      ...configuredIds.map((id) => db.collection('estabelecimentos').doc(id)),
+    );
+    const report = storeSnapshots
+      .filter((snapshot) => !snapshot.exists)
+      .map((snapshot) => ({ establishmentId: snapshot.id, status: 'inexistente' }));
+
+    for (const snapshot of storeSnapshots.filter((store) => store.exists)) {
+      const establishmentId = snapshot.id;
+      if (Date.now() - startedAt > IMAGE_CHECK_TIME_BUDGET_MS) {
+        report.push({ establishmentId, status: 'adiada' });
+        continue;
+      }
+      try {
+        const data = await loadAgentConversationData({
+          db,
+          storeRef: snapshot.ref,
+          documentIdPath: admin.firestore.FieldPath.documentId(),
+          testAccountIdsFor,
+        });
+        const summary = summarizeConversations(data);
+        await writeAgentConversationsSummary({
+          storeRef: snapshot.ref,
+          summary,
+          generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        report.push({
+          establishmentId,
+          conversas: summary.conversas,
+          pedidosDeProduto: summary.pedidosDeProduto,
+          termos: summary.termos.length,
+          pedidos: summary.pedidos,
+        });
+      } catch (error) {
+        console.error('[summarizeAgentConversationsNightly] Falha na loja', { establishmentId, error });
+        report.push({ establishmentId, status: 'falhou' });
+      }
+    }
+
+    const result = { lojas: report, segundos: Math.round((Date.now() - startedAt) / 1000) };
+    console.log('[summarizeAgentConversationsNightly] Passada concluida', result);
     return result;
   },
 );
