@@ -9,6 +9,7 @@ import { createHealthRoutes } from './http/routes/healthRoutes.js';
 import { createImplantacaoRoutes } from './http/routes/implantacaoRoutes.js';
 import { createNotificationRoutes } from './http/routes/notificationRoutes.js';
 import { createSessionRoutes } from './http/routes/sessionRoutes.js';
+import { createStatsRoutes } from './http/routes/statsRoutes.js';
 import { errorHandler, notFoundHandler } from './http/middlewares/errorHandler.js';
 import { createFirebaseAuthMiddleware } from './http/middlewares/firebaseAuth.js';
 import { createImplantationAdminMiddleware } from './http/middlewares/implantationAdmin.js';
@@ -25,6 +26,7 @@ export function createApp({
   manageCoupons,
   getManagerSession,
   manageManagerData,
+  recalculateCategoryCountsUseCase,
   accessRepository,
 }) {
   const app = express();
@@ -77,6 +79,11 @@ export function createApp({
     '/api/notifications',
     createFirebaseAuthMiddleware({ required: true }),
     createNotificationRoutes({ manageWebNotifications, requirePermission }),
+  );
+  app.use(
+    '/api/stats',
+    createFirebaseAuthMiddleware({ required: true }),
+    createStatsRoutes({ recalculateCategoryCountsUseCase, requirePermission }),
   );
   app.use(
     '/api/coupons',

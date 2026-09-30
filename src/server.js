@@ -4,6 +4,7 @@ import { GetDailyHomeOverviewUseCase } from './application/ai/GetDailyHomeOvervi
 import { GetManagerSession } from './application/auth/GetManagerSession.js';
 import { ManageCoupons } from './application/coupons/ManageCoupons.js';
 import { ManageManagerData } from './application/data/ManageManagerData.js';
+import { RecalculateCategoryCountsUseCase } from './application/stats/RecalculateCategoryCountsUseCase.js';
 import { ImportProductsFromCsvUseCase } from './application/implantacao/ImportProductsFromCsvUseCase.js';
 import { ManageImplantationPipelines } from './application/implantacao/ManageImplantationPipelines.js';
 import { UpdateImplantationApprovalUseCase } from './application/implantacao/UpdateImplantationApprovalUseCase.js';
@@ -56,6 +57,10 @@ const manageCoupons = new ManageCoupons({
   couponRepository: new FirestoreCouponRepository({ firestore }),
   accessRepository,
 });
+const recalculateCategoryCountsUseCase = new RecalculateCategoryCountsUseCase({
+  firestore,
+  accessRepository,
+});
 const app = createApp({
   accessRepository,
   generateAiResponseUseCase,
@@ -67,6 +72,7 @@ const app = createApp({
   manageCoupons,
   getManagerSession,
   manageManagerData,
+  recalculateCategoryCountsUseCase,
 });
 
 const server = app.listen(env.PORT, () => {
