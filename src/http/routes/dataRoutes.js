@@ -1,10 +1,14 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { AppError } from '../../domain/errors/AppError.js';
+import { logger } from '../../infra/logger/logger.js';
 import { asyncHandler } from '../middlewares/asyncHandler.js';
 
 const targetBodySchema = z.object({ target: z.record(z.unknown()) });
 const mutationBodySchema = z.record(z.unknown());
+const batchBodySchema = z.object({ reads: z.array(z.record(z.unknown())) });
 const HEARTBEAT_INTERVAL_MS = 20_000;
+const MAX_BATCH_READS = 25;
 
 export function createDataRoutes({ manageManagerData }) {
   const router = Router();
@@ -45,6 +49,39 @@ export function createDataRoutes({ manageManagerData }) {
         target,
       });
       response.json({ data: result });
+    }),
+  );
+
+  // Leituras em lote. Cada item traz o mesmo alvo que /document, /query e /count
+  // aceitam, mais o `kind` que diz qual delas e. A resposta tem o mesmo tamanho e a
+  // mesma ordem da entrada.
+  router.post(
+    '/batch',
+    asyncHandler(async (request, response) => {
+      const { reads } = batchBodySchema.parse(request.body);
+      if (!reads.length) {
+        throw new AppError('Envie ao menos uma leitura.', {
+          statusCode: 400,
+          code: 'data_batch_reads_empty',
+        });
+      }
+      if (reads.length > MAX_BATCH_READS) {
+        throw new AppError(`Envie no maximo ${MAX_BATCH_READS} leituras por chamada.`, {
+          statusCode: 400,
+          code: 'data_batch_reads_limit',
+        });
+      }
+
+      const results = await manageManagerData.readBatch({
+        actorUid: request.auth.uid,
+        claims: request.auth,
+        reads,
+      });
+      response.json({
+        data: results.map((result, index) => (result.ok
+          ? { ok: true, data: result.data }
+          : { ok: false, error: describeReadFailure(result.error, request, reads[index]) })),
+      });
     }),
   );
 
@@ -128,6 +165,23 @@ export function createDataRoutes({ manageManagerData }) {
   });
 
   return router;
+}
+
+// Falha de item nao passa pelo errorHandler, entao o motivo real e registrado aqui:
+// sem isso, erro do Firestore dentro do lote ficaria invisivel no log.
+function describeReadFailure(error, request, read) {
+  if (error instanceof AppError) {
+    return { code: error.code, message: error.message };
+  }
+  logger.error('data_batch_read_failed', {
+    method: request.method,
+    path: request.originalUrl,
+    kind: read?.kind,
+    originalMessage: error?.message,
+    originalCode: error?.code,
+    stack: error?.stack,
+  });
+  return { code: 'internal_error', message: 'Nao foi possivel completar esta leitura.' };
 }
 
 function writeLine(response, payload) {
