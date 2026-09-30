@@ -24,6 +24,7 @@ const {
   summarizeConversations,
   writeAgentConversationsSummary,
 } = require('./agenteConversas');
+const { recalcularCategorias } = require('./categoriasContagem');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -306,6 +307,11 @@ exports.verifyProductImageFilesNightly = onSchedule(
           summary,
           checkedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
+        // Contagem por categoria e subcategoria: grava so em Stats/categoriasContagem.
+        const contagem = await recalcularCategorias({
+          storeRef,
+          geradoEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
         report.push({
           establishmentId,
           produtosAVenda: summary.produtosAVenda,
@@ -315,6 +321,8 @@ exports.verifyProductImageFilesNightly = onSchedule(
           semTag: summary.semTag,
           semCategoria: summary.semCategoria,
           metodo: summary.metodo,
+          categorias: contagem.categorias,
+          subcategorias: contagem.subcategorias,
         });
       } catch (error) {
         if (error instanceof StorageListingError) throw error;
