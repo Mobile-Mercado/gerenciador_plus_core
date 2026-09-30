@@ -7,6 +7,21 @@ import { errorHandler } from '../src/http/middlewares/errorHandler.js';
 
 const AGORA = new Date('2026-09-30T18:00:00Z');
 
+// Gateway em producao prova pagamento; em homologacao, nao. Loja sem gateway cai fora
+// pelo mode do pedido.
+const LOJAS = {
+  'loja-prod': { paymentGateway: { provider: 'safrapay', enabled: true, safrapay: { environment: 'prod' } } },
+  'loja-hml': { paymentGateway: { provider: 'safrapay', enabled: true, safrapay: { environment: 'hml' } } },
+  'loja-sem-ambiente': { paymentGateway: { provider: 'safrapay', enabled: true } },
+  'loja-sem-gateway': { name: 'Sem gateway' },
+};
+
+const refLoja = (id) => ({
+  path: `estabelecimentos/${id}`,
+  id,
+  get: async () => ({ data: () => LOJAS[id] || null }),
+});
+
 function pedido(extra = {}) {
   return {
     orderNumber: '1042',
@@ -28,13 +43,15 @@ function pedido(extra = {}) {
     currentPurchaseStatus: STATUS_DE_ROTA,
     statusList: [{ purchaseStatus: 'PurchaseStatus.pending', createdAt: AGORA }],
     deliveryCode: 'A7K2Z9',
+    companyReference: refLoja('loja-prod'),
     ...extra,
   };
 }
 
-// Firestore de mentira com consulta por deliveryCode e transacao.
+// Firestore de mentira: pedidos e lojas, com consulta por deliveryCode e transacao.
 function firestoreFalso(pedidos) {
   const documentos = new Map(Object.entries(pedidos));
+  const lojaDe = (referencia) => ({ data: () => LOJAS[referencia?.id] || null });
   const snapshot = (id) => ({
     id,
     ref: { path: `PurchaseRequests/${id}`, get: async () => snapshot(id) },
@@ -60,7 +77,7 @@ function firestoreFalso(pedidos) {
     async runTransaction(tarefa) {
       const escritas = [];
       const resultado = await tarefa({
-        get: (query) => query.get(),
+        get: (alvo) => (alvo && alvo.get ? alvo.get() : lojaDe(alvo)),
         update: (ref, dados) => escritas.push({ ref, dados }),
       });
       escritas.forEach(({ ref, dados }) => {
@@ -153,13 +170,19 @@ test('marcar entregue grava os cinco campos e nada mais', async () => {
 });
 
 test('pagoOnline sai do registro de transacao, nunca da forma de pagamento', async () => {
+  const pagamento = (extra) => ({ paymentType: 'PaymentType.pix', paymentValue: 74.5, ...extra });
   const casos = [
-    ['pix cobrado na maquininha, sem transacao', pedido({ purchasePayment: { paymentType: 'PaymentType.pix', paymentValue: 74.5 } }), false],
-    ['pix com transacao pendente', pedido({ paymentStatus: 'pending', paymentTransactionId: 'tx-1' }), false],
-    ['cartao esperando confirmacao do provedor', pedido({ paymentStatus: 'paidAwaitingConfirmation' }), false],
-    ['pago, no campo do topo', pedido({ paymentStatus: 'paid' }), true],
-    ['pago, dentro de purchasePayment', pedido({ purchasePayment: { paymentType: 'PaymentType.pix', paymentValue: 74.5, paymentStatus: 'paid' } }), true],
-    ['pago, com maiuscula e espaco', pedido({ paymentStatus: ' Paid ' }), true],
+    ['pix pago', pedido({ purchasePayment: pagamento({ mode: 'online', paymentStatus: 'paid' }) }), true],
+    ['pix esperando pagamento', pedido({ purchasePayment: pagamento({ mode: 'online', paymentStatus: 'waitingForPayment' }) }), false],
+    ['pix reembolsado', pedido({ purchasePayment: pagamento({ mode: 'online', paymentStatus: 'canceled' }) }), false],
+    ['pix com cancelamento pedido', pedido({ purchasePayment: pagamento({ mode: 'online', paymentStatus: 'pendingCancel' }) }), false],
+    ['cartao aprovado', pedido({ purchasePayment: pagamento({ mode: 'online', paymentType: 'PaymentType.creditcard', paymentStatus: 'paidAwaitingConfirmation', responseCode: '00', authorizationCode: '123456' }) }), true],
+    ['cartao de homologacao', pedido({ purchasePayment: pagamento({ mode: 'online', paymentType: 'PaymentType.creditcard', paymentStatus: 'paidAwaitingConfirmation', responseCode: '00', authorizationCode: 'HMLTEST' }) }), false],
+    ['cartao recusado pela adquirente', pedido({ purchasePayment: pagamento({ mode: 'online', paymentStatus: 'paidAwaitingConfirmation', responseCode: '51', authorizationCode: '123456' }) }), false],
+    ['cartao aprovado sem codigo de autorizacao', pedido({ purchasePayment: pagamento({ mode: 'online', paymentStatus: 'paidAwaitingConfirmation', responseCode: '00' }) }), false],
+    ['pedido sem mode online: cobranca na maquininha', pedido({ purchasePayment: pagamento({ paymentStatus: 'paid' }) }), false],
+    ['pix pago, com maiuscula e espaco no status', pedido({ purchasePayment: pagamento({ mode: ' Online ', paymentStatus: ' Paid ' }) }), true],
+    ['esquema antigo: status no topo do pedido, com mode online', pedido({ paymentStatus: 'paid', purchasePayment: pagamento({ mode: 'online' }) }), true],
   ];
 
   for (const [rotulo, documento, esperado] of casos) {
@@ -167,6 +190,35 @@ test('pagoOnline sai do registro de transacao, nunca da forma de pagamento', asy
     const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
     assert.equal(body.data.pagoOnline, esperado, rotulo);
   }
+});
+
+test('gateway fora de producao nunca conta como pago, mesmo com cartao aprovado', async () => {
+  const cartaoAprovado = {
+    paymentType: 'PaymentType.creditcard',
+    paymentValue: 74.5,
+    mode: 'online',
+    paymentStatus: 'paidAwaitingConfirmation',
+    responseCode: '00',
+    authorizationCode: '654321',
+  };
+  const casos = [
+    ['loja em producao', 'loja-prod', true],
+    ['loja em homologacao', 'loja-hml', false],
+    ['loja com gateway sem ambiente declarado', 'loja-sem-ambiente', false],
+    ['loja sem gateway', 'loja-sem-gateway', false],
+  ];
+
+  for (const [rotulo, loja, esperado] of casos) {
+    const { app } = servidor({ p1: pedido({ purchasePayment: cartaoAprovado, companyReference: refLoja(loja) }) });
+    const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+    assert.equal(body.data.pagoOnline, esperado, rotulo);
+  }
+
+  // O mesmo vale na resposta da gravacao, que repete o resumo.
+  const { app } = servidor({ p1: pedido({ purchasePayment: cartaoAprovado, companyReference: refLoja('loja-hml') }) });
+  const { body } = await chamar(app, 'entregue', { codigo: 'A7K2Z9' });
+  assert.equal(body.data.status, 'entregue');
+  assert.equal(body.data.pagoOnline, false);
 });
 
 test('a gravacao devolve a hora que o servidor gravou em deliveredAt', async () => {
