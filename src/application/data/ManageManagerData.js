@@ -35,6 +35,29 @@ export class ManageManagerData {
     return result;
   }
 
+  // Varias leituras numa chamada so: a identificacao da conta acontece uma vez, as
+  // leituras correm em paralelo e cada uma passa pela politica como se fosse a rota
+  // individual. Devolve um resultado por leitura, na ordem da entrada; leitura que
+  // falha vira erro daquele item e nao derruba as outras.
+  async readBatch({ actorUid, claims, reads = [] }) {
+    const actor = await this.actor(actorUid, claims);
+    const settled = await Promise.allSettled(reads.map((read) => this.readOne(actor, read)));
+    return settled.map((result) => (result.status === 'fulfilled'
+      ? { ok: true, data: result.value }
+      : { ok: false, error: result.reason }));
+  }
+
+  async readOne(actor, read) {
+    const target = read?.target;
+    if (read?.kind === 'document') return this.gateway.getDocument({ actor, target });
+    if (read?.kind === 'query') return this.gateway.getDocuments({ actor, target });
+    if (read?.kind === 'count') return this.gateway.countDocuments({ actor, target });
+    throw new AppError('Tipo de leitura invalido: use document, query ou count.', {
+      statusCode: 400,
+      code: 'data_batch_read_kind_invalid',
+    });
+  }
+
   async subscribe({
     actorUid, claims, target, onSnapshot, onError,
   }) {
