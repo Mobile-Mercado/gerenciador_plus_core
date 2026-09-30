@@ -54,15 +54,20 @@ export class DeliveryByCodeUseCase {
       };
       assertCamposPermitidos(alteracao);
       transaction.update(snapshot.ref, alteracao);
-      return { pedido, entregador };
+      return { pedido, entregador, ref: snapshot.ref };
     });
 
     if (!resultado) throw linkInvalido();
+    // Uma leitura a mais so para devolver a hora que o Firestore gravou: serverTimestamp
+    // nao tem valor antes do commit, e a tela mostra essa hora, nao a do celular.
+    const gravado = await resultado.ref.get();
+    const deliveredAt = gravado.get('deliveredAt');
     return {
       ...resumoDoPedido(resultado.pedido),
       status: 'entregue',
       marcadoPor: resultado.entregador,
       origem: ORIGEM,
+      deliveredAt: deliveredAt?.toDate ? deliveredAt.toDate().toISOString() : null,
     };
   }
 
@@ -109,7 +114,19 @@ function resumoDoPedido(pedido = {}) {
     total: Number(pedido.total || 0),
     pagamento: pagamento.paymentType || '',
     troco: troco > 0 ? troco : null,
+    pagoOnline: pagamentoOnlineConfirmado(pedido),
   };
+}
+
+// Forma de pagamento nao diz se o dinheiro entrou: na Zero Grau, Pix e cartao sao
+// cobrados na maquininha, na entrega. Quem diz e o registro da transacao, que vive em
+// dois lugares no pedido: paymentStatus no topo e purchasePayment.paymentStatus.
+// So 'paid' conta como confirmado; 'paidAwaitingConfirmation' nao, porque ainda espera
+// o provedor.
+function pagamentoOnlineConfirmado(pedido = {}) {
+  const situacoes = [pedido.paymentStatus, pedido.purchasePayment?.paymentStatus]
+    .map((valor) => String(valor || '').trim().toLowerCase());
+  return situacoes.includes('paid');
 }
 
 function enderecoEmUmaLinha(endereco) {

@@ -27,7 +27,7 @@ function pedido(extra = {}) {
     total: 74.5,
     currentPurchaseStatus: STATUS_DE_ROTA,
     statusList: [{ purchaseStatus: 'PurchaseStatus.pending', createdAt: AGORA }],
-    deliveryCode: 'A7K2Z',
+    deliveryCode: 'A7K2Z9',
     ...extra,
   };
 }
@@ -37,7 +37,7 @@ function firestoreFalso(pedidos) {
   const documentos = new Map(Object.entries(pedidos));
   const snapshot = (id) => ({
     id,
-    ref: { path: `PurchaseRequests/${id}` },
+    ref: { path: `PurchaseRequests/${id}`, get: async () => snapshot(id) },
     data: () => documentos.get(id),
     get: (campo) => documentos.get(id)[campo],
   });
@@ -65,7 +65,12 @@ function firestoreFalso(pedidos) {
       });
       escritas.forEach(({ ref, dados }) => {
         const id = ref.path.split('/')[1];
-        documentos.set(id, { ...documentos.get(id), ...dados });
+        // serverTimestamp e uma sentinela sem valor: o Firestore a troca pela hora dele no
+        // commit, e o fake faz o mesmo para deliveredAt.
+        const comHora = Object.fromEntries(Object.entries(dados).map(([campo, valor]) => (
+          campo === 'deliveredAt' ? [campo, { toDate: () => AGORA }] : [campo, valor]
+        )));
+        documentos.set(id, { ...documentos.get(id), ...comHora });
       });
       return resultado;
     },
@@ -101,7 +106,7 @@ async function chamar(app, rota, corpo) {
 test('codigo valido com pedido em rota devolve so o que a tela do entregador precisa', async () => {
   const { app } = servidor({ p1: pedido() });
 
-  const { status, body } = await chamar(app, 'resumo', { codigo: 'A7K2Z' });
+  const { status, body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
 
   assert.equal(status, 200);
   assert.deepEqual(body.data, {
@@ -116,6 +121,7 @@ test('codigo valido com pedido em rota devolve so o que a tela do entregador pre
     total: 74.5,
     pagamento: 'Dinheiro',
     troco: 25.5,
+    pagoOnline: false,
   });
   const texto = JSON.stringify(body);
   ['cliente-1', 'Aparecida', 'joao@exemplo.com', 'productsCart', 'deliveryCode', '75000-000'].forEach((proibido) => {
@@ -126,7 +132,7 @@ test('codigo valido com pedido em rota devolve so o que a tela do entregador pre
 test('marcar entregue grava os cinco campos e nada mais', async () => {
   const { app, firestore } = servidor({ p1: pedido() });
 
-  const { status, body } = await chamar(app, 'entregue', { codigo: 'A7K2Z' });
+  const { status, body } = await chamar(app, 'entregue', { codigo: 'A7K2Z9' });
 
   assert.equal(status, 200);
   assert.equal(body.data.status, 'entregue');
@@ -146,11 +152,38 @@ test('marcar entregue grava os cinco campos e nada mais', async () => {
   assert.deepEqual(novos.sort(), ['deliveredAt', 'deliveredBy', 'deliveredSource']);
 });
 
+test('pagoOnline sai do registro de transacao, nunca da forma de pagamento', async () => {
+  const casos = [
+    ['pix cobrado na maquininha, sem transacao', pedido({ purchasePayment: { paymentType: 'PaymentType.pix', paymentValue: 74.5 } }), false],
+    ['pix com transacao pendente', pedido({ paymentStatus: 'pending', paymentTransactionId: 'tx-1' }), false],
+    ['cartao esperando confirmacao do provedor', pedido({ paymentStatus: 'paidAwaitingConfirmation' }), false],
+    ['pago, no campo do topo', pedido({ paymentStatus: 'paid' }), true],
+    ['pago, dentro de purchasePayment', pedido({ purchasePayment: { paymentType: 'PaymentType.pix', paymentValue: 74.5, paymentStatus: 'paid' } }), true],
+    ['pago, com maiuscula e espaco', pedido({ paymentStatus: ' Paid ' }), true],
+  ];
+
+  for (const [rotulo, documento, esperado] of casos) {
+    const { app } = servidor({ p1: documento });
+    const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+    assert.equal(body.data.pagoOnline, esperado, rotulo);
+  }
+});
+
+test('a gravacao devolve a hora que o servidor gravou em deliveredAt', async () => {
+  const { app, firestore } = servidor({ p1: pedido() });
+
+  const { status, body } = await chamar(app, 'entregue', { codigo: 'A7K2Z9' });
+
+  assert.equal(status, 200);
+  assert.equal(body.data.deliveredAt, AGORA.toISOString());
+  assert.ok(firestore.documentos.get('p1').deliveredAt, 'gravado no documento');
+});
+
 test('codigo valido com pedido ja entregue responde link invalido, sem dado', async () => {
   const { app } = servidor({ p1: pedido({ currentPurchaseStatus: STATUS_DE_ENTREGA }) });
 
   for (const rota of ['resumo', 'entregue']) {
-    const { status, body } = await chamar(app, rota, { codigo: 'A7K2Z' });
+    const { status, body } = await chamar(app, rota, { codigo: 'A7K2Z9' });
     assert.equal(status, 404);
     assert.equal(body.error.code, 'entrega_link_invalido');
     assert.equal(body.data, undefined);
@@ -161,7 +194,7 @@ test('codigo valido com pedido ja entregue responde link invalido, sem dado', as
 test('pedido em waitingForDelivery responde igual, porque ainda nao ha entregador', async () => {
   const { app } = servidor({ p1: pedido({ currentPurchaseStatus: 'PurchaseStatus.waitingForDelivery' }) });
 
-  const { status, body } = await chamar(app, 'resumo', { codigo: 'A7K2Z' });
+  const { status, body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
 
   assert.equal(status, 404);
   assert.equal(body.error.code, 'entrega_link_invalido');
@@ -170,8 +203,8 @@ test('pedido em waitingForDelivery responde igual, porque ainda nao ha entregado
 test('codigo inexistente responde a mesma coisa que pedido inexistente', async () => {
   const { app } = servidor({ p1: pedido() });
 
-  const inexistente = await chamar(app, 'resumo', { codigo: 'ZZZZZ' });
-  const vazio = await chamar(servidor({}).app, 'resumo', { codigo: 'A7K2Z' });
+  const inexistente = await chamar(app, 'resumo', { codigo: 'ZZZZZZ' });
+  const vazio = await chamar(servidor({}).app, 'resumo', { codigo: 'A7K2Z9' });
 
   assert.equal(inexistente.status, 404);
   assert.deepEqual(inexistente.body, vazio.body);
@@ -180,10 +213,10 @@ test('codigo inexistente responde a mesma coisa que pedido inexistente', async (
 test('codigo de outra loja serve o pedido daquela loja: o codigo e a unica chave', async () => {
   const { app, firestore } = servidor({
     p1: pedido(),
-    p2: pedido({ deliveryCode: 'B9M4Q', companyName: 'UAU Mart', orderNumber: '77', clientName: 'Carlos Souza' }),
+    p2: pedido({ deliveryCode: 'B9M4Q7', companyName: 'UAU Mart', orderNumber: '77', clientName: 'Carlos Souza' }),
   });
 
-  const { status, body } = await chamar(app, 'resumo', { codigo: 'B9M4Q' });
+  const { status, body } = await chamar(app, 'resumo', { codigo: 'B9M4Q7' });
 
   assert.equal(status, 200);
   assert.equal(body.data.loja, 'UAU Mart');
@@ -195,7 +228,7 @@ test('codigo de outra loja serve o pedido daquela loja: o codigo e a unica chave
 test('o mesmo codigo em dois pedidos nao vale para nenhum', async () => {
   const { app } = servidor({ p1: pedido(), p2: pedido({ orderNumber: '77' }) });
 
-  const { status, body } = await chamar(app, 'resumo', { codigo: 'A7K2Z' });
+  const { status, body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
 
   assert.equal(status, 404);
   assert.equal(body.error.code, 'entrega_link_invalido');
@@ -204,8 +237,8 @@ test('o mesmo codigo em dois pedidos nao vale para nenhum', async () => {
 test('duas gravacoes seguidas com o mesmo codigo: so a primeira passa', async () => {
   const { app, firestore } = servidor({ p1: pedido() });
 
-  const primeira = await chamar(app, 'entregue', { codigo: 'A7K2Z' });
-  const segunda = await chamar(app, 'entregue', { codigo: 'A7K2Z' });
+  const primeira = await chamar(app, 'entregue', { codigo: 'A7K2Z9' });
+  const segunda = await chamar(app, 'entregue', { codigo: 'A7K2Z9' });
 
   assert.equal(primeira.status, 200);
   assert.equal(segunda.status, 404);
@@ -221,7 +254,7 @@ test('limite de tentativas por origem: 10 por minuto', async () => {
     const tentar = () => fetch(`http://127.0.0.1:${port}/api/entrega/resumo`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-forwarded-for': '200.0.0.1' },
-      body: JSON.stringify({ codigo: 'ZZZZZ' }),
+      body: JSON.stringify({ codigo: 'ZZZZZZ' }),
     });
     const respostas = [];
     for (let tentativa = 0; tentativa < 12; tentativa += 1) respostas.push((await tentar()).status);
