@@ -4,6 +4,7 @@ import { GetDailyHomeOverviewUseCase } from './application/ai/GetDailyHomeOvervi
 import { GetManagerSession } from './application/auth/GetManagerSession.js';
 import { ManageCoupons } from './application/coupons/ManageCoupons.js';
 import { ManageManagerData } from './application/data/ManageManagerData.js';
+import { DeliveryByCodeUseCase } from './application/delivery/DeliveryByCodeUseCase.js';
 import { RecalculateCategoryCountsUseCase } from './application/stats/RecalculateCategoryCountsUseCase.js';
 import { ImportProductsFromCsvUseCase } from './application/implantacao/ImportProductsFromCsvUseCase.js';
 import { ManageImplantationPipelines } from './application/implantacao/ManageImplantationPipelines.js';
@@ -61,6 +62,7 @@ const recalculateCategoryCountsUseCase = new RecalculateCategoryCountsUseCase({
   firestore,
   accessRepository,
 });
+const deliveryByCodeUseCase = new DeliveryByCodeUseCase({ firestore });
 const app = createApp({
   accessRepository,
   generateAiResponseUseCase,
@@ -73,6 +75,7 @@ const app = createApp({
   getManagerSession,
   manageManagerData,
   recalculateCategoryCountsUseCase,
+  deliveryByCodeUseCase,
 });
 
 const server = app.listen(env.PORT, () => {

@@ -5,6 +5,7 @@ import { env } from './config/env.js';
 import { createAiRoutes } from './http/routes/aiRoutes.js';
 import { createCouponRoutes } from './http/routes/couponRoutes.js';
 import { createDataRoutes } from './http/routes/dataRoutes.js';
+import { createDeliveryRoutes } from './http/routes/deliveryRoutes.js';
 import { createHealthRoutes } from './http/routes/healthRoutes.js';
 import { createImplantacaoRoutes } from './http/routes/implantacaoRoutes.js';
 import { createNotificationRoutes } from './http/routes/notificationRoutes.js';
@@ -27,6 +28,7 @@ export function createApp({
   getManagerSession,
   manageManagerData,
   recalculateCategoryCountsUseCase,
+  deliveryByCodeUseCase,
   accessRepository,
 }) {
   const app = express();
@@ -47,6 +49,9 @@ export function createApp({
   });
 
   app.use('/health', createHealthRoutes());
+  // Sem token de proposito: a pagina do entregador e aberta por link. Ver o comentario
+  // no topo de deliveryRoutes.js antes de mexer.
+  app.use('/api/entrega', createDeliveryRoutes({ deliveryByCodeUseCase }));
   app.use(
     '/api/session',
     createFirebaseAuthMiddleware({ required: true }),

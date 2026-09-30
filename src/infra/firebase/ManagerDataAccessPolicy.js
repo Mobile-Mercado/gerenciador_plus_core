@@ -18,6 +18,9 @@ const ORDER_UPDATE_FIELDS = new Set([
   'separatedAt',
   'separationChecklist',
   'deliveryPerson',
+  // Codigo do link do entregador: o painel grava junto com o deliveryPerson, na mesma
+  // escrita da atribuicao, e e a chave que a rota /api/entrega confere.
+  'deliveryCode',
   'isTest',
   'isTestAccount',
 ]);
