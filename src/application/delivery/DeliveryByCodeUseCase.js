@@ -28,7 +28,9 @@ export class DeliveryByCodeUseCase {
   // respondem a mesma coisa: o link nao serve de sonda para descobrir pedido.
   async summary(codigo) {
     const snapshot = await this.findOrder(codigo);
-    return resumoDoPedido(snapshot.data());
+    const pedido = snapshot.data();
+    const loja = await lerLoja(pedido, (referencia) => referencia.get());
+    return resumoDoPedido(pedido, emProducao(loja));
   }
 
   // Transacao: duas marcacoes seguidas com o mesmo codigo nao passam as duas, porque a
@@ -41,6 +43,8 @@ export class DeliveryByCodeUseCase {
       if (!snapshot) return null;
 
       const pedido = snapshot.data();
+      // Leitura antes de qualquer escrita, como a transacao exige.
+      const loja = await lerLoja(pedido, (referencia) => transaction.get(referencia));
       const entregador = String(pedido.deliveryPerson?.name || '').trim();
       const alteracao = {
         currentPurchaseStatus: STATUS_ENTREGUE,
@@ -54,7 +58,7 @@ export class DeliveryByCodeUseCase {
       };
       assertCamposPermitidos(alteracao);
       transaction.update(snapshot.ref, alteracao);
-      return { pedido, entregador, ref: snapshot.ref };
+      return { pedido, entregador, ref: snapshot.ref, producao: emProducao(loja) };
     });
 
     if (!resultado) throw linkInvalido();
@@ -63,7 +67,7 @@ export class DeliveryByCodeUseCase {
     const gravado = await resultado.ref.get();
     const deliveredAt = gravado.get('deliveredAt');
     return {
-      ...resumoDoPedido(resultado.pedido),
+      ...resumoDoPedido(resultado.pedido, resultado.producao),
       status: 'entregue',
       marcadoPor: resultado.entregador,
       origem: ORIGEM,
@@ -98,7 +102,36 @@ function umPedidoEmRota(resultado) {
 
 // So o que a tela do entregador precisa. Nada de id de cliente, e-mail ou lista de
 // produtos.
-function resumoDoPedido(pedido = {}) {
+// O ambiente do gateway mora no documento da loja, nao no pedido: gateway em
+// homologacao aprova cartao de verdade, com codigo de autorizacao real. Custa uma
+// leitura por chamada, e sao poucas entregas por dia.
+async function lerLoja(pedido, ler) {
+  const referencia = pedido?.companyReference;
+  if (!referencia || typeof ler !== 'function') return null;
+  try {
+    const snapshot = await ler(referencia);
+    return snapshot?.data ? snapshot.data() : null;
+  } catch {
+    // Loja ilegivel conta como fora de producao: na duvida, o entregador cobra.
+    return null;
+  }
+}
+
+// So 'prod' e sinonimos contam como producao. Qualquer outro valor, e a ausencia do
+// ambiente numa loja que tem gateway, valem como ambiente de teste.
+const AMBIENTES_DE_PRODUCAO = new Set(['prod', 'producao', 'production', 'live']);
+
+function emProducao(loja) {
+  const gateway = loja?.paymentGateway || {};
+  const ambiente = gateway.safrapay?.environment
+    ?? gateway.safrapay?.env
+    ?? gateway.environment
+    ?? gateway.env
+    ?? loja?.safrapay?.environment;
+  return AMBIENTES_DE_PRODUCAO.has(String(ambiente || '').trim().toLowerCase());
+}
+
+function resumoDoPedido(pedido = {}, gatewayEmProducao = false) {
   const endereco = pedido.address || {};
   const pagamento = pedido.purchasePayment || {};
   const troco = Number(pagamento.valueBack || 0);
@@ -114,19 +147,48 @@ function resumoDoPedido(pedido = {}) {
     total: Number(pedido.total || 0),
     pagamento: pagamento.paymentType || '',
     troco: troco > 0 ? troco : null,
-    pagoOnline: pagamentoOnlineConfirmado(pedido),
+    pagoOnline: pagamentoOnlineConfirmado(pedido, gatewayEmProducao),
   };
 }
 
 // Forma de pagamento nao diz se o dinheiro entrou: na Zero Grau, Pix e cartao sao
-// cobrados na maquininha, na entrega. Quem diz e o registro da transacao, que vive em
-// dois lugares no pedido: paymentStatus no topo e purchasePayment.paymentStatus.
-// So 'paid' conta como confirmado; 'paidAwaitingConfirmation' nao, porque ainda espera
-// o provedor.
-function pagamentoOnlineConfirmado(pedido = {}) {
-  const situacoes = [pedido.paymentStatus, pedido.purchasePayment?.paymentStatus]
-    .map((valor) => String(valor || '').trim().toLowerCase());
-  return situacoes.includes('paid');
+// cobrados na maquininha, na entrega. Quem diz e o registro da transacao.
+//
+// Todos os valores conferidos aqui sao TEXTO CRU DO PROVEDOR, nao do nosso dominio:
+//   mode              'online' quando a cobranca foi feita pelo app; cobranca na
+//                     maquininha nao tem esse valor.
+//   paymentStatus     estado devolvido pela Safrapay e gravado pelo app do cliente em
+//                     safrapay_payment_service.dart. 'paid' e o Pix confirmado;
+//                     'paidAwaitingConfirmation' e o cartao aprovado que ainda espera a
+//                     confirmacao do provedor; existe tambem no topo do pedido, em
+//                     pedidos de um esquema mais antigo, e as duas posicoes valem.
+//   responseCode      codigo de retorno da adquirente. '00' e aprovado.
+//   authorizationCode codigo de autorizacao do cartao. 'HMLTEST' e o ambiente de
+//                     homologacao da Safrapay: nunca conta como pagamento.
+const STATUS_PAGO = 'paid';
+const STATUS_CARTAO_APROVADO = 'paidawaitingconfirmation';
+const STATUS_NUNCA_PAGO = new Set(['canceled', 'pendingcancel', 'waitingforpayment']);
+const RESPOSTA_APROVADA = '00';
+const AUTORIZACAO_DE_HOMOLOGACAO = 'HMLTEST';
+
+function pagamentoOnlineConfirmado(pedido = {}, gatewayEmProducao = false) {
+  // Gateway fora de producao nao prova pagamento nenhum, mesmo com autorizacao real.
+  if (!gatewayEmProducao) return false;
+  const pagamento = pedido.purchasePayment || {};
+  if (String(pagamento.mode || '').trim().toLowerCase() !== 'online') return false;
+
+  const autorizacao = String(pagamento.authorizationCode || '').trim();
+  if (autorizacao.toUpperCase() === AUTORIZACAO_DE_HOMOLOGACAO) return false;
+
+  const situacao = String(pagamento.paymentStatus || pedido.paymentStatus || '')
+    .trim()
+    .toLowerCase();
+  if (STATUS_NUNCA_PAGO.has(situacao)) return false;
+  if (situacao === STATUS_PAGO) return true;
+
+  return situacao === STATUS_CARTAO_APROVADO
+    && String(pagamento.responseCode || '').trim() === RESPOSTA_APROVADA
+    && autorizacao !== '';
 }
 
 function enderecoEmUmaLinha(endereco) {
