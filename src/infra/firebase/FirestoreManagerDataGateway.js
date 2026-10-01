@@ -237,7 +237,9 @@ export class FirestoreManagerDataGateway {
   }
 
   async getScopedUsers(actor, target) {
-    const customerIds = await this.policy.getCustomerIds(actor);
+    // Cliente da loja mais participante de conversa com ela: a mesma regra do
+    // filterDocuments, para os dois caminhos de leitura responderem igual.
+    const customerIds = await this.policy.getReadableUserIds(actor);
     const allowedIds = new Set(customerIds);
     allowedIds.add(actor.userId);
 
