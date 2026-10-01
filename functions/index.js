@@ -27,6 +27,8 @@ const {
 const { recalcularCategorias } = require('./categoriasContagem');
 const { rodarResumoDeBuscas } = require('./buscasResumo');
 const { gerarEspelho, produtosDoEspelho } = require('./catalogoEspelho');
+const { registrarRotina } = require('./rotinasNoturnas');
+const { CAMPO: CAMPO_DE_PROVEDORES, rodarProvedoresDeLogin } = require('./provedoresDeLogin');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -36,6 +38,22 @@ const db = admin.firestore();
 const MAX_TOKENS_PER_REQUEST = 500;
 const IMAGE_CHECK_CONFIG_PATH = 'CoreJobs/verifyProductImageFiles';
 const IMAGE_CHECK_TIME_BUDGET_MS = 25 * 60 * 1000;
+
+// Registra a origem dos produtos de cada rotina em Stats/rotinasNoturnas. Falha aqui
+// nao derruba a rotina: a metrica dela ja esta gravada.
+async function registrarNoite(storeRef, rotina, { origem = null, dados = {} } = {}) {
+  try {
+    await registrarRotina({
+      storeRef,
+      rotina,
+      origem,
+      dados,
+      atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (error) {
+    console.error('[rotinasNoturnas] Nao registrou a origem', { rotina, establishmentId: storeRef.id, error });
+  }
+}
 
 exports.aggregateOrderHourlySales = onDocumentWritten(
   'PurchaseRequests/{orderId}',
@@ -329,6 +347,7 @@ exports.verifyProductImageFilesNightly = onSchedule(
           categorias: contagem.categorias,
           subcategorias: contagem.subcategorias,
         });
+        await registrarNoite(storeRef, 'verifyProductImageFilesNightly', { origem: espelho.origemDosProdutos });
       } catch (error) {
         if (error instanceof StorageListingError) throw error;
         console.error('[verifyProductImageFilesNightly] Falha na loja', { establishmentId, error });
@@ -403,6 +422,7 @@ exports.summarizeAgentConversationsNightly = onSchedule(
           termos: summary.termos.length,
           pedidos: summary.pedidos,
         });
+        await registrarNoite(snapshot.ref, 'summarizeAgentConversationsNightly', { origem: espelho.origemDosProdutos });
       } catch (error) {
         console.error('[summarizeAgentConversationsNightly] Falha na loja', { establishmentId, error });
         report.push({ establishmentId, status: 'falhou' });
@@ -455,8 +475,21 @@ exports.summarizeProductSearchesNightly = onSchedule(
           documentIdPath: admin.firestore.FieldPath.documentId(),
           atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
           mirroredProducts: espelho.produtos,
+          // Pedidos do dia da loja, para o cruzamento de conversao.
+          carregarPedidos: ({ inicio, fim }) => db
+            .collection('PurchaseRequests')
+            .where('companyReference', '==', snapshot.ref)
+            .where('createdAt', '>=', inicio)
+            .where('createdAt', '<', fim)
+            .get()
+            .then((pedidos) => pedidos.docs.map((pedido) => pedido.data())),
+          testAccountIdsFor: (pedidos) => testAccountIdsFor(db, pedidos),
         });
         report.push({ establishmentId, origemDoEspelho: espelho.origemDosProdutos, ...resultado });
+        await registrarNoite(snapshot.ref, 'summarizeProductSearchesNightly', {
+          origem: espelho.origemDosProdutos,
+          dados: { dia: resultado.dia, buscas: resultado.buscas, catalogoLido: resultado.catalogoLido },
+        });
       } catch (error) {
         console.error('[summarizeProductSearchesNightly] Falha na loja', { establishmentId, error });
         report.push({ establishmentId, status: 'falhou' });
@@ -510,6 +543,9 @@ exports.mirrorProductCatalogNightly = onSchedule(
           geradoEm: admin.firestore.FieldValue.serverTimestamp(),
         });
         report.push({ establishmentId, ...resultado });
+        await registrarNoite(snapshot.ref, 'mirrorProductCatalogNightly', {
+          dados: { produtos: resultado.total, blocos: resultado.blocos },
+        });
       } catch (error) {
         console.error('[mirrorProductCatalogNightly] Falha na loja', { establishmentId, error });
         report.push({ establishmentId, status: 'falhou' });
@@ -518,6 +554,43 @@ exports.mirrorProductCatalogNightly = onSchedule(
 
     const result = { lojas: report, segundos: Math.round((Date.now() - startedAt) / 1000) };
     console.log('[mirrorProductCatalogNightly] Passada concluida', result);
+    return result;
+  },
+);
+
+// Provedor de login de cada conta, copiado do Authentication para Users. Roda a 1h, antes
+// do espelho das 2h e das tres rotinas das 3h, numa faixa vazia: nao depende de nenhuma e
+// nenhuma depende dela. Relatorio unico, por projeto: Users e colecao da raiz e o
+// Authentication e do projeto inteiro, sem recorte por loja.
+exports.syncLoginProvidersNightly = onSchedule(
+  {
+    schedule: '0 1 * * *',
+    timeZone: 'America/Sao_Paulo',
+    region: 'us-central1',
+    memory: '512MiB',
+    timeoutSeconds: 1800,
+    retryCount: 0,
+  },
+  async () => {
+    const startedAt = Date.now();
+    const resumo = await rodarProvedoresDeLogin({
+      listarContas: async ({ pageToken, maximo }) => {
+        const pagina = await admin.auth().listUsers(maximo, pageToken);
+        return { contas: pagina.users, pageToken: pagina.pageToken };
+      },
+      // Uma leitura por documento de Users, uma vez por passada.
+      lerUsuarios: async () => {
+        const snapshot = await db.collection('Users').select('userAuthId', CAMPO_DE_PROVEDORES).get();
+        return snapshot.docs;
+      },
+      gravar: ({ id, provedores }) => db
+        .collection('Users')
+        .doc(id)
+        .set({ [CAMPO_DE_PROVEDORES]: provedores }, { merge: true }),
+    });
+
+    const result = { ...resumo, segundos: Math.round((Date.now() - startedAt) / 1000) };
+    console.log('[syncLoginProvidersNightly] Passada concluida', result);
     return result;
   },
 );

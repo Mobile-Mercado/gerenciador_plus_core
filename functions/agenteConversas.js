@@ -457,6 +457,7 @@ async function writeAgentConversationsSummary({ storeRef, summary, generatedAt }
 module.exports = {
   MAX_FAMILIES,
   MAX_TERMS,
+  PROBABLE_ORDER_WINDOW_MS,
   MAX_UNGROUPED,
   SUMMARY_VERSION,
   catalogDictionary,
