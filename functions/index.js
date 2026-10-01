@@ -486,6 +486,7 @@ exports.summarizeProductSearchesNightly = onSchedule(
           atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
           mirroredProducts: espelho.produtos,
           indiceDeUsuarios: indiceDeUsers,
+          marcaDaLoja: snapshot.get('whitelabelId') || null,
           // Pedidos do dia da loja, para o cruzamento de conversao.
           carregarPedidos: ({ inicio, fim }) => db
             .collection('PurchaseRequests')
@@ -651,6 +652,7 @@ exports.listStoreCustomersNightly = onSchedule(
           storeRef: snapshot.ref,
           geradoEm: admin.firestore.FieldValue.serverTimestamp(),
           indiceDeUsuarios: indiceDeUsers,
+          marcaDaLoja: snapshot.get('whitelabelId') || null,
         });
         report.push({ establishmentId, ...resultado });
         await registrarNoite(snapshot.ref, 'listStoreCustomersNightly', {

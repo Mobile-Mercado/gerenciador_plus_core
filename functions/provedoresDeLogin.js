@@ -30,15 +30,23 @@ function indiceDeUsuarios(documentos = []) {
   // Uid com mais de um documento apontando para ele: quem usa o indice decide o que
   // fazer. O resumo de buscas, por exemplo, grava nulo em vez de escolher no escuro.
   const quantos = new Map();
+  // Todas as copias de cada uid, para o desempate por marca em documentoDe.
+  const copias = new Map();
   documentos.forEach((documento) => {
     const atual = documento?.get ? documento.get(CAMPO) : undefined;
-    const entrada = { id: documento.id, atual: Array.isArray(atual) ? atual : null };
+    const entrada = {
+      id: documento.id,
+      atual: Array.isArray(atual) ? atual : null,
+      whitelabelId: documento?.get ? (documento.get('whitelabelId') || null) : null,
+    };
     porDocumento.set(documento.id, entrada);
     const authId = documento?.get ? documento.get('userAuthId') : null;
     if (authId) {
       const chave = String(authId);
       porAuthId.set(chave, entrada);
       quantos.set(chave, (quantos.get(chave) || 0) + 1);
+      if (!copias.has(chave)) copias.set(chave, []);
+      copias.get(chave).push(entrada);
     }
   });
   const duplicados = new Set([...quantos.entries()].filter(([, n]) => n > 1).map(([uid]) => uid));
@@ -52,10 +60,31 @@ function indiceDeUsuarios(documentos = []) {
     procurar(uid) {
       return porAuthId.get(uid) || porDocumento.get(uid) || null;
     },
-    // Id do documento em Users, ou nulo: sem documento, ou com mais de um.
-    documentoDe(uid) {
-      if (!uid || this.ambiguo(uid)) return null;
-      return this.procurar(uid)?.id || null;
+    copiasDe(uid) {
+      return copias.get(String(uid)) || [];
+    },
+    // Id do documento em Users, ou nulo. A marca da loja e critério de DESEMPATE, nao
+    // requisito:
+    //   1. uma unica copia com o whitelabelId da loja: e ela;
+    //   2. nenhuma copia com a marca da loja, ou loja sem o campo: comportamento antigo,
+    //      uma copia so resolve e mais de uma vira nulo;
+    //   3. mais de uma copia com a marca da loja: ambiguidade de verdade, nulo;
+    //   4. copia sem whitelabelId nunca casa no passo 1, mas segue elegivel no passo 2.
+    // Assim nada piora: onde a marca resolve, melhora; onde nao ha marca, fica como esta.
+    documentoDe(uid, marcaDaLoja = null) {
+      if (!uid) return null;
+      const doDocumento = porDocumento.get(String(uid));
+      if (doDocumento && !copias.has(String(uid))) return doDocumento.id;
+
+      const todas = this.copiasDe(uid);
+      if (marcaDaLoja) {
+        const daMarca = todas.filter((copia) => copia.whitelabelId === marcaDaLoja);
+        if (daMarca.length === 1) return daMarca[0].id;
+        if (daMarca.length > 1) return null;
+      }
+      if (todas.length === 1) return todas[0].id;
+      if (todas.length > 1) return null;
+      return doDocumento?.id || null;
     },
   };
 }

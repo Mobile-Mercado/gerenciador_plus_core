@@ -97,7 +97,7 @@ async function participantesDeConversa({ db, storeRef }) {
 // Traducao para id de documento em Users, nesta ordem: id que ja e documento entra como
 // esta; uid que casa com um documento entra traduzido; uid com dois documentos nao entra e
 // nao escolhe nada; id que nao existe em lugar nenhum nao entra.
-function traduzirParaDocumentos(ids, indiceDeUsuarios) {
+function traduzirParaDocumentos(ids, indiceDeUsuarios, marcaDaLoja = null) {
   const documentos = new Set();
   const contagem = { direto: 0, traduzidos: 0, ambiguos: 0, inexistentes: 0 };
   ids.forEach((id) => {
@@ -112,14 +112,15 @@ function traduzirParaDocumentos(ids, indiceDeUsuarios) {
       contagem.direto += 1;
       return;
     }
-    if (indiceDeUsuarios.ambiguo?.(id)) {
-      contagem.ambiguos += 1;
+    // A marca da loja desempata entre copias do mesmo uid; nulo so quando sobra duvida.
+    const documento = indiceDeUsuarios.documentoDe?.(id, marcaDaLoja);
+    if (documento) {
+      documentos.add(documento);
+      contagem.traduzidos += 1;
       return;
     }
-    const encontrado = indiceDeUsuarios.procurar?.(id);
-    if (encontrado?.id) {
-      documentos.add(encontrado.id);
-      contagem.traduzidos += 1;
+    if (indiceDeUsuarios.copiasDe?.(id).length) {
+      contagem.ambiguos += 1;
       return;
     }
     contagem.inexistentes += 1;
@@ -145,14 +146,21 @@ async function clientesDosPedidos({ db, storeRef }) {
 // Blocos primeiro, indice por ultimo: passada morta no meio deixa o indice antigo, que
 // aponta para blocos que existem.
 async function gerarListaDeClientes({
-  db, storeRef, geradoEm, tamanhoDoBloco = TAMANHO_DO_BLOCO, indiceDeUsuarios = null,
+  db,
+  storeRef,
+  geradoEm,
+  tamanhoDoBloco = TAMANHO_DO_BLOCO,
+  indiceDeUsuarios = null,
+  // whitelabelId da loja: desempata entre copias do mesmo uid. Loja sem o campo cai no
+  // comportamento antigo, sem piorar nada.
+  marcaDaLoja = null,
 }) {
   const { ids: dosPedidos, pedidosLidos } = await clientesDosPedidos({ db, storeRef });
   const { deChats, doAgente, lidos: conversasLidas } = await participantesDeConversa({ db, storeRef });
 
-  const pedidos = traduzirParaDocumentos(dosPedidos, indiceDeUsuarios);
-  const chats = traduzirParaDocumentos(deChats, indiceDeUsuarios);
-  const agente = traduzirParaDocumentos(doAgente, indiceDeUsuarios);
+  const pedidos = traduzirParaDocumentos(dosPedidos, indiceDeUsuarios, marcaDaLoja);
+  const chats = traduzirParaDocumentos(deChats, indiceDeUsuarios, marcaDaLoja);
+  const agente = traduzirParaDocumentos(doAgente, indiceDeUsuarios, marcaDaLoja);
 
   const anterior = await lerListaDeClientes({ storeRef });
   const anteriores = anterior.ids || [];
