@@ -469,7 +469,7 @@ exports.summarizeProductSearchesNightly = onSchedule(
 
     // Indice de Users montado uma vez por passada e reaproveitado nas quatro lojas:
     // Users e colecao da raiz, nao da loja.
-    const usuarios = await db.collection('Users').select('userAuthId').get();
+    const usuarios = await db.collection('Users').select('userAuthId', 'whitelabelId').get();
     const indiceDeUsers = indiceDeUsuarios(usuarios.docs);
 
     for (const snapshot of storeSnapshots.filter((store) => store.exists)) {
@@ -637,7 +637,7 @@ exports.listStoreCustomersNightly = onSchedule(
 
     // Traducao de uid para id de documento: indice montado uma vez e reaproveitado nas
     // quatro lojas. Users e colecao da raiz.
-    const usuarios = await db.collection('Users').select('userAuthId').get();
+    const usuarios = await db.collection('Users').select('userAuthId', 'whitelabelId').get();
     const indiceDeUsers = indiceDeUsuarios(usuarios.docs);
 
     for (const snapshot of storeSnapshots.filter((store) => store.exists)) {
