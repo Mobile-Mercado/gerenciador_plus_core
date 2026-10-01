@@ -31,8 +31,12 @@ function busca(extra = {}) {
 
 // Firestore de mentira: SearchLogs, o resumo de topo e a subcolecao dias, anotando a
 // ordem das operacoes para o teste da limpeza.
-function firestoreFalso({ logs = [], resumo = null, falharNaExclusao = false } = {}) {
-  const registro = { ordem: [], gravados: {}, dias: {}, excluidos: [], diasExcluidos: [] };
+function firestoreFalso({
+  logs = [], resumo = null, falharNaExclusao = false, catalogo = [],
+} = {}) {
+  const registro = {
+    ordem: [], gravados: {}, dias: {}, excluidos: [], diasExcluidos: [], leiturasDoCatalogo: 0,
+  };
   const documentos = logs.map((dados, indice) => ({
     id: `log-${indice}`,
     data: () => dados,
@@ -62,6 +66,18 @@ function firestoreFalso({ logs = [], resumo = null, falharNaExclusao = false } =
     },
   });
 
+  // Catalogo de mentira: conta quantas vezes foi lido, para o teste do dia sem termo
+  // sem resultado provar que nao houve leitura.
+  const consultaProdutos = () => ({
+    where: () => consultaProdutos(),
+    select: () => consultaProdutos(),
+    async get() {
+      registro.ordem.push('leuCatalogo');
+      registro.leiturasDoCatalogo += 1;
+      return { docs: catalogo.map((name) => ({ get: () => name })), size: catalogo.length, empty: !catalogo.length };
+    },
+  });
+
   const docDia = (dia) => ({
     async set(dados) { registro.ordem.push(`gravouDia:${dia}`); registro.dias[dia] = dados; },
     async delete() { registro.diasExcluidos.push(dia); delete registro.dias[dia]; },
@@ -81,6 +97,7 @@ function firestoreFalso({ logs = [], resumo = null, falharNaExclusao = false } =
       collection: (nome) => {
         if (nome === 'SearchLogs') return consultaLogs();
         if (nome === 'Stats') return { doc: () => docResumo };
+        if (nome === 'Products') return consultaProdutos();
         throw new Error(`colecao inesperada: ${nome}`);
       },
     },
@@ -247,6 +264,89 @@ test('dia que ja perdeu o documento nao e apagado de novo toda noite', async () 
 
   assert.deepEqual(registro.diasExcluidos, []);
   assert.equal(registro.gravados.resumo.dias.length, 2);
+});
+
+test('termo sem resultado com produto no catalogo: defeito de busca', async () => {
+  const { storeRef, registro } = firestoreFalso({
+    logs: [busca({ termo: 'BATATINHA', resultados: 0 })],
+    catalogo: ['Batatinha Frita Elma Chips 100g', 'Arroz Branco 5kg'],
+  });
+
+  const resultado = await rodarResumoDeBuscas({ storeRef, agora: AGORA, atualizadoEm: 'quando' });
+
+  const termo = registro.dias[DIA].termos[0];
+  assert.equal(termo.termo, 'BATATINHA');
+  assert.equal(termo.semResultado, 1);
+  assert.equal(termo.existeNoCatalogo, true);
+  assert.equal(resultado.catalogoLido, 2);
+});
+
+test('termo sem resultado sem produto no catalogo: decisao de compra', async () => {
+  const { storeRef, registro } = firestoreFalso({
+    logs: [busca({ termo: 'QUIBOA', resultados: 0 })],
+    catalogo: ['Agua Sanitaria Ype 1L', 'Arroz Branco 5kg'],
+  });
+
+  await rodarResumoDeBuscas({ storeRef, agora: AGORA, atualizadoEm: 'quando' });
+
+  assert.equal(registro.dias[DIA].termos[0].existeNoCatalogo, false);
+});
+
+test('a marca ignora acento e caixa, nos dois lados', async () => {
+  const { storeRef, registro } = firestoreFalso({
+    logs: [busca({ termo: 'agua de coco', resultados: 0 }), busca({ termo: 'PAO', resultados: 0 })],
+    catalogo: ['Água de Côco Natural 300ml', 'Pãozinho Frances kg'],
+  });
+
+  await rodarResumoDeBuscas({ storeRef, agora: AGORA, atualizadoEm: 'quando' });
+
+  const marca = (termo) => registro.dias[DIA].termos.find((t) => t.termo === termo).existeNoCatalogo;
+  assert.equal(marca('agua de coco'), true);
+  assert.equal(marca('PAO'), true);
+});
+
+test('dia sem nenhum termo sem resultado nao le o catalogo', async () => {
+  const { storeRef, registro } = firestoreFalso({
+    logs: [busca({ resultados: 12 }), busca({ termo: 'ARROZ', resultados: 30 })],
+    catalogo: ['Arroz Branco 5kg'],
+  });
+
+  const resultado = await rodarResumoDeBuscas({ storeRef, agora: AGORA, atualizadoEm: 'quando' });
+
+  assert.equal(registro.leiturasDoCatalogo, 0);
+  assert.equal(resultado.catalogoLido, 0);
+  assert.ok(!registro.ordem.includes('leuCatalogo'));
+});
+
+test('termo com resultado nao recebe marca nenhuma', async () => {
+  const { storeRef, registro } = firestoreFalso({
+    logs: [busca({ termo: 'ARROZ', resultados: 30 }), busca({ termo: 'QUIBOA', resultados: 0 })],
+    catalogo: ['Arroz Branco 5kg'],
+  });
+
+  await rodarResumoDeBuscas({ storeRef, agora: AGORA, atualizadoEm: 'quando' });
+
+  const arroz = registro.dias[DIA].termos.find((t) => t.termo === 'ARROZ');
+  const quiboa = registro.dias[DIA].termos.find((t) => t.termo === 'QUIBOA');
+  assert.equal('existeNoCatalogo' in arroz, false);
+  assert.equal(quiboa.existeNoCatalogo, false);
+});
+
+test('o catalogo e lido uma vez por loja, mesmo com varios termos sem resultado', async () => {
+  const { storeRef, registro } = firestoreFalso({
+    logs: [
+      busca({ termo: 'QUIBOA', resultados: 0 }),
+      busca({ termo: 'BATATINHA', resultados: 0 }),
+      busca({ termo: 'CERVEJA', resultados: 0 }),
+    ],
+    catalogo: ['Batatinha Frita 100g'],
+  });
+
+  await rodarResumoDeBuscas({ storeRef, agora: AGORA, atualizadoEm: 'quando' });
+
+  assert.equal(registro.leiturasDoCatalogo, 1);
+  const marca = (termo) => registro.dias[DIA].termos.find((t) => t.termo === termo).existeNoCatalogo;
+  assert.deepEqual([marca('QUIBOA'), marca('BATATINHA'), marca('CERVEJA')], [false, true, false]);
 });
 
 test('documento antigo e apagado, e so depois de o resumo estar gravado', async () => {
