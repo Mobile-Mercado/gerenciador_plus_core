@@ -38,8 +38,18 @@ const ORDER_UPDATE_FIELDS = new Set([
   // Codigo do link do entregador: o painel grava junto com o deliveryPerson, na mesma
   // escrita da atribuicao, e e a chave que a rota /api/entrega confere.
   'deliveryCode',
+  // Conferencia de entrega: o painel pergunta ao lojista se o pedido vencido foi entregue
+  // e guarda quando perguntar de novo.
+  'conferenciaEntrega',
   'isTest',
   'isTestAccount',
+]);
+// Chaves aceitas dentro do mapa conferenciaEntrega. Qualquer outra e recusada.
+const CONFERENCIA_FIELDS = new Set([
+  'proximaEm',
+  'ultimaResposta',
+  'ultimaEm',
+  'ultimaPor',
 ]);
 const USER_UPDATE_FIELDS = new Set(['segmento', 'isTestAccount']);
 const BOOLEAN_MUTATION_FIELDS = new Set(['isTest', 'isTestAccount']);
@@ -174,6 +184,7 @@ export class ManagerDataAccessPolicy {
       await this.assertOrderDocument(actor, path);
       assertOnlyFields(mutation.data, ORDER_UPDATE_FIELDS, 'data_order_fields_forbidden');
       assertBooleanFields(mutation.data, 'data_order_fields_forbidden');
+      assertConferenciaEntrega(mutation.data);
       return;
     }
 
@@ -599,6 +610,29 @@ function assertOnlyFields(data, allowed, code) {
   const fields = Object.keys(data || {});
   if (!fields.length || fields.some((field) => !allowed.has(field))) {
     throw forbidden('A alteracao contem campos nao permitidos.', code);
+  }
+}
+
+// Dentro de conferenciaEntrega so entram as quatro chaves da conferencia: proximaEm,
+// ultimaResposta, ultimaEm e ultimaPor. O mapa inteiro e recusado se trouxer outra.
+//
+// A conferencia tambem vai sozinha na escrita: ela e anotacao do painel sobre uma pergunta
+// feita ao lojista, e misturar status na mesma gravacao esconderia mudanca de status dentro
+// de uma anotacao. Status e statusList continuam valendo normalmente quando vao sem ela.
+function assertConferenciaEntrega(data) {
+  const conferencia = data?.conferenciaEntrega;
+  if (conferencia === undefined) return;
+  const outros = Object.keys(data || {}).filter((campo) => campo !== 'conferenciaEntrega');
+  if (outros.length) {
+    throw forbidden('A alteracao contem campos nao permitidos.', 'data_order_fields_forbidden');
+  }
+  const ehMapa = conferencia !== null
+    && typeof conferencia === 'object'
+    && !Array.isArray(conferencia);
+  const invalida = !ehMapa
+    || Object.keys(conferencia).some((campo) => !CONFERENCIA_FIELDS.has(campo));
+  if (invalida) {
+    throw forbidden('A alteracao contem campos nao permitidos.', 'data_order_fields_forbidden');
   }
 }
 
