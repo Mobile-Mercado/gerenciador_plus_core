@@ -37,6 +37,8 @@ const SAFE_USER_FIELDS = new Set([
   'image',
   'segmento',
   'isTestAccount',
+  // Como a pessoa entrou na conta, gravado pela syncLoginProvidersNightly. Leitura so.
+  'provedoresDeLogin',
   'createAt',
   'createdAt',
   'birthDate',

@@ -9,6 +9,11 @@
 // prefixo, por semelhanca nem escolha do termo mais longo: interpretar o que o cliente
 // quis dizer e assunto de outra camada, depois desta.
 
+// A janela de conversao e a mesma que a rotina do agente usa para ligar conversa a
+// pedido: a constante vem de la, nao e criada de novo aqui.
+const { PROBABLE_ORDER_WINDOW_MS } = require('./agenteConversas');
+const { isTestOrder, orderClientId } = require('./hourlySalesAggregation');
+
 const RESUMO_VERSION = 1;
 const RESUMO_DOCUMENT = 'buscasResumo';
 const DIAS_SUBCOLECAO = 'dias';
@@ -83,11 +88,40 @@ function paraData(valor) {
 
 const maisVezes = (a, b) => b.vezes - a.vezes || a.termo.localeCompare(b.termo);
 
+// Pedido que conta na conversao: do mesmo cliente, criado depois da busca e dentro da
+// janela de 2 horas. Pedido de teste fica fora, pela mesma regua do resto do Core.
+function momentosDePedidoPorCliente(pedidos = [], testAccountIds = new Set()) {
+  const porCliente = new Map();
+  pedidos.forEach((pedido) => {
+    const clienteId = orderClientId(pedido);
+    if (!clienteId) return;
+    if (isTestOrder(pedido, { testAccount: testAccountIds.has(clienteId) })) return;
+    const criado = paraData(pedido?.createdAt);
+    if (!criado) return;
+    if (!porCliente.has(clienteId)) porCliente.set(clienteId, []);
+    porCliente.get(clienteId).push(criado.getTime());
+  });
+  return porCliente;
+}
+
+function virouPedido(momentos = [], quando) {
+  if (!quando) return false;
+  const buscaEm = quando.getTime();
+  return momentos.some((criado) => criado >= buscaEm && criado - buscaEm <= PROBABLE_ORDER_WINDOW_MS);
+}
+
 // buscas: documentos do dia, como objetos simples. Nenhum texto alem do termo sai daqui.
-function resumirBuscas({ buscas = [], dia }) {
+// pedidos: os do dia, para o cruzamento de conversao.
+function resumirBuscas({
+  buscas = [], dia, pedidos = [], testAccountIds = new Set(),
+}) {
+  const pedidosPorCliente = momentosDePedidoPorCliente(pedidos, testAccountIds);
   const termos = new Map();
   const clientes = new Map();
   let semResultado = 0;
+  let convertidas = 0;
+  let semPedido = 0;
+  let semCliente = 0;
 
   buscas.forEach((busca) => {
     const termo = String(busca?.termo ?? '');
@@ -104,11 +138,26 @@ function resumirBuscas({ buscas = [], dia }) {
     if (vazio) registro.semResultado += 1;
     if (quando && (!registro.ultima || quando > registro.ultima)) registro.ultima = quando;
 
+    // Busca sem clienteId nao entra em nenhum dos dois lados da conversao: nao da para
+    // saber de quem e. Fica na contagem a parte, para a tela dizer quantas ficaram fora.
     const clienteId = String(busca?.clienteId || '');
-    if (!clienteId) return;
-    if (!clientes.has(clienteId)) clientes.set(clienteId, { clienteId, buscas: 0, termos: new Map() });
+    if (!clienteId) {
+      semCliente += 1;
+      return;
+    }
+
+    const convertida = virouPedido(pedidosPorCliente.get(clienteId), quando);
+    if (convertida) convertidas += 1;
+    else semPedido += 1;
+
+    if (!clientes.has(clienteId)) {
+      clientes.set(clienteId, {
+        clienteId, buscas: 0, convertidas: 0, termos: new Map(),
+      });
+    }
     const cliente = clientes.get(clienteId);
     cliente.buscas += 1;
+    if (convertida) cliente.convertidas += 1;
     if (!cliente.termos.has(termo)) {
       cliente.termos.set(termo, { termo, vezes: 0, primeira: quando, ultima: quando });
     }
@@ -125,6 +174,9 @@ function resumirBuscas({ buscas = [], dia }) {
     dia,
     buscas: buscas.length,
     semResultado,
+    convertidas,
+    semPedido,
+    semCliente,
     termosDistintos: termos.size,
     clientes: clientes.size,
     termos: [...termos.values()].sort(maisVezes),
@@ -132,6 +184,7 @@ function resumirBuscas({ buscas = [], dia }) {
       .map((cliente) => ({
         clienteId: cliente.clienteId,
         buscas: cliente.buscas,
+        convertidas: cliente.convertidas,
         termos: [...cliente.termos.values()].sort(maisVezes),
       }))
       .sort((a, b) => b.buscas - a.buscas || a.clienteId.localeCompare(b.clienteId)),
@@ -323,11 +376,34 @@ async function rodarResumoDeBuscas({
   diasComDocumento = DIAS_COM_DOCUMENTO,
   documentIdPath = null,
   mirroredProducts = null,
+  // Injetados pelo index.js: PurchaseRequests e colecao da raiz, nao da loja.
+  carregarPedidos = null,
+  testAccountIdsFor = null,
   limpar = true,
 }) {
   const dia = diaAnterior(agora);
   const buscas = await carregarBuscasDoDia({ storeRef, dia });
-  const resumo = resumirBuscas({ buscas, dia });
+
+  // Pedidos lidos so quando ha busca com cliente: sem cliente nao ha conversao a apurar.
+  // A janela vai do comeco do dia ate 2 horas depois do fim dele, porque busca das 23h50
+  // converte com pedido da meia-noite e meia.
+  let pedidos = [];
+  let testAccountIds = new Set();
+  let pedidosLidos = 0;
+  const temCliente = buscas.some((busca) => busca?.clienteId);
+  if (temCliente && carregarPedidos) {
+    const { inicio, fim } = limitesDoDia(dia);
+    pedidos = await carregarPedidos({
+      inicio,
+      fim: new Date(fim.getTime() + PROBABLE_ORDER_WINDOW_MS),
+    }) || [];
+    pedidosLidos = pedidos.length;
+    if (testAccountIdsFor) testAccountIds = await testAccountIdsFor(pedidos);
+  }
+
+  const resumo = resumirBuscas({
+    buscas, dia, pedidos, testAccountIds,
+  });
 
   // Catalogo lido uma vez por loja, e so se houver termo sem resultado para marcar.
   let catalogoLido = 0;
@@ -360,9 +436,13 @@ async function rodarResumoDeBuscas({
     dia,
     buscas: resumo.buscas,
     semResultado: resumo.semResultado,
+    convertidas: resumo.convertidas,
+    semPedido: resumo.semPedido,
+    semCliente: resumo.semCliente,
     termosDistintos: resumo.termosDistintos,
     clientes: resumo.clientes,
     catalogoLido,
+    pedidosLidos,
     origemDosProdutos,
     ...gravado,
     removidos,
@@ -386,8 +466,10 @@ module.exports = {
   limitesDoDia,
   limparBuscasAntigas,
   marcarTermosSemResultado,
+  momentosDePedidoPorCliente,
   resumirBuscas,
   termosSemResultado,
+  virouPedido,
   resumoReference,
   rodarResumoDeBuscas,
 };

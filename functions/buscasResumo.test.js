@@ -174,6 +174,130 @@ test('busca sem resultado conta no total da loja e no termo', () => {
   assert.equal(resumo.termos.find((t) => t.termo === 'ARROZ').semResultado, 0);
 });
 
+// Cruzamento de busca com pedido: janela de 2 horas, a mesma da rotina do agente.
+function pedido(extra = {}) {
+  return {
+    clientId: 'cliente-1',
+    currentPurchaseStatus: 'PurchaseStatus.completed',
+    createdAt: em(10, 30),
+    ...extra,
+  };
+}
+
+test('busca com pedido do mesmo cliente dentro de 2 horas conta como convertida', () => {
+  const resumo = resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ em: em(10) })],
+    pedidos: [pedido({ createdAt: em(11, 59) })],
+  });
+
+  assert.equal(resumo.convertidas, 1);
+  assert.equal(resumo.semPedido, 0);
+  assert.equal(resumo.semCliente, 0);
+  assert.equal(resumo.porCliente[0].convertidas, 1);
+  assert.equal(resumo.porCliente[0].buscas, 1);
+});
+
+test('pedido 3 horas depois nao conta, e pedido antes da busca tambem nao', () => {
+  const tarde = resumirBuscas({ dia: DIA, buscas: [busca({ em: em(10) })], pedidos: [pedido({ createdAt: em(13) })] });
+  const antes = resumirBuscas({ dia: DIA, buscas: [busca({ em: em(10) })], pedidos: [pedido({ createdAt: em(9) })] });
+
+  assert.equal(tarde.convertidas, 0);
+  assert.equal(tarde.semPedido, 1);
+  assert.equal(antes.convertidas, 0);
+  assert.equal(antes.semPedido, 1);
+});
+
+test('pedido de outro cliente nao conta', () => {
+  const resumo = resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ clienteId: 'cliente-1', em: em(10) })],
+    pedidos: [pedido({ clientId: 'cliente-2', createdAt: em(10, 30) })],
+  });
+
+  assert.equal(resumo.convertidas, 0);
+  assert.equal(resumo.semPedido, 1);
+  assert.equal(resumo.porCliente[0].convertidas, 0);
+});
+
+test('busca sem cliente fica fora dos dois lados e aparece na contagem a parte', () => {
+  const resumo = resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ clienteId: null, em: em(10) }), busca({ em: em(10) })],
+    pedidos: [pedido({ createdAt: em(10, 30) })],
+  });
+
+  assert.equal(resumo.buscas, 2);
+  assert.equal(resumo.semCliente, 1);
+  assert.equal(resumo.convertidas, 1);
+  assert.equal(resumo.semPedido, 0);
+  assert.equal(resumo.convertidas + resumo.semPedido + resumo.semCliente, resumo.buscas);
+});
+
+test('pedido de teste nao conta, pelas tres marcas que o Core usa', () => {
+  const comMarca = (extra) => resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ em: em(10) })],
+    pedidos: [pedido({ createdAt: em(10, 30), ...extra })],
+    testAccountIds: extra.viaCliente ? new Set(['cliente-1']) : new Set(),
+  });
+
+  assert.equal(comMarca({ isTest: true }).convertidas, 0, 'isTest no pedido');
+  assert.equal(comMarca({ isTestAccount: true }).convertidas, 0, 'espelho isTestAccount no pedido');
+  assert.equal(comMarca({ viaCliente: true }).convertidas, 0, 'conta de teste cruzada pelo cliente');
+  assert.equal(comMarca({}).convertidas, 1, 'pedido normal conta');
+});
+
+test('dia sem busca nenhuma nao le pedido nenhum', async () => {
+  const { storeRef } = firestoreFalso({ logs: [] });
+  let chamadas = 0;
+
+  const resultado = await rodarResumoDeBuscas({
+    storeRef,
+    agora: AGORA,
+    atualizadoEm: 'quando',
+    carregarPedidos: async () => { chamadas += 1; return [pedido()]; },
+  });
+
+  assert.equal(chamadas, 0);
+  assert.equal(resultado.pedidosLidos, 0);
+  assert.equal(resultado.convertidas, 0);
+});
+
+test('busca sem cliente tambem nao faz ler pedido', async () => {
+  const { storeRef } = firestoreFalso({ logs: [busca({ clienteId: null })] });
+  let chamadas = 0;
+
+  const resultado = await rodarResumoDeBuscas({
+    storeRef,
+    agora: AGORA,
+    atualizadoEm: 'quando',
+    carregarPedidos: async () => { chamadas += 1; return []; },
+  });
+
+  assert.equal(chamadas, 0);
+  assert.equal(resultado.semCliente, 1);
+});
+
+test('a janela de pedidos vai ate 2 horas depois do fim do dia', async () => {
+  const { storeRef, registro } = firestoreFalso({ logs: [busca({ em: em(23, 50) })] });
+  let janela = null;
+
+  await rodarResumoDeBuscas({
+    storeRef,
+    agora: AGORA,
+    atualizadoEm: 'quando',
+    carregarPedidos: async (intervalo) => {
+      janela = intervalo;
+      return [pedido({ createdAt: { toDate: () => new Date(Date.UTC(2026, 9, 1, 3, 30, 0)) } })];
+    },
+  });
+
+  assert.equal(janela.inicio.toISOString(), '2026-09-30T03:00:00.000Z');
+  assert.equal(janela.fim.toISOString(), '2026-10-01T05:00:00.000Z');
+  assert.equal(registro.dias[DIA].convertidas, 1, 'busca das 23h50 converte com pedido da meia-noite e meia');
+});
+
 test('dia sem nenhuma busca grava resumo zerado, sem termos', async () => {
   const { storeRef, registro } = firestoreFalso({ logs: [] });
 
@@ -387,6 +511,6 @@ test('o resumo nao guarda nada alem de termo, contagem, datas e id de cliente', 
   assert.ok(!gravado.includes('app'), 'origem fica fora');
   assert.deepEqual(
     Object.keys(registro.dias[DIA]).sort(),
-    ['atualizadoEm', 'buscas', 'clientes', 'dia', 'porCliente', 'semResultado', 'termos', 'termosDistintos', 'version'],
+    ['atualizadoEm', 'buscas', 'clientes', 'convertidas', 'dia', 'porCliente', 'semCliente', 'semPedido', 'semResultado', 'termos', 'termosDistintos', 'version'],
   );
 });
