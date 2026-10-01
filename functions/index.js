@@ -26,6 +26,7 @@ const {
 } = require('./agenteConversas');
 const { recalcularCategorias } = require('./categoriasContagem');
 const { rodarResumoDeBuscas } = require('./buscasResumo');
+const { gerarEspelho, produtosDoEspelho } = require('./catalogoEspelho');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -294,12 +295,14 @@ exports.verifyProductImageFilesNightly = onSchedule(
       }
       const storeRef = db.collection('estabelecimentos').doc(establishmentId);
       try {
+        const espelho = await produtosDoEspelho({ storeRef });
         const summary = await runEstablishmentPass({
           storeRef,
           documentIdPath: admin.firestore.FieldPath.documentId(),
           index,
           checker,
           sampleSize,
+          mirroredProducts: espelho.produtos,
           loadOrders: () => loadStoreOrders(storeRef),
           loadTestAccountIds: (orders) => testAccountIdsFor(db, orders),
         });
@@ -315,6 +318,7 @@ exports.verifyProductImageFilesNightly = onSchedule(
         });
         report.push({
           establishmentId,
+          origemDosProdutos: espelho.origemDosProdutos,
           produtosAVenda: summary.produtosAVenda,
           vendas30: summary.vendas30,
           semFoto: summary.semFoto,
@@ -377,11 +381,13 @@ exports.summarizeAgentConversationsNightly = onSchedule(
         continue;
       }
       try {
+        const espelho = await produtosDoEspelho({ storeRef: snapshot.ref });
         const data = await loadAgentConversationData({
           db,
           storeRef: snapshot.ref,
           documentIdPath: admin.firestore.FieldPath.documentId(),
           testAccountIdsFor,
+          mirroredProducts: espelho.produtos,
         });
         const summary = summarizeConversations(data);
         await writeAgentConversationsSummary({
@@ -391,6 +397,7 @@ exports.summarizeAgentConversationsNightly = onSchedule(
         });
         report.push({
           establishmentId,
+          origemDosProdutos: espelho.origemDosProdutos,
           conversas: summary.conversas,
           pedidosDeProduto: summary.pedidosDeProduto,
           termos: summary.termos.length,
@@ -442,11 +449,14 @@ exports.summarizeProductSearchesNightly = onSchedule(
         continue;
       }
       try {
+        const espelho = await produtosDoEspelho({ storeRef: snapshot.ref });
         const resultado = await rodarResumoDeBuscas({
           storeRef: snapshot.ref,
+          documentIdPath: admin.firestore.FieldPath.documentId(),
           atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+          mirroredProducts: espelho.produtos,
         });
-        report.push({ establishmentId, ...resultado });
+        report.push({ establishmentId, origemDoEspelho: espelho.origemDosProdutos, ...resultado });
       } catch (error) {
         console.error('[summarizeProductSearchesNightly] Falha na loja', { establishmentId, error });
         report.push({ establishmentId, status: 'falhou' });
@@ -455,6 +465,59 @@ exports.summarizeProductSearchesNightly = onSchedule(
 
     const result = { lojas: report, segundos: Math.round((Date.now() - startedAt) / 1000) };
     console.log('[summarizeProductSearchesNightly] Passada concluida', result);
+    return result;
+  },
+);
+
+// Espelho do catalogo: uma varredura de Products por loja, as 2h, lida pelas tres
+// rotinas das 3h. A hora de folga cobre instancia a frio e crescimento do catalogo; se o
+// espelho nao ficar pronto, as tres caem no recuo e leem Products direto, como antes.
+exports.mirrorProductCatalogNightly = onSchedule(
+  {
+    schedule: '0 2 * * *',
+    timeZone: 'America/Sao_Paulo',
+    region: 'us-central1',
+    memory: '512MiB',
+    timeoutSeconds: 1800,
+    retryCount: 0,
+  },
+  async () => {
+    const startedAt = Date.now();
+    const configSnapshot = await db.doc(IMAGE_CHECK_CONFIG_PATH).get();
+    const configuredIds = configuredEstablishmentIds(configSnapshot.data());
+    if (!configuredIds.length) {
+      console.log('[mirrorProductCatalogNightly] Nenhuma loja habilitada em', IMAGE_CHECK_CONFIG_PATH);
+      return;
+    }
+
+    const storeSnapshots = await db.getAll(
+      ...configuredIds.map((id) => db.collection('estabelecimentos').doc(id)),
+    );
+    const report = storeSnapshots
+      .filter((snapshot) => !snapshot.exists)
+      .map((snapshot) => ({ establishmentId: snapshot.id, status: 'inexistente' }));
+
+    for (const snapshot of storeSnapshots.filter((store) => store.exists)) {
+      const establishmentId = snapshot.id;
+      if (Date.now() - startedAt > IMAGE_CHECK_TIME_BUDGET_MS) {
+        report.push({ establishmentId, status: 'adiada' });
+        continue;
+      }
+      try {
+        const resultado = await gerarEspelho({
+          storeRef: snapshot.ref,
+          documentIdPath: admin.firestore.FieldPath.documentId(),
+          geradoEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        report.push({ establishmentId, ...resultado });
+      } catch (error) {
+        console.error('[mirrorProductCatalogNightly] Falha na loja', { establishmentId, error });
+        report.push({ establishmentId, status: 'falhou' });
+      }
+    }
+
+    const result = { lojas: report, segundos: Math.round((Date.now() - startedAt) / 1000) };
+    console.log('[mirrorProductCatalogNightly] Passada concluida', result);
     return result;
   },
 );

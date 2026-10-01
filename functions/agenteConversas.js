@@ -394,6 +394,8 @@ async function loadAgentConversationData({
   testAccountIdsFor,
   concurrency = MESSAGE_FETCH_CONCURRENCY,
   queryPageSize = 1000,
+  // Produtos do espelho do catalogo (catalogoEspelho.js); ausentes, le Products direto.
+  mirroredProducts = null,
 }) {
   const conversationSnapshot = await db
     .collectionGroup('conversas')
@@ -408,9 +410,10 @@ async function loadAgentConversationData({
     };
   });
 
-  const names = [];
+  const fromMirror = Array.isArray(mirroredProducts);
+  const names = fromMirror ? mirroredProducts.map((produto) => produto?.name) : [];
   let lastDocument = null;
-  while (true) {
+  while (!fromMirror) {
     let productsQuery = storeRef
       .collection('Products')
       .where('isTrashed', '==', false)
@@ -437,6 +440,7 @@ async function loadAgentConversationData({
     dictionary: catalogDictionary(names),
     orders,
     testAccountIds,
+    origemDosProdutos: fromMirror ? 'espelho' : 'recuo',
     counts: {
       conversas: conversations.length,
       mensagens: conversations.reduce((sum, { messages }) => sum + messages.length, 0),

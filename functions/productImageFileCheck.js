@@ -497,10 +497,20 @@ async function runEstablishmentPass({
   loadOrders,
   loadTestAccountIds,
   now,
+  // Produtos do espelho do catalogo (catalogoEspelho.js). Ausentes, le Products direto,
+  // que e o caminho de recuo.
+  mirroredProducts = null,
 }) {
   const products = [];
+  const fromMirror = Array.isArray(mirroredProducts);
+  if (fromMirror) {
+    mirroredProducts.forEach(({ id, buscaQuebrada, ...product }) => {
+      products.push({ id, product, searchBroken: buscaQuebrada === true });
+    });
+    onPage?.(products.length);
+  }
   let lastDocument = null;
-  while (true) {
+  while (!fromMirror) {
     let productsQuery = storeRef
       .collection('Products')
       .where('isTrashed', '==', false)

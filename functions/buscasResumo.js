@@ -257,6 +257,63 @@ function limiteDeRetencao(agora = new Date(), diasComDocumento = DIAS_COM_DOCUME
   return new Date(agora.getTime() - diasComDocumento * 24 * 60 * 60 * 1000);
 }
 
+// Sem acento e em maiuscula, nos dois lados da comparacao.
+function semAcentoEmMaiuscula(valor) {
+  return String(valor ?? '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toUpperCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function termosSemResultado(resumo) {
+  return (resumo?.termos || []).filter((termo) => Number(termo?.semResultado || 0) > 0);
+}
+
+// A busca do app devolveu zero. Procurar o termo DENTRO do nome dos produtos ativos
+// diz qual dos dois casos e: a loja tinha o produto e a busca falhou (defeito nosso,
+// venda perdida), ou a loja nao tinha (decisao de compra).
+//
+// De proposito nao se usa wordKeys nem searchIndex: as chaves sao justamente o que
+// falhou, e repetir a consulta por elas daria o mesmo zero.
+function marcarTermosSemResultado({ resumo, nomes = [] }) {
+  const catalogo = nomes.map(semAcentoEmMaiuscula).filter(Boolean);
+  termosSemResultado(resumo).forEach((termo) => {
+    const procurado = semAcentoEmMaiuscula(termo.termo);
+    termo.existeNoCatalogo = Boolean(procurado)
+      && catalogo.some((nome) => nome.includes(procurado));
+  });
+  return resumo;
+}
+
+// Nomes dos produtos ativos (isTrashed == false). Uma leitura por produto, e so nas
+// noites em que o dia teve termo sem resultado.
+async function carregarNomesDoCatalogo({
+  storeRef, documentIdPath = null, pagina = 1000, mirroredProducts = null,
+}) {
+  // Produtos do espelho do catalogo (catalogoEspelho.js); ausentes, le Products direto.
+  if (Array.isArray(mirroredProducts)) return mirroredProducts.map((produto) => produto?.name);
+  const produtos = storeRef.collection('Products').where('isTrashed', '==', false);
+  if (!documentIdPath) {
+    const snapshot = await produtos.select('name').get();
+    return snapshot.docs.map((documento) => documento.get('name'));
+  }
+
+  const nomes = [];
+  let ultimo = null;
+  while (true) {
+    let consulta = produtos.orderBy(documentIdPath).select('name').limit(pagina);
+    if (ultimo) consulta = consulta.startAfter(ultimo);
+    const snapshot = await consulta.get();
+    if (snapshot.empty) break;
+    snapshot.docs.forEach((documento) => nomes.push(documento.get('name')));
+    ultimo = snapshot.docs.at(-1);
+    if (snapshot.size < pagina) break;
+  }
+  return nomes;
+}
+
 // Resumo do dia anterior, gravacao, e so entao a limpeza.
 async function rodarResumoDeBuscas({
   storeRef,
@@ -264,11 +321,24 @@ async function rodarResumoDeBuscas({
   atualizadoEm,
   diasNoTopo = DIAS_NO_TOPO,
   diasComDocumento = DIAS_COM_DOCUMENTO,
+  documentIdPath = null,
+  mirroredProducts = null,
   limpar = true,
 }) {
   const dia = diaAnterior(agora);
   const buscas = await carregarBuscasDoDia({ storeRef, dia });
   const resumo = resumirBuscas({ buscas, dia });
+
+  // Catalogo lido uma vez por loja, e so se houver termo sem resultado para marcar.
+  let catalogoLido = 0;
+  let origemDosProdutos = 'nao-precisou';
+  if (termosSemResultado(resumo).length) {
+    const nomes = await carregarNomesDoCatalogo({ storeRef, documentIdPath, mirroredProducts });
+    catalogoLido = nomes.length;
+    origemDosProdutos = Array.isArray(mirroredProducts) ? 'espelho' : 'recuo';
+    marcarTermosSemResultado({ resumo, nomes });
+  }
+
   const gravado = await escreverResumoDeBuscas({
     storeRef, resumo, atualizadoEm, diasNoTopo, diasComDocumento,
   });
@@ -292,6 +362,8 @@ async function rodarResumoDeBuscas({
     semResultado: resumo.semResultado,
     termosDistintos: resumo.termosDistintos,
     clientes: resumo.clientes,
+    catalogoLido,
+    origemDosProdutos,
     ...gravado,
     removidos,
     ...(falhaNaLimpeza ? { falhaNaLimpeza } : {}),
@@ -304,6 +376,7 @@ module.exports = {
   RESUMO_DOCUMENT,
   RESUMO_VERSION,
   carregarBuscasDoDia,
+  carregarNomesDoCatalogo,
   diaAnterior,
   diaDe,
   diaMenos,
@@ -312,7 +385,9 @@ module.exports = {
   limiteDeRetencao,
   limitesDoDia,
   limparBuscasAntigas,
+  marcarTermosSemResultado,
   resumirBuscas,
+  termosSemResultado,
   resumoReference,
   rodarResumoDeBuscas,
 };
