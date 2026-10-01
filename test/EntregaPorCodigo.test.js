@@ -132,6 +132,14 @@ test('codigo valido com pedido em rota devolve so o que a tela do entregador pre
     cliente: 'Maria',
     telefone: '62999990000',
     endereco: 'Rua 10, 120 - Centro - Anapolis/GO',
+    // Este pedido de teste nao tem street: cai no fullAddress, como a regra manda.
+    enderecoPartes: {
+      ruaNumeroComplemento: 'Rua 10, 120 - Centro - Anapolis/GO',
+      bairro: null,
+      referencia: 'Portao azul',
+      origem: 'fullAddress',
+    },
+    coordenada: null,
     complemento: 'Apto 201',
     referencia: 'Portao azul',
     itens: 3,
@@ -350,4 +358,167 @@ test('a resposta da gravacao tambem traz o nome da loja', async () => {
 
   assert.equal(body.data.loja, 'Super Zero Grau');
   assert.equal(body.data.status, 'entregue');
+});
+
+// Endereco montado dos campos separados. O fullAddress do app repete a rua, entao ele so
+// vale quando street vem vazio. Os enderecos abaixo sao inventados, com a mesma forma do
+// dado real: dado de cliente nao entra em arquivo do repositorio.
+const enderecoCompleto = {
+  street: 'Avenida das Palmeiras',
+  number: 'N 100',
+  complement: 'Apto 201',
+  neighborhood: 'Centro Norte',
+  reference: 'Portao azul',
+  city: 'Anapolis',
+  uf: 'GO',
+  zipCode: '75000-000',
+  fullAddress: 'Avenida das Palmeiras, Avenida das Palmeiras, N 100, Centro Norte, Anapolis, Goias, CEP 75000-000.',
+};
+
+test('endereco completo sai dos campos separados, sem repetir a rua', async () => {
+  const { app } = servidor({ p1: pedido({ address: enderecoCompleto }) });
+
+  const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+
+  assert.deepEqual(body.data.enderecoPartes, {
+    ruaNumeroComplemento: 'Avenida das Palmeiras, N 100 - Apto 201',
+    bairro: 'Centro Norte',
+    referencia: 'Portao azul',
+    origem: 'campos',
+  });
+  assert.equal(body.data.endereco, 'Avenida das Palmeiras, N 100 - Apto 201 - Centro Norte');
+  assert.ok(!body.data.endereco.includes('Avenida das Palmeiras, Avenida'), 'a rua nao se repete');
+});
+
+test('sem complemento, nao sobra travessao', async () => {
+  const { app } = servidor({ p1: pedido({ address: { ...enderecoCompleto, complement: '' } }) });
+
+  const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+
+  assert.equal(body.data.enderecoPartes.ruaNumeroComplemento, 'Avenida das Palmeiras, N 100');
+  assert.equal(body.data.enderecoPartes.bairro, 'Centro Norte');
+});
+
+test('sem referencia, a parte vem nula e nao vazia', async () => {
+  const { app } = servidor({ p1: pedido({ address: { ...enderecoCompleto, reference: '   ' } }) });
+
+  const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+
+  assert.equal(body.data.enderecoPartes.referencia, null);
+  assert.equal(body.data.referencia, '   '.trim() === '' ? '   ' : '', 'o campo antigo nao muda');
+});
+
+test('sem numero, fica so a rua e o complemento', async () => {
+  const { app } = servidor({ p1: pedido({ address: { ...enderecoCompleto, number: '' } }) });
+
+  const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+
+  assert.equal(body.data.enderecoPartes.ruaNumeroComplemento, 'Avenida das Palmeiras - Apto 201');
+});
+
+test('sem street, cai no fullAddress, como era antes', async () => {
+  const { app } = servidor({
+    p1: pedido({ address: { ...enderecoCompleto, street: '', number: '', complement: '' } }),
+  });
+
+  const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+
+  assert.equal(body.data.enderecoPartes.origem, 'fullAddress');
+  assert.equal(body.data.enderecoPartes.ruaNumeroComplemento, enderecoCompleto.fullAddress);
+  assert.ok(body.data.endereco.length > 0, 'nunca em branco para quem esta na rua');
+});
+
+test('sem street e sem fullAddress, as partes vem nulas e o campo antigo vazio', async () => {
+  const { app } = servidor({
+    p1: pedido({ address: { neighborhood: 'Centro Norte', reference: 'Portao azul' } }),
+  });
+
+  const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+
+  assert.equal(body.data.enderecoPartes.ruaNumeroComplemento, null);
+  assert.equal(body.data.enderecoPartes.bairro, 'Centro Norte');
+  assert.equal(body.data.endereco, 'Centro Norte');
+});
+
+test('o campo antigo endereco continua no retorno, para a pagina nao quebrar', async () => {
+  const { app } = servidor({ p1: pedido({ address: enderecoCompleto }) });
+
+  const { body } = await chamar(app, 'entregue', { codigo: 'A7K2Z9' });
+
+  assert.equal(typeof body.data.endereco, 'string');
+  assert.ok(body.data.endereco.length > 0);
+  assert.equal(typeof body.data.complemento, 'string');
+  assert.equal(typeof body.data.referencia, 'string');
+});
+
+// address.position e GeoPoint: o SDK expoe latitude/longitude, o dado cru _latitude/_longitude.
+test('coordenada sai do position, nas duas formas do GeoPoint', async () => {
+  const cru = servidor({
+    p1: pedido({ address: { ...enderecoCompleto, position: { _latitude: -16.3285, _longitude: -48.9534 } } }),
+  });
+  const doSdk = servidor({
+    p1: pedido({ address: { ...enderecoCompleto, position: { latitude: -16.3285, longitude: -48.9534 } } }),
+  });
+
+  const a = await chamar(cru.app, 'resumo', { codigo: 'A7K2Z9' });
+  const b = await chamar(doSdk.app, 'resumo', { codigo: 'A7K2Z9' });
+
+  assert.deepEqual(a.body.data.coordenada, { lat: -16.3285, lng: -48.9534 });
+  assert.deepEqual(b.body.data.coordenada, { lat: -16.3285, lng: -48.9534 });
+});
+
+test('sem position, a coordenada vem nula', async () => {
+  const { app } = servidor({ p1: pedido({ address: { ...enderecoCompleto, position: undefined } }) });
+
+  const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+
+  assert.equal(body.data.coordenada, null);
+  assert.ok(body.data.endereco.length > 0, 'o endereco em texto continua');
+});
+
+test('com um dos dois numeros faltando, a coordenada vem nula', async () => {
+  const casos = [
+    { _latitude: -16.3285 },
+    { _longitude: -48.9534 },
+    { _latitude: -16.3285, _longitude: null },
+    { _latitude: 'abc', _longitude: -48.9534 },
+  ];
+
+  for (const position of casos) {
+    const { app } = servidor({ p1: pedido({ address: { ...enderecoCompleto, position } }) });
+    const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+    assert.equal(body.data.coordenada, null, JSON.stringify(position));
+  }
+});
+
+test('numero fora da faixa do planeta vira nulo', async () => {
+  const casos = [
+    { _latitude: -91, _longitude: -48.9534 },
+    { _latitude: 90.5, _longitude: 0 },
+    { _latitude: 0, _longitude: 181 },
+    { _latitude: 0, _longitude: -180.1 },
+  ];
+
+  for (const position of casos) {
+    const { app } = servidor({ p1: pedido({ address: { ...enderecoCompleto, position } }) });
+    const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+    assert.equal(body.data.coordenada, null, JSON.stringify(position));
+  }
+
+  // as bordas exatas continuam valendo
+  const borda = servidor({ p1: pedido({ address: { ...enderecoCompleto, position: { _latitude: -90, _longitude: 180 } } }) });
+  const { body } = await chamar(borda.app, 'resumo', { codigo: 'A7K2Z9' });
+  assert.deepEqual(body.data.coordenada, { lat: -90, lng: 180 });
+});
+
+test('a coordenada tambem vem na resposta da gravacao, e o resto do retorno nao muda', async () => {
+  const { app } = servidor({
+    p1: pedido({ address: { ...enderecoCompleto, position: { _latitude: -16.3285, _longitude: -48.9534 } } }),
+  });
+
+  const { body } = await chamar(app, 'entregue', { codigo: 'A7K2Z9' });
+
+  assert.deepEqual(body.data.coordenada, { lat: -16.3285, lng: -48.9534 });
+  assert.equal(body.data.status, 'entregue');
+  assert.equal(typeof body.data.endereco, 'string');
 });

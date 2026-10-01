@@ -157,6 +157,9 @@ function resumoDoPedido(pedido = {}, { gatewayEmProducao = false, loja = null } 
     cliente: String(pedido.clientName || '').trim().split(/\s+/)[0] || '',
     telefone: pedido.clientePhoneNumber || '',
     endereco: enderecoEmUmaLinha(endereco),
+    // Em partes, para a tela decidir a quebra. Parte sem valor vem nula, nunca vazia.
+    enderecoPartes: partesDoEndereco(endereco),
+    coordenada: coordenadaDoEndereco(endereco),
     complemento: textoOuVazio(endereco.complement),
     referencia: textoOuVazio(endereco.reference),
     itens: Array.isArray(pedido.productsCart) ? pedido.productsCart.length : 0,
@@ -207,13 +210,56 @@ function pagamentoOnlineConfirmado(pedido = {}, gatewayEmProducao = false) {
     && autorizacao !== '';
 }
 
+// O fullAddress gravado pelo app do cliente repete a rua: "Avenida X, Avenida X, N 100,
+// Bairro, Cidade...". Por isso o endereco e montado dos campos separados do mesmo objeto.
+// So quando street vem vazio o fullAddress volta a valer: quem esta na rua nao pode receber
+// endereco em branco.
+function partesDoEndereco(endereco = {}) {
+  const texto = (valor) => (typeof valor === 'string' ? valor.trim() : '');
+  const rua = texto(endereco.street);
+  if (!rua) {
+    const inteiro = texto(endereco.fullAddress);
+    return {
+      ruaNumeroComplemento: inteiro || null,
+      bairro: texto(endereco.neighborhood) || null,
+      referencia: texto(endereco.reference) || null,
+      origem: 'fullAddress',
+    };
+  }
+
+  const numero = texto(endereco.number);
+  const complemento = texto(endereco.complement);
+  // Campo vazio nao entra: nem virgula solta, nem travessao sobrando.
+  const comNumero = [rua, numero].filter(Boolean).join(', ');
+  return {
+    ruaNumeroComplemento: [comNumero, complemento].filter(Boolean).join(' - '),
+    bairro: texto(endereco.neighborhood) || null,
+    referencia: texto(endereco.reference) || null,
+    origem: 'campos',
+  };
+}
+
+// address.position e um GeoPoint: o objeto do SDK expoe latitude e longitude, e o dado cru
+// aparece como _latitude e _longitude. Coordenada leva o entregador ao ponto; texto leva so
+// a rua. Par incompleto ou fora da faixa do planeta vira null, nunca meio valor.
+function coordenadaDoEndereco(endereco = {}) {
+  const posicao = endereco.position;
+  if (!posicao || typeof posicao !== 'object') return null;
+  // Exige numero de verdade: null viraria zero no Number() e o entregador iria para o
+  // meio do Atlantico.
+  const lat = posicao.latitude ?? posicao._latitude;
+  const lng = posicao.longitude ?? posicao._longitude;
+  if (typeof lat !== 'number' || typeof lng !== 'number') return null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  return { lat, lng };
+}
+
+// Campo antigo do retorno, mantido para a pagina do entregador nao quebrar enquanto nao for
+// atualizada. Passa a sair das partes, nao mais do fullAddress.
 function enderecoEmUmaLinha(endereco) {
-  if (endereco.fullAddress) return String(endereco.fullAddress);
-  return [
-    [endereco.street, endereco.number].filter(Boolean).join(', '),
-    endereco.neighborhood,
-    [endereco.city, endereco.uf].filter(Boolean).join('/'),
-  ].filter(Boolean).join(' - ');
+  const { ruaNumeroComplemento, bairro } = partesDoEndereco(endereco);
+  return [ruaNumeroComplemento, bairro].filter(Boolean).join(' - ');
 }
 
 function textoOuVazio(valor) {
