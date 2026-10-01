@@ -1,11 +1,17 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 import { assertPermission } from '../../http/middlewares/requirePermission.js';
+import { logger } from '../logger/logger.js';
 // Lista de clientes gravada pela rotina noturna. Mesmo arquivo que a rotina usa, para a
 // regra de quem e cliente nao existir em duas versoes.
 import clientesDaLoja from '../../../functions/clientesDaLoja.js';
 
-const { acrescentarClientes, clientesDosPedidos, lerListaDeClientes } = clientesDaLoja;
+const {
+  acrescentarClientes,
+  clientesDosPedidos,
+  lerListaDeClientes,
+  participantesDeConversa,
+} = clientesDaLoja;
 
 // Trinta minutos: a lista de clientes so cresce, entao cache velho nao erra, so fica
 // incompleto, e o incompleto e resolvido pela verificacao pontual de isCustomer.
@@ -104,7 +110,6 @@ export class ManagerDataAccessPolicy {
     this.firestore = firestore;
     this.clock = clock;
     this.customerCache = new Map();
-    this.conversationCache = new Map();
     this.arrayUnion = arrayUnion;
   }
 
@@ -338,22 +343,18 @@ export class ManagerDataAccessPolicy {
     if (!userId) return false;
     const ids = await this.getCustomerIds(actor);
     if (ids.has(userId)) return true;
-    const conversationIds = await this.getConversationIds(actor);
-    if (conversationIds.has(userId)) return true;
     return this.verifyCustomer(actor, userId);
   }
 
-  // Varre os pedidos da loja procurando o id, no maximo uma vez a cada dez minutos. O que
-  // achar entra na memoria e e acrescentado ao documento por arrayUnion.
+  // Procura o id nos tres caminhos, pedido, Chats e conversas, no maximo uma vez por loja a
+  // cada dez minutos. O que achar entra na memoria e e acrescentado ao documento por
+  // arrayUnion.
   async verifyCustomer(actor, userId) {
     const cached = this.customerCache.get(actor.establishmentId);
     const agora = this.clock();
     if (cached?.verifiedAt && agora - cached.verifiedAt < VERIFICATION_TTL_MS) return false;
 
-    const { ids } = await clientesDosPedidos({
-      db: this.firestore,
-      storeRef: this.storeReference(actor.establishmentId),
-    });
+    const ids = await this.varrerQuemPodeLer(this.storeReference(actor.establishmentId));
     const encontrado = ids.has(userId);
     const atual = cached?.ids || new Set();
     ids.forEach((id) => atual.add(id));
@@ -379,15 +380,12 @@ export class ManagerDataAccessPolicy {
     return encontrado;
   }
 
-  // Quem a loja pode ler em Users: cliente dela mais participante de conversa com ela.
-  // Usado pelo filterDocuments e pelo getScopedUsers do gateway, para os dois caminhos de
-  // leitura responderem o mesmo.
+  // Quem a loja pode ler em Users: cliente dela mais participante de conversa com ela, ja
+  // na mesma forma de id que Users usa. A uniao e a traducao acontecem na rotina da
+  // madrugada (clientesDaLoja.js); aqui so se le o resultado. Usado pelo filterDocuments e
+  // pelo getScopedUsers do gateway, para os dois caminhos responderem o mesmo.
   async getReadableUserIds(actor) {
-    const [customerIds, conversationIds] = await Promise.all([
-      this.getCustomerIds(actor),
-      this.getConversationIds(actor),
-    ]);
-    return new Set([...customerIds, ...conversationIds]);
+    return this.getCustomerIds(actor);
   }
 
   storeReference(establishmentId) {
@@ -404,9 +402,22 @@ export class ManagerDataAccessPolicy {
 
     const storeRef = this.storeReference(actor.establishmentId);
     const lista = await lerListaDeClientes({ storeRef });
-    const ids = lista.ids
-      ? new Set(lista.ids)
-      : (await clientesDosPedidos({ db: this.firestore, storeRef })).ids;
+    // Documento ausente ou bloco faltando: faz o que fazia antes da rotina existir, que e
+    // varrer os pedidos e perguntar pelas conversas. Mais caro, e so acontece enquanto a
+    // rotina da madrugada nao tiver rodado.
+    let ids;
+    if (lista.ids) {
+      ids = new Set(lista.ids);
+    } else {
+      // Uma linha por entrada no recuo, que acontece na renovacao do cache, nao por
+      // requisicao. Sem isso, o dia em que a rotina noturna parar passa em silencio.
+      logger.warn('data_customer_list_fallback', {
+        establishmentId: actor.establishmentId,
+        motivo: lista.motivo,
+        degradado: 'uid de cadastro antigo nao e traduzido no recuo',
+      });
+      ids = await this.varrerQuemPodeLer(storeRef);
+    }
 
     this.customerCache.set(actor.establishmentId, {
       ids,
@@ -418,36 +429,23 @@ export class ManagerDataAccessPolicy {
     return ids;
   }
 
-  // Quem conversa com a loja: participante de Chats e usuario das conversas do agente.
-  // Mesmo cache por loja, mesmo prazo. Duas consultas a mais por renovacao, nenhuma por
-  // chamada.
-  async getConversationIds(actor) {
-    const cached = this.conversationCache.get(actor.establishmentId);
-    if (cached && this.clock() - cached.loadedAt < CUSTOMER_CACHE_TTL_MS) return cached.ids;
-
-    const { establishmentId } = actor;
-    const chats = this.firestore.collection('Chats');
-    const [comoRemetente, comoDestino, conversas] = await Promise.all([
-      chats.where('senderId', '==', establishmentId).select('receiverId').get(),
-      chats.where('receiverId', '==', establishmentId).select('senderId').get(),
-      this.firestore
-        .collectionGroup('conversas')
-        .where('companyId', '==', establishmentId)
-        .select('userId')
-        .get(),
+  // Caminho de recuo e de verificacao pontual: pedidos mais as tres consultas de conversa.
+  //
+  // ATENCAO: este conjunto e DEGRADADO em relacao ao da rotina noturna. Ele nao traduz uid
+  // do Authentication para id de documento em Users, porque traduzir exige ler Users
+  // inteiro, 709 leituras, e isso nao pode acontecer no caminho da requisicao. Resultado:
+  // enquanto o recuo vale, participante de conversa com cadastro antigo nao volta. E o
+  // mesmo comportamento de antes da rotina existir, e cada entrada no recuo e registrada no
+  // log para nao acontecer em silencio.
+  //
+  // Fora daqui, a politica nao consulta Chats nem conversas: quem faz isso e a rotina da
+  // madrugada, uma vez por noite.
+  async varrerQuemPodeLer(storeRef) {
+    const [dosPedidos, deConversa] = await Promise.all([
+      clientesDosPedidos({ db: this.firestore, storeRef }),
+      participantesDeConversa({ db: this.firestore, storeRef }),
     ]);
-
-    const ids = new Set();
-    const guardar = (valor) => {
-      const id = referenceId(valor);
-      if (id && id !== establishmentId) ids.add(id);
-    };
-    comoRemetente.docs.forEach((document) => guardar(document.get('receiverId')));
-    comoDestino.docs.forEach((document) => guardar(document.get('senderId')));
-    conversas.docs.forEach((document) => guardar(document.get('userId')));
-
-    this.conversationCache.set(establishmentId, { ids, loadedAt: this.clock() });
-    return ids;
+    return new Set([...dosPedidos.ids, ...deConversa.deChats, ...deConversa.doAgente]);
   }
 
   rememberCustomersFromOrders(actor, documents, complete = false) {

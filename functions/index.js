@@ -28,7 +28,11 @@ const { recalcularCategorias } = require('./categoriasContagem');
 const { rodarResumoDeBuscas } = require('./buscasResumo');
 const { gerarEspelho, produtosDoEspelho } = require('./catalogoEspelho');
 const { registrarRotina } = require('./rotinasNoturnas');
-const { CAMPO: CAMPO_DE_PROVEDORES, rodarProvedoresDeLogin } = require('./provedoresDeLogin');
+const {
+  CAMPO: CAMPO_DE_PROVEDORES,
+  indiceDeUsuarios,
+  rodarProvedoresDeLogin,
+} = require('./provedoresDeLogin');
 const { gerarListaDeClientes } = require('./clientesDaLoja');
 
 if (!admin.apps.length) {
@@ -463,6 +467,11 @@ exports.summarizeProductSearchesNightly = onSchedule(
       .filter((snapshot) => !snapshot.exists)
       .map((snapshot) => ({ establishmentId: snapshot.id, status: 'inexistente' }));
 
+    // Indice de Users montado uma vez por passada e reaproveitado nas quatro lojas:
+    // Users e colecao da raiz, nao da loja.
+    const usuarios = await db.collection('Users').select('userAuthId').get();
+    const indiceDeUsers = indiceDeUsuarios(usuarios.docs);
+
     for (const snapshot of storeSnapshots.filter((store) => store.exists)) {
       const establishmentId = snapshot.id;
       if (Date.now() - startedAt > IMAGE_CHECK_TIME_BUDGET_MS) {
@@ -476,6 +485,7 @@ exports.summarizeProductSearchesNightly = onSchedule(
           documentIdPath: admin.firestore.FieldPath.documentId(),
           atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
           mirroredProducts: espelho.produtos,
+          indiceDeUsuarios: indiceDeUsers,
           // Pedidos do dia da loja, para o cruzamento de conversao.
           carregarPedidos: ({ inicio, fim }) => db
             .collection('PurchaseRequests')
@@ -624,6 +634,11 @@ exports.listStoreCustomersNightly = onSchedule(
       .filter((snapshot) => !snapshot.exists)
       .map((snapshot) => ({ establishmentId: snapshot.id, status: 'inexistente' }));
 
+    // Traducao de uid para id de documento: indice montado uma vez e reaproveitado nas
+    // quatro lojas. Users e colecao da raiz.
+    const usuarios = await db.collection('Users').select('userAuthId').get();
+    const indiceDeUsers = indiceDeUsuarios(usuarios.docs);
+
     for (const snapshot of storeSnapshots.filter((store) => store.exists)) {
       const establishmentId = snapshot.id;
       if (Date.now() - startedAt > IMAGE_CHECK_TIME_BUDGET_MS) {
@@ -635,10 +650,18 @@ exports.listStoreCustomersNightly = onSchedule(
           db,
           storeRef: snapshot.ref,
           geradoEm: admin.firestore.FieldValue.serverTimestamp(),
+          indiceDeUsuarios: indiceDeUsers,
         });
         report.push({ establishmentId, ...resultado });
         await registrarNoite(snapshot.ref, 'listStoreCustomersNightly', {
-          dados: { clientes: resultado.total, novos: resultado.novos, blocos: resultado.blocos },
+          dados: {
+            clientes: resultado.total,
+            novos: resultado.novos,
+            blocos: resultado.blocos,
+            traduzidos: resultado.traduzidos,
+            ambiguos: resultado.ambiguos,
+            inexistentes: resultado.inexistentes,
+          },
         });
       } catch (error) {
         console.error('[listStoreCustomersNightly] Falha na loja', { establishmentId, error });

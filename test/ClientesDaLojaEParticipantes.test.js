@@ -184,8 +184,9 @@ test('id que nunca apareceu em pedido nem em conversa continua recusado', async 
 });
 
 test('participante de conversa sem pedido volta na leitura de Users', async () => {
+  // A lista da madrugada ja traz cliente e participante, traduzidos: a politica so le.
   const { firestore, registro } = firestoreFalso({
-    ...comLista(['cliente-1']),
+    ...comLista(['cliente-1', 'conversou-chat', 'conversou-agente']),
     chats: [{ senderId: LOJA, receiverId: 'conversou-chat' }],
     conversas: [{ userId: 'conversou-agente' }],
   });
@@ -198,7 +199,7 @@ test('participante de conversa sem pedido volta na leitura de Users', async () =
   });
 
   assert.deepEqual(passaram.map((d) => d.id), ['cliente-1', 'conversou-chat', 'conversou-agente']);
-  assert.equal(registro.consultasDeConversa, 3, 'duas em Chats e uma em conversas');
+  assert.equal(registro.consultasDeConversa, 0, 'a politica nao consulta conversa no caminho da requisicao');
 
   // os campos continuam peneirados pelo sanitizeDocument, sem ampliacao
   const peneirado = policy.sanitizeDocument('Users/conversou-chat', {
@@ -232,7 +233,7 @@ test('participante de conversa aceita isTestAccount e recusa campo fora da lista
   );
 });
 
-test('a lista de clientes e a de conversas ficam em cache por trinta minutos', async () => {
+test('a lista fica em cache por trinta minutos, sem consultar conversa', async () => {
   let agora = 1_000_000;
   const { firestore, registro } = firestoreFalso({
     ...comLista(['cliente-1']),
@@ -243,10 +244,77 @@ test('a lista de clientes e a de conversas ficam em cache por trinta minutos', a
   await policy.getReadableUserIds(actor);
   await policy.getReadableUserIds(actor);
   assert.equal(registro.leiturasDaLista, 1);
-  assert.equal(registro.consultasDeConversa, 3);
+  assert.equal(registro.consultasDeConversa, 0);
 
   agora += 31 * 60 * 1000;
   await policy.getReadableUserIds(actor);
   assert.equal(registro.leiturasDaLista, 2, 'passados trinta minutos, le de novo');
-  assert.equal(registro.consultasDeConversa, 6);
+  assert.equal(registro.consultasDeConversa, 0);
+});
+
+test('sem o documento, o recuo varre pedidos e tambem as tres consultas de conversa', async () => {
+  const { firestore, registro } = firestoreFalso({
+    pedidos: [{ clientId: 'cliente-1' }],
+    chats: [{ senderId: LOJA, receiverId: 'conversou-chat' }],
+    conversas: [{ userId: 'conversou-agente' }],
+  });
+  const policy = new ManagerDataAccessPolicy({ firestore });
+
+  const ids = await policy.getReadableUserIds(actor);
+
+  assert.deepEqual([...ids].sort(), ['cliente-1', 'conversou-agente', 'conversou-chat']);
+  assert.equal(registro.varredurasDePedidos, 1);
+  assert.equal(registro.consultasDeConversa, 3, 'o recuo faz o que a politica fazia antes');
+});
+
+test('verificacao pontual acha por conversa, e nao so por pedido', async () => {
+  const { firestore, registro } = firestoreFalso({
+    ...comLista(['cliente-1']),
+    pedidos: [{ clientId: 'cliente-1' }],
+    conversas: [{ userId: 'so-conversou' }],
+  });
+  const policy = new ManagerDataAccessPolicy({
+    firestore, arrayUnion: (valores) => ({ arrayUnion: valores }),
+  });
+
+  assert.equal(await policy.isCustomer(actor, 'so-conversou'), true);
+  assert.equal(registro.varredurasDePedidos, 1);
+  assert.equal(registro.consultasDeConversa, 3);
+  assert.deepEqual(registro.acrescentados, ['so-conversou']);
+});
+
+test('cada entrada no recuo deixa uma linha de log, com a loja e o motivo', async () => {
+  const { firestore } = firestoreFalso({ pedidos: [{ clientId: 'cliente-1' }] });
+  const policy = new ManagerDataAccessPolicy({ firestore });
+  const avisos = [];
+  const original = console.warn;
+  console.warn = (linha) => avisos.push(String(linha));
+  try {
+    await policy.getCustomerIds(actor);
+    await policy.getCustomerIds(actor);
+  } finally {
+    console.warn = original;
+  }
+
+  assert.equal(avisos.length, 1, 'uma linha por entrada no recuo, nao por chamada');
+  const registro = JSON.parse(avisos[0]);
+  assert.equal(registro.message, 'data_customer_list_fallback');
+  assert.equal(registro.establishmentId, LOJA);
+  assert.equal(registro.motivo, 'sem-indice');
+  assert.match(registro.degradado, /nao e traduzido/);
+});
+
+test('com a lista gravada, nao ha linha de recuo no log', async () => {
+  const { firestore } = firestoreFalso({ ...comLista(['cliente-1']) });
+  const policy = new ManagerDataAccessPolicy({ firestore });
+  const avisos = [];
+  const original = console.warn;
+  console.warn = (linha) => avisos.push(String(linha));
+  try {
+    await policy.getCustomerIds(actor);
+  } finally {
+    console.warn = original;
+  }
+
+  assert.deepEqual(avisos, []);
 });

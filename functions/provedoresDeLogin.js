@@ -27,18 +27,35 @@ function provedoresDaConta(conta = {}) {
 function indiceDeUsuarios(documentos = []) {
   const porAuthId = new Map();
   const porDocumento = new Map();
+  // Uid com mais de um documento apontando para ele: quem usa o indice decide o que
+  // fazer. O resumo de buscas, por exemplo, grava nulo em vez de escolher no escuro.
+  const quantos = new Map();
   documentos.forEach((documento) => {
     const atual = documento?.get ? documento.get(CAMPO) : undefined;
     const entrada = { id: documento.id, atual: Array.isArray(atual) ? atual : null };
     porDocumento.set(documento.id, entrada);
     const authId = documento?.get ? documento.get('userAuthId') : null;
-    if (authId) porAuthId.set(String(authId), entrada);
+    if (authId) {
+      const chave = String(authId);
+      porAuthId.set(chave, entrada);
+      quantos.set(chave, (quantos.get(chave) || 0) + 1);
+    }
   });
+  const duplicados = new Set([...quantos.entries()].filter(([, n]) => n > 1).map(([uid]) => uid));
   return {
     porAuthId,
     porDocumento,
+    duplicados,
+    ambiguo(uid) {
+      return duplicados.has(String(uid));
+    },
     procurar(uid) {
       return porAuthId.get(uid) || porDocumento.get(uid) || null;
+    },
+    // Id do documento em Users, ou nulo: sem documento, ou com mais de um.
+    documentoDe(uid) {
+      if (!uid || this.ambiguo(uid)) return null;
+      return this.procurar(uid)?.id || null;
     },
   };
 }

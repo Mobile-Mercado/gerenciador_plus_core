@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  RESUMO_VERSION,
   diaAnterior,
   diaMenos,
   limitesDoDia,
@@ -81,6 +82,10 @@ function firestoreFalso({
   const docDia = (dia) => ({
     async set(dados) { registro.ordem.push(`gravouDia:${dia}`); registro.dias[dia] = dados; },
     async delete() { registro.diasExcluidos.push(dia); delete registro.dias[dia]; },
+    async get() {
+      const dados = registro.dias[dia];
+      return { exists: Boolean(dados), get: (campo) => (dados || {})[campo] };
+    },
   });
 
   const docResumo = {
@@ -533,4 +538,125 @@ test('o resumo nao guarda nada alem de termo, contagem, datas e id de cliente', 
     Object.keys(registro.dias[DIA]).sort(),
     ['atualizadoEm', 'buscas', 'clientes', 'convertidas', 'dia', 'porCliente', 'semCliente', 'semPedido', 'semResultado', 'termos', 'termosDistintos', 'version'],
   );
+});
+
+// Traducao do uid do Authentication para o id do documento em Users.
+const { indiceDeUsuarios } = require('./provedoresDeLogin');
+
+function docUsuario(id, userAuthId = null) {
+  const dados = { userAuthId };
+  return { id, get: (campo) => dados[campo] };
+}
+
+test('conta antiga: uid diferente do id do documento casa pelo userAuthId', () => {
+  const indice = indiceDeUsuarios([docUsuario('cliente-antigo', 'uid-antigo')]);
+
+  const resumo = resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ clienteId: 'uid-antigo' })],
+    indiceDeUsuarios: indice,
+  });
+
+  assert.equal(resumo.porCliente[0].clienteId, 'uid-antigo', 'o cru nao muda');
+  assert.equal(resumo.porCliente[0].clienteDocId, 'cliente-antigo');
+});
+
+test('conta nova: uid igual ao id do documento', () => {
+  const indice = indiceDeUsuarios([docUsuario('uid-novo')]);
+
+  const resumo = resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ clienteId: 'uid-novo' })],
+    indiceDeUsuarios: indice,
+  });
+
+  assert.equal(resumo.porCliente[0].clienteDocId, 'uid-novo');
+});
+
+test('uid sem documento em Users fica com clienteDocId nulo', () => {
+  const indice = indiceDeUsuarios([docUsuario('cliente-outro', 'uid-outro')]);
+
+  const resumo = resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ clienteId: 'uid-sem-cadastro' })],
+    indiceDeUsuarios: indice,
+  });
+
+  assert.equal(resumo.porCliente[0].clienteId, 'uid-sem-cadastro');
+  assert.equal(resumo.porCliente[0].clienteDocId, null);
+});
+
+test('uid com dois documentos fica nulo: nao se escolhe no escuro', () => {
+  const indice = indiceDeUsuarios([
+    docUsuario('cliente-a', 'uid-duplo'),
+    docUsuario('cliente-b', 'uid-duplo'),
+  ]);
+
+  assert.equal(indice.ambiguo('uid-duplo'), true);
+  const resumo = resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ clienteId: 'uid-duplo' })],
+    indiceDeUsuarios: indice,
+  });
+
+  assert.equal(resumo.porCliente[0].clienteDocId, null);
+});
+
+test('sem indice, clienteDocId sai nulo e nada quebra', () => {
+  const resumo = resumirBuscas({ dia: DIA, buscas: [busca()] });
+
+  assert.equal(resumo.porCliente[0].clienteDocId, null);
+});
+
+test('dia de versao antiga e refeito, e dia na versao atual nao', async () => {
+  const anterior = {
+    dias: [
+      { dia: '2026-09-29', buscas: 1, semResultado: 0, termosDistintos: 1, clientes: 1, documento: true },
+      { dia: '2026-09-28', buscas: 1, semResultado: 0, termosDistintos: 1, clientes: 1, documento: true },
+    ],
+  };
+  const emVinteNove = { toDate: () => new Date(Date.UTC(2026, 8, 29, 15, 0, 0)) };
+  const { storeRef, registro } = firestoreFalso({ logs: [busca(), busca({ em: emVinteNove })], resumo: anterior });
+  registro.dias['2026-09-29'] = { dia: '2026-09-29', version: 1, buscas: 1 };
+  registro.dias['2026-09-28'] = { dia: '2026-09-28', version: RESUMO_VERSION, buscas: 1 };
+
+  const resultado = await rodarResumoDeBuscas({ storeRef, agora: AGORA, atualizadoEm: 'quando' });
+
+  assert.equal(resultado.diasRefeitos, 1);
+  assert.deepEqual(resultado.diasRefeitosEm, ['2026-09-29']);
+  assert.equal(registro.dias['2026-09-29'].version, RESUMO_VERSION, 'refeito na versao nova');
+  assert.equal(registro.dias['2026-09-28'].version, RESUMO_VERSION, 'nao foi tocado');
+});
+
+test('dia de versao antiga sem SearchLogs nao e refeito', async () => {
+  const anterior = {
+    dias: [{ dia: '2026-09-25', buscas: 12, semResultado: 2, termosDistintos: 9, clientes: 4, documento: true }],
+  };
+  const { storeRef, registro } = firestoreFalso({ logs: [], resumo: anterior });
+  registro.dias['2026-09-25'] = {
+    dia: '2026-09-25', version: 1, buscas: 12, termos: [{ termo: 'ARROZ', vezes: 12 }],
+  };
+
+  const resultado = await rodarResumoDeBuscas({ storeRef, agora: AGORA, atualizadoEm: 'quando' });
+
+  assert.equal(resultado.diasRefeitos, 0);
+  assert.deepEqual(resultado.diasSemDadoBruto, ['2026-09-25']);
+  assert.equal(registro.dias['2026-09-25'].buscas, 12, 'o numero antigo ficou de pe');
+  assert.equal(registro.dias['2026-09-25'].version, 1);
+});
+
+test('o teto de sete dias por passada e respeitado', async () => {
+  const dias = [];
+  for (let dia = 20; dia <= 29; dia += 1) {
+    dias.push({ dia: `2026-09-${dia}`, buscas: 1, semResultado: 0, termosDistintos: 1, clientes: 1, documento: true });
+  }
+  const { storeRef, registro } = firestoreFalso({ logs: [busca()], resumo: { dias } });
+  dias.forEach(({ dia }) => { registro.dias[dia] = { dia, version: 1, buscas: 0 }; });
+
+  const resultado = await rodarResumoDeBuscas({ storeRef, agora: AGORA, atualizadoEm: 'quando' });
+
+  assert.equal(resultado.diasRefeitos, 7);
+  assert.deepEqual(resultado.diasRefeitosEm, [
+    '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29',
+  ]);
 });
