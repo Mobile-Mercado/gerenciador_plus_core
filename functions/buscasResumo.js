@@ -14,7 +14,7 @@
 const { PROBABLE_ORDER_WINDOW_MS } = require('./agenteConversas');
 const { isTestOrder, orderClientId } = require('./hourlySalesAggregation');
 
-const RESUMO_VERSION = 1;
+const RESUMO_VERSION = 2;
 const RESUMO_DOCUMENT = 'buscasResumo';
 const DIAS_SUBCOLECAO = 'dias';
 // Duas janelas, de proposito. O topo guarda um ano de contagem, para o periodo "Ano" da
@@ -24,6 +24,8 @@ const DIAS_SUBCOLECAO = 'dias';
 const DIAS_NO_TOPO = 365;
 const DIAS_COM_DOCUMENTO = 90;
 const LOTE_DE_EXCLUSAO = 300;
+// Teto de dias refeitos por passada, para a migracao de formato nao crescer sem limite.
+const DIAS_REFEITOS_POR_PASSADA = 7;
 const TIME_ZONE = 'America/Sao_Paulo';
 
 const formatador = new Intl.DateTimeFormat('en-CA', {
@@ -113,7 +115,7 @@ function virouPedido(momentos = [], quando) {
 // buscas: documentos do dia, como objetos simples. Nenhum texto alem do termo sai daqui.
 // pedidos: os do dia, para o cruzamento de conversao.
 function resumirBuscas({
-  buscas = [], dia, pedidos = [], testAccountIds = new Set(),
+  buscas = [], dia, pedidos = [], testAccountIds = new Set(), indiceDeUsuarios = null,
 }) {
   const pedidosPorCliente = momentosDePedidoPorCliente(pedidos, testAccountIds);
   const termos = new Map();
@@ -183,6 +185,10 @@ function resumirBuscas({
     porCliente: [...clientes.values()]
       .map((cliente) => ({
         clienteId: cliente.clienteId,
+        // Id do documento em Users, para o painel casar a busca com o cadastro. Nulo
+        // quando o uid nao tem documento, ou quando tem mais de um: escolher no escuro e
+        // pior que nao ter. O clienteId segue cru, pela regra do registro bruto.
+        clienteDocId: indiceDeUsuarios ? indiceDeUsuarios.documentoDe(cliente.clienteId) : null,
         buscas: cliente.buscas,
         convertidas: cliente.convertidas,
         termos: [...cliente.termos.values()].sort(maisVezes),
@@ -371,6 +377,92 @@ async function carregarNomesDoCatalogo({
   return nomes;
 }
 
+// Um dia: busca, pedido do dia para a conversao, e a marca de catalogo nos termos sem
+// resultado. Usada pelo dia corrente e pelos dias refeitos.
+async function resumirUmDia({
+  storeRef,
+  dia,
+  carregarPedidos = null,
+  testAccountIdsFor = null,
+  documentIdPath = null,
+  mirroredProducts = null,
+  indiceDeUsuarios = null,
+  buscas = null,
+}) {
+  const doDia = buscas || await carregarBuscasDoDia({ storeRef, dia });
+
+  // Pedidos lidos so quando ha busca com cliente: sem cliente nao ha conversao a apurar.
+  // A janela vai do comeco do dia ate 2 horas depois do fim dele, porque busca das 23h50
+  // converte com pedido da meia-noite e meia.
+  let pedidos = [];
+  let testAccountIds = new Set();
+  let pedidosLidos = 0;
+  if (doDia.some((busca) => busca?.clienteId) && carregarPedidos) {
+    const { inicio, fim } = limitesDoDia(dia);
+    pedidos = await carregarPedidos({
+      inicio,
+      fim: new Date(fim.getTime() + PROBABLE_ORDER_WINDOW_MS),
+    }) || [];
+    pedidosLidos = pedidos.length;
+    if (testAccountIdsFor) testAccountIds = await testAccountIdsFor(pedidos);
+  }
+
+  const resumo = resumirBuscas({
+    buscas: doDia, dia, pedidos, testAccountIds, indiceDeUsuarios,
+  });
+
+  // Catalogo lido uma vez por dia resumido, e so se houver termo sem resultado.
+  let catalogoLido = 0;
+  let origemDosProdutos = 'nao-precisou';
+  if (termosSemResultado(resumo).length) {
+    const nomes = await carregarNomesDoCatalogo({ storeRef, documentIdPath, mirroredProducts });
+    catalogoLido = nomes.length;
+    origemDosProdutos = Array.isArray(mirroredProducts) ? 'espelho' : 'recuo';
+    marcarTermosSemResultado({ resumo, nomes });
+  }
+
+  return {
+    resumo, buscas: doDia, pedidosLidos, catalogoLido, origemDosProdutos,
+  };
+}
+
+// Dia gravado numa versao anterior a atual e refeito a partir de SearchLogs, com teto por
+// passada. Dia cujo SearchLogs ja foi apagado pela retencao fica como esta: refazer com a
+// colecao vazia trocaria numero por zero.
+async function refazerDiasAntigos({
+  storeRef,
+  diaCorrente,
+  atualizadoEm,
+  maximoDeDias = DIAS_REFEITOS_POR_PASSADA,
+  ...resto
+}) {
+  const indice = await resumoReference(storeRef).get();
+  const linhas = (indice.exists ? indice.get('dias') : null) || [];
+  const candidatos = linhas
+    .filter((linha) => linha?.dia && linha.dia !== diaCorrente && linha.documento !== false)
+    .map((linha) => linha.dia)
+    .sort()
+    .slice(-maximoDeDias);
+
+  const refeitos = [];
+  const semDadoBruto = [];
+  for (const dia of candidatos) {
+    const documento = await diaReference(storeRef, dia).get();
+    if (!documento.exists) continue;
+    if (Number(documento.get('version') || 0) >= RESUMO_VERSION) continue;
+
+    const buscas = await carregarBuscasDoDia({ storeRef, dia });
+    if (!buscas.length && Number(documento.get('buscas') || 0) > 0) {
+      semDadoBruto.push(dia);
+      continue;
+    }
+    const { resumo } = await resumirUmDia({ storeRef, dia, buscas, ...resto });
+    await escreverResumoDeBuscas({ storeRef, resumo, atualizadoEm });
+    refeitos.push(dia);
+  }
+  return { diasRefeitos: refeitos, diasSemDadoBruto: semDadoBruto };
+}
+
 // Resumo do dia anterior, gravacao, e so entao a limpeza.
 async function rodarResumoDeBuscas({
   storeRef,
@@ -383,44 +475,38 @@ async function rodarResumoDeBuscas({
   // Injetados pelo index.js: PurchaseRequests e colecao da raiz, nao da loja.
   carregarPedidos = null,
   testAccountIdsFor = null,
+  // Indice de Users montado uma vez por passada e reaproveitado nas quatro lojas.
+  indiceDeUsuarios = null,
+  diasRefeitosPorPassada = DIAS_REFEITOS_POR_PASSADA,
   limpar = true,
 }) {
   const dia = diaAnterior(agora);
-  const buscas = await carregarBuscasDoDia({ storeRef, dia });
-
-  // Pedidos lidos so quando ha busca com cliente: sem cliente nao ha conversao a apurar.
-  // A janela vai do comeco do dia ate 2 horas depois do fim dele, porque busca das 23h50
-  // converte com pedido da meia-noite e meia.
-  let pedidos = [];
-  let testAccountIds = new Set();
-  let pedidosLidos = 0;
-  const temCliente = buscas.some((busca) => busca?.clienteId);
-  if (temCliente && carregarPedidos) {
-    const { inicio, fim } = limitesDoDia(dia);
-    pedidos = await carregarPedidos({
-      inicio,
-      fim: new Date(fim.getTime() + PROBABLE_ORDER_WINDOW_MS),
-    }) || [];
-    pedidosLidos = pedidos.length;
-    if (testAccountIdsFor) testAccountIds = await testAccountIdsFor(pedidos);
-  }
-
-  const resumo = resumirBuscas({
-    buscas, dia, pedidos, testAccountIds,
+  const umDia = await resumirUmDia({
+    storeRef,
+    dia,
+    carregarPedidos,
+    testAccountIdsFor,
+    documentIdPath,
+    mirroredProducts,
+    indiceDeUsuarios,
   });
-
-  // Catalogo lido uma vez por loja, e so se houver termo sem resultado para marcar.
-  let catalogoLido = 0;
-  let origemDosProdutos = 'nao-precisou';
-  if (termosSemResultado(resumo).length) {
-    const nomes = await carregarNomesDoCatalogo({ storeRef, documentIdPath, mirroredProducts });
-    catalogoLido = nomes.length;
-    origemDosProdutos = Array.isArray(mirroredProducts) ? 'espelho' : 'recuo';
-    marcarTermosSemResultado({ resumo, nomes });
-  }
+  const { resumo, pedidosLidos, catalogoLido, origemDosProdutos } = umDia;
 
   const gravado = await escreverResumoDeBuscas({
     storeRef, resumo, atualizadoEm, diasNoTopo, diasComDocumento,
+  });
+
+  // Depois do dia corrente: dia de versao antiga e refeito, com teto por passada.
+  const migracao = await refazerDiasAntigos({
+    storeRef,
+    diaCorrente: dia,
+    atualizadoEm,
+    maximoDeDias: diasRefeitosPorPassada,
+    carregarPedidos,
+    testAccountIdsFor,
+    documentIdPath,
+    mirroredProducts,
+    indiceDeUsuarios,
   });
 
   let removidos = 0;
@@ -449,6 +535,9 @@ async function rodarResumoDeBuscas({
     pedidosLidos,
     origemDosProdutos,
     ...gravado,
+    diasRefeitos: migracao.diasRefeitos.length,
+    ...(migracao.diasRefeitos.length ? { diasRefeitosEm: migracao.diasRefeitos } : {}),
+    ...(migracao.diasSemDadoBruto.length ? { diasSemDadoBruto: migracao.diasSemDadoBruto } : {}),
     removidos,
     ...(falhaNaLimpeza ? { falhaNaLimpeza } : {}),
   };
@@ -471,7 +560,9 @@ module.exports = {
   limparBuscasAntigas,
   marcarTermosSemResultado,
   momentosDePedidoPorCliente,
+  refazerDiasAntigos,
   resumirBuscas,
+  resumirUmDia,
   termosSemResultado,
   virouPedido,
   resumoReference,

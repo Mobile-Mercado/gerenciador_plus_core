@@ -64,6 +64,69 @@ function emBlocos(ids, tamanho) {
   return blocos.length ? blocos : [[]];
 }
 
+// As outras pontas das conversas da loja: participante de Chats e usuario das conversas
+// do agente. ATENCAO: Chats guarda, em parte dos documentos, o uid do Authentication em
+// senderId e receiverId, enquanto Users e indexado pelo id do documento. O descasamento
+// nasce no app do cliente; aqui ele e traduzido, sem tocar em Chats.
+async function participantesDeConversa({ db, storeRef }) {
+  const { id } = storeRef;
+  const chats = db.collection('Chats');
+  const [comoRemetente, comoDestino, conversas] = await Promise.all([
+    chats.where('senderId', '==', id).select('receiverId').get(),
+    chats.where('receiverId', '==', id).select('senderId').get(),
+    db.collectionGroup('conversas').where('companyId', '==', id).select('userId').get(),
+  ]);
+
+  const deChats = new Set();
+  const doAgente = new Set();
+  const guardar = (conjunto, valor) => {
+    const encontrado = idDeReferencia(valor);
+    if (encontrado && encontrado !== id) conjunto.add(encontrado);
+  };
+  comoRemetente.docs.forEach((documento) => guardar(deChats, documento.get('receiverId')));
+  comoDestino.docs.forEach((documento) => guardar(deChats, documento.get('senderId')));
+  conversas.docs.forEach((documento) => guardar(doAgente, documento.get('userId')));
+
+  return {
+    deChats,
+    doAgente,
+    lidos: comoRemetente.size + comoDestino.size + conversas.size,
+  };
+}
+
+// Traducao para id de documento em Users, nesta ordem: id que ja e documento entra como
+// esta; uid que casa com um documento entra traduzido; uid com dois documentos nao entra e
+// nao escolhe nada; id que nao existe em lugar nenhum nao entra.
+function traduzirParaDocumentos(ids, indiceDeUsuarios) {
+  const documentos = new Set();
+  const contagem = { direto: 0, traduzidos: 0, ambiguos: 0, inexistentes: 0 };
+  ids.forEach((id) => {
+    if (!id) return;
+    if (!indiceDeUsuarios) {
+      documentos.add(id);
+      contagem.direto += 1;
+      return;
+    }
+    if (indiceDeUsuarios.porDocumento?.has(id)) {
+      documentos.add(id);
+      contagem.direto += 1;
+      return;
+    }
+    if (indiceDeUsuarios.ambiguo?.(id)) {
+      contagem.ambiguos += 1;
+      return;
+    }
+    const encontrado = indiceDeUsuarios.procurar?.(id);
+    if (encontrado?.id) {
+      documentos.add(encontrado.id);
+      contagem.traduzidos += 1;
+      return;
+    }
+    contagem.inexistentes += 1;
+  });
+  return { documentos, contagem };
+}
+
 // Varre os pedidos da loja uma vez e devolve os ids de cliente.
 async function clientesDosPedidos({ db, storeRef }) {
   const snapshot = await db
@@ -82,14 +145,25 @@ async function clientesDosPedidos({ db, storeRef }) {
 // Blocos primeiro, indice por ultimo: passada morta no meio deixa o indice antigo, que
 // aponta para blocos que existem.
 async function gerarListaDeClientes({
-  db, storeRef, geradoEm, tamanhoDoBloco = TAMANHO_DO_BLOCO,
+  db, storeRef, geradoEm, tamanhoDoBloco = TAMANHO_DO_BLOCO, indiceDeUsuarios = null,
 }) {
   const { ids: dosPedidos, pedidosLidos } = await clientesDosPedidos({ db, storeRef });
+  const { deChats, doAgente, lidos: conversasLidas } = await participantesDeConversa({ db, storeRef });
+
+  const pedidos = traduzirParaDocumentos(dosPedidos, indiceDeUsuarios);
+  const chats = traduzirParaDocumentos(deChats, indiceDeUsuarios);
+  const agente = traduzirParaDocumentos(doAgente, indiceDeUsuarios);
+
   const anterior = await lerListaDeClientes({ storeRef });
   const anteriores = anterior.ids || [];
 
-  // Uniao: nenhum id sai, nem quando o pedido dele desaparece.
-  const todos = [...new Set([...anteriores, ...dosPedidos])].sort();
+  // Uniao: nenhum id sai, nem quando o pedido ou a conversa dele desaparece.
+  const todos = [...new Set([
+    ...anteriores,
+    ...pedidos.documentos,
+    ...chats.documentos,
+    ...agente.documentos,
+  ])].sort();
   const blocos = emBlocos(todos, tamanhoDoBloco);
 
   for (let numero = 0; numero < blocos.length; numero += 1) {
@@ -113,12 +187,22 @@ async function gerarListaDeClientes({
     removidos += 1;
   }
 
+  const somar = (campo) => pedidos.contagem[campo] + chats.contagem[campo] + agente.contagem[campo];
   return {
     total: todos.length,
     novos: todos.length - anteriores.length,
     blocos: blocos.length,
     blocosRemovidos: removidos,
     pedidosLidos,
+    conversasLidas,
+    deOrigem: {
+      pedidos: pedidos.documentos.size,
+      chats: chats.documentos.size,
+      agente: agente.documentos.size,
+    },
+    traduzidos: somar('traduzidos'),
+    ambiguos: somar('ambiguos'),
+    inexistentes: somar('inexistentes'),
   };
 }
 
@@ -188,4 +272,6 @@ module.exports = {
   gerarListaDeClientes,
   lerListaDeClientes,
   listaReference,
+  participantesDeConversa,
+  traduzirParaDocumentos,
 };
