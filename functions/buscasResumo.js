@@ -239,6 +239,10 @@ async function escreverResumoDeBuscas({
     semResultado: resumo.semResultado,
     termosDistintos: resumo.termosDistintos,
     clientes: resumo.clientes,
+    // Conversao no topo tambem: qualquer periodo ate um ano sai de uma leitura, sem abrir
+    // os documentos de dia. Numero absoluto, como os outros; a porcentagem e da tela.
+    convertidas: resumo.convertidas,
+    semPedido: resumo.semPedido,
     documento: true,
   };
   // A janela do topo e de data, nao de quantidade: dia mais velho que ela perde a linha.

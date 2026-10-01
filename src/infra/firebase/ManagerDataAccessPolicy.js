@@ -1,7 +1,18 @@
+import { FieldValue } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 import { assertPermission } from '../../http/middlewares/requirePermission.js';
+// Lista de clientes gravada pela rotina noturna. Mesmo arquivo que a rotina usa, para a
+// regra de quem e cliente nao existir em duas versoes.
+import clientesDaLoja from '../../../functions/clientesDaLoja.js';
 
-const CUSTOMER_CACHE_TTL_MS = 5 * 60 * 1000;
+const { acrescentarClientes, clientesDosPedidos, lerListaDeClientes } = clientesDaLoja;
+
+// Trinta minutos: a lista de clientes so cresce, entao cache velho nao erra, so fica
+// incompleto, e o incompleto e resolvido pela verificacao pontual de isCustomer.
+const CUSTOMER_CACHE_TTL_MS = 30 * 60 * 1000;
+// Teto da verificacao pontual: uma varredura por loja a cada dez minutos. Sem ele, uma
+// sequencia de ids invalidos viraria uma varredura por chamada.
+const VERIFICATION_TTL_MS = 10 * 60 * 1000;
 // Status que contam como cancelamento do pedido: exigem requests.cancel.
 const CANCEL_STATUSES = new Set(['canceled', 'cancelled', 'cancelado', 'denied', 'giveUp']);
 const PRICE_FIELDS = new Set(['price', 'promotionPrice', 'historyPrice', 'previewPrice']);
@@ -83,10 +94,18 @@ export function permissionKeyForMutation(mutation, establishmentId) {
 }
 
 export class ManagerDataAccessPolicy {
-  constructor({ firestore, clock = () => Date.now() }) {
+  constructor({
+    firestore,
+    clock = () => Date.now(),
+    // Injetavel para o teste conferir quais ids sao acrescentados: a sentinela do
+    // FieldValue nao mostra o conteudo.
+    arrayUnion = (valores) => FieldValue.arrayUnion(...valores),
+  }) {
     this.firestore = firestore;
     this.clock = clock;
     this.customerCache = new Map();
+    this.conversationCache = new Map();
+    this.arrayUnion = arrayUnion;
   }
 
   assertActor(actor) {
@@ -199,10 +218,13 @@ export class ManagerDataAccessPolicy {
     const path = sourcePath(target);
     const [root] = pathParts(path);
 
+    // Cliente da loja, participante de conversa com ela, ou o proprio dono. Quem so
+    // conversou volta com os mesmos campos de sempre: a peneira do sanitizeDocument nao
+    // muda.
     if (root === 'Users' && pathParts(path).length === 1) {
-      const customerIds = await this.getCustomerIds(actor);
+      const legiveis = await this.getReadableUserIds(actor);
       return documents.filter((document) => (
-        document.id === actor.userId || customerIds.has(document.id)
+        document.id === actor.userId || legiveis.has(document.id)
       ));
     }
 
@@ -309,43 +331,122 @@ export class ManagerDataAccessPolicy {
     );
   }
 
+  // Cliente ou participante de conversa com a loja. A lista de clientes nunca e palavra
+  // final para negar: id fora dela dispara uma verificacao pontual, com teto de uma
+  // varredura por loja a cada dez minutos.
   async isCustomer(actor, userId) {
     if (!userId) return false;
     const ids = await this.getCustomerIds(actor);
-    return ids.has(userId);
+    if (ids.has(userId)) return true;
+    const conversationIds = await this.getConversationIds(actor);
+    if (conversationIds.has(userId)) return true;
+    return this.verifyCustomer(actor, userId);
   }
 
+  // Varre os pedidos da loja procurando o id, no maximo uma vez a cada dez minutos. O que
+  // achar entra na memoria e e acrescentado ao documento por arrayUnion.
+  async verifyCustomer(actor, userId) {
+    const cached = this.customerCache.get(actor.establishmentId);
+    const agora = this.clock();
+    if (cached?.verifiedAt && agora - cached.verifiedAt < VERIFICATION_TTL_MS) return false;
+
+    const { ids } = await clientesDosPedidos({
+      db: this.firestore,
+      storeRef: this.storeReference(actor.establishmentId),
+    });
+    const encontrado = ids.has(userId);
+    const atual = cached?.ids || new Set();
+    ids.forEach((id) => atual.add(id));
+    this.customerCache.set(actor.establishmentId, {
+      ids: atual,
+      loadedAt: agora,
+      verifiedAt: agora,
+      complete: true,
+    });
+
+    if (encontrado) {
+      try {
+        await acrescentarClientes({
+          storeRef: this.storeReference(actor.establishmentId),
+          ids: [userId],
+          arrayUnion: this.arrayUnion,
+        });
+      } catch (error) {
+        // Documento ainda nao criado pela rotina noturna: a memoria ja basta para esta
+        // chamada, e a rotina da noite grava o id.
+      }
+    }
+    return encontrado;
+  }
+
+  // Quem a loja pode ler em Users: cliente dela mais participante de conversa com ela.
+  // Usado pelo filterDocuments e pelo getScopedUsers do gateway, para os dois caminhos de
+  // leitura responderem o mesmo.
+  async getReadableUserIds(actor) {
+    const [customerIds, conversationIds] = await Promise.all([
+      this.getCustomerIds(actor),
+      this.getConversationIds(actor),
+    ]);
+    return new Set([...customerIds, ...conversationIds]);
+  }
+
+  storeReference(establishmentId) {
+    return this.firestore.collection('estabelecimentos').doc(establishmentId);
+  }
+
+  // Le a lista gravada pela rotina noturna (clientesDaLoja.js). Indice ausente ou bloco
+  // faltando caem na varredura direta, como era antes.
   async getCustomerIds(actor) {
     const cached = this.customerCache.get(actor.establishmentId);
     if (cached?.complete && this.clock() - cached.loadedAt < CUSTOMER_CACHE_TTL_MS) {
       return cached.ids;
     }
 
-    const establishmentReference = this.firestore
-      .collection('estabelecimentos')
-      .doc(actor.establishmentId);
-    const snapshot = await this.firestore
-      .collection('PurchaseRequests')
-      .where('companyReference', '==', establishmentReference)
-      .select(
-        'clientId',
-        'customerId',
-        'userId',
-        'clientReference',
-        'customerReference',
-        'userReference',
-      )
-      .get();
-    const ids = new Set();
-    snapshot.docs.forEach((document) => {
-      const id = clientIdFromOrder(document.data());
-      if (id) ids.add(id);
-    });
+    const storeRef = this.storeReference(actor.establishmentId);
+    const lista = await lerListaDeClientes({ storeRef });
+    const ids = lista.ids
+      ? new Set(lista.ids)
+      : (await clientesDosPedidos({ db: this.firestore, storeRef })).ids;
+
     this.customerCache.set(actor.establishmentId, {
       ids,
       loadedAt: this.clock(),
+      verifiedAt: cached?.verifiedAt,
       complete: true,
+      origem: lista.ids ? 'documento' : `recuo:${lista.motivo}`,
     });
+    return ids;
+  }
+
+  // Quem conversa com a loja: participante de Chats e usuario das conversas do agente.
+  // Mesmo cache por loja, mesmo prazo. Duas consultas a mais por renovacao, nenhuma por
+  // chamada.
+  async getConversationIds(actor) {
+    const cached = this.conversationCache.get(actor.establishmentId);
+    if (cached && this.clock() - cached.loadedAt < CUSTOMER_CACHE_TTL_MS) return cached.ids;
+
+    const { establishmentId } = actor;
+    const chats = this.firestore.collection('Chats');
+    const [comoRemetente, comoDestino, conversas] = await Promise.all([
+      chats.where('senderId', '==', establishmentId).select('receiverId').get(),
+      chats.where('receiverId', '==', establishmentId).select('senderId').get(),
+      this.firestore
+        .collectionGroup('conversas')
+        .where('companyId', '==', establishmentId)
+        .select('userId')
+        .get(),
+    ]);
+
+    const ids = new Set();
+    const guardar = (valor) => {
+      const id = referenceId(valor);
+      if (id && id !== establishmentId) ids.add(id);
+    };
+    comoRemetente.docs.forEach((document) => guardar(document.get('receiverId')));
+    comoDestino.docs.forEach((document) => guardar(document.get('senderId')));
+    conversas.docs.forEach((document) => guardar(document.get('userId')));
+
+    this.conversationCache.set(establishmentId, { ids, loadedAt: this.clock() });
     return ids;
   }
 

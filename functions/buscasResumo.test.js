@@ -310,8 +310,28 @@ test('dia sem nenhuma busca grava resumo zerado, sem termos', async () => {
   assert.deepEqual(registro.dias[DIA].porCliente, []);
   assert.equal(registro.gravados.resumo.dias.length, 1);
   assert.deepEqual(registro.gravados.resumo.dias[0], {
-    dia: DIA, buscas: 0, semResultado: 0, termosDistintos: 0, clientes: 0, documento: true,
+    dia: DIA, buscas: 0, semResultado: 0, termosDistintos: 0, clientes: 0, convertidas: 0, semPedido: 0, documento: true,
   });
+});
+
+test('a linha do topo leva convertidas e semPedido, para a conversao de um periodo sair de uma leitura', async () => {
+  const { storeRef, registro } = firestoreFalso({
+    logs: [busca({ em: em(10) }), busca({ clienteId: 'cliente-2', em: em(12) })],
+  });
+
+  await rodarResumoDeBuscas({
+    storeRef,
+    agora: AGORA,
+    atualizadoEm: 'quando',
+    carregarPedidos: async () => [pedido({ createdAt: em(11, 59) })],
+  });
+
+  const linha = registro.gravados.resumo.dias.at(-1);
+  assert.equal(linha.dia, DIA);
+  assert.equal(linha.convertidas, 1);
+  assert.equal(linha.semPedido, 1);
+  // semCliente nao entra em card nenhum: fica so no documento do dia.
+  assert.equal('semCliente' in linha, false);
 });
 
 test('o resumo acumula um dia por vez, sem apagar o historico', async () => {
