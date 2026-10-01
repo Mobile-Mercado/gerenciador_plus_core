@@ -10,7 +10,7 @@ const AGORA = new Date('2026-09-30T18:00:00Z');
 // Gateway em producao prova pagamento; em homologacao, nao. Loja sem gateway cai fora
 // pelo mode do pedido.
 const LOJAS = {
-  'loja-prod': { paymentGateway: { provider: 'safrapay', enabled: true, safrapay: { environment: 'prod' } } },
+  'loja-prod': { name: 'Super Zero Grau', paymentGateway: { provider: 'safrapay', enabled: true, safrapay: { environment: 'prod' } } },
   'loja-hml': { paymentGateway: { provider: 'safrapay', enabled: true, safrapay: { environment: 'hml' } } },
   'loja-sem-ambiente': { paymentGateway: { provider: 'safrapay', enabled: true } },
   'loja-sem-gateway': { name: 'Sem gateway' },
@@ -315,4 +315,39 @@ test('limite de tentativas por origem: 10 por minuto', async () => {
   } finally {
     server.close();
   }
+});
+
+test('pedido sem nome de loja usa o nome do documento da loja', async () => {
+  const { app } = servidor({ p1: pedido({ companyName: '' }) });
+
+  const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+
+  assert.equal(body.data.loja, 'Super Zero Grau');
+});
+
+test('pedido com nome de loja mantem o do pedido, que e o do momento da compra', async () => {
+  const { app } = servidor({ p1: pedido({ companyName: 'Zero Grau Centro' }) });
+
+  const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+
+  assert.equal(body.data.loja, 'Zero Grau Centro');
+});
+
+test('sem nome no pedido e sem nome na loja, o campo vem vazio, nao indefinido', async () => {
+  const { app } = servidor({
+    p1: pedido({ companyName: '  ', companyReference: refLoja('loja-hml') }),
+  });
+
+  const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+
+  assert.equal(body.data.loja, '');
+});
+
+test('a resposta da gravacao tambem traz o nome da loja', async () => {
+  const { app } = servidor({ p1: pedido({ companyName: '' }) });
+
+  const { body } = await chamar(app, 'entregue', { codigo: 'A7K2Z9' });
+
+  assert.equal(body.data.loja, 'Super Zero Grau');
+  assert.equal(body.data.status, 'entregue');
 });

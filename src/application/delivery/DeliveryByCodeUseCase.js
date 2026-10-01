@@ -30,7 +30,7 @@ export class DeliveryByCodeUseCase {
     const snapshot = await this.findOrder(codigo);
     const pedido = snapshot.data();
     const loja = await lerLoja(pedido, (referencia) => referencia.get());
-    return resumoDoPedido(pedido, emProducao(loja));
+    return resumoDoPedido(pedido, { gatewayEmProducao: emProducao(loja), loja });
   }
 
   // Transacao: duas marcacoes seguidas com o mesmo codigo nao passam as duas, porque a
@@ -58,7 +58,9 @@ export class DeliveryByCodeUseCase {
       };
       assertCamposPermitidos(alteracao);
       transaction.update(snapshot.ref, alteracao);
-      return { pedido, entregador, ref: snapshot.ref, producao: emProducao(loja) };
+      return {
+        pedido, entregador, ref: snapshot.ref, producao: emProducao(loja), loja,
+      };
     });
 
     if (!resultado) throw linkInvalido();
@@ -67,7 +69,10 @@ export class DeliveryByCodeUseCase {
     const gravado = await resultado.ref.get();
     const deliveredAt = gravado.get('deliveredAt');
     return {
-      ...resumoDoPedido(resultado.pedido, resultado.producao),
+      ...resumoDoPedido(resultado.pedido, {
+        gatewayEmProducao: resultado.producao,
+        loja: resultado.loja,
+      }),
       status: 'entregue',
       marcadoPor: resultado.entregador,
       origem: ORIGEM,
@@ -131,13 +136,24 @@ function emProducao(loja) {
   return AMBIENTES_DE_PRODUCAO.has(String(ambiente || '').trim().toLowerCase());
 }
 
-function resumoDoPedido(pedido = {}, gatewayEmProducao = false) {
+// O nome da loja no pedido e o nome no momento da compra, e por isso tem precedencia. Mas
+// o app do cliente grava companyName vazio: os 255 pedidos da Zero Grau estao em branco.
+// Nesse caso vale o nome do documento da loja, que a leitura do gateway ja trouxe.
+function nomeDaLoja(pedido = {}, loja = null) {
+  const doPedido = String(pedido.companyName || '').trim();
+  if (doPedido) return doPedido;
+  return String(
+    loja?.fantasyName || loja?.name || loja?.corporateName || loja?.coorporativeName || '',
+  ).trim();
+}
+
+function resumoDoPedido(pedido = {}, { gatewayEmProducao = false, loja = null } = {}) {
   const endereco = pedido.address || {};
   const pagamento = pedido.purchasePayment || {};
   const troco = Number(pagamento.valueBack || 0);
   return {
     pedido: pedido.orderNumber || '',
-    loja: pedido.companyName || '',
+    loja: nomeDaLoja(pedido, loja),
     cliente: String(pedido.clientName || '').trim().split(/\s+/)[0] || '',
     telefone: pedido.clientePhoneNumber || '',
     endereco: enderecoEmUmaLinha(endereco),
