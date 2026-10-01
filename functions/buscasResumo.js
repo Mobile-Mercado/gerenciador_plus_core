@@ -116,6 +116,7 @@ function virouPedido(momentos = [], quando) {
 // pedidos: os do dia, para o cruzamento de conversao.
 function resumirBuscas({
   buscas = [], dia, pedidos = [], testAccountIds = new Set(), indiceDeUsuarios = null,
+  marcaDaLoja = null,
 }) {
   const pedidosPorCliente = momentosDePedidoPorCliente(pedidos, testAccountIds);
   const termos = new Map();
@@ -188,7 +189,9 @@ function resumirBuscas({
         // Id do documento em Users, para o painel casar a busca com o cadastro. Nulo
         // quando o uid nao tem documento, ou quando tem mais de um: escolher no escuro e
         // pior que nao ter. O clienteId segue cru, pela regra do registro bruto.
-        clienteDocId: indiceDeUsuarios ? indiceDeUsuarios.documentoDe(cliente.clienteId) : null,
+        clienteDocId: indiceDeUsuarios
+          ? indiceDeUsuarios.documentoDe(cliente.clienteId, marcaDaLoja)
+          : null,
         buscas: cliente.buscas,
         convertidas: cliente.convertidas,
         termos: [...cliente.termos.values()].sort(maisVezes),
@@ -387,6 +390,7 @@ async function resumirUmDia({
   documentIdPath = null,
   mirroredProducts = null,
   indiceDeUsuarios = null,
+  marcaDaLoja = null,
   buscas = null,
 }) {
   const doDia = buscas || await carregarBuscasDoDia({ storeRef, dia });
@@ -408,7 +412,7 @@ async function resumirUmDia({
   }
 
   const resumo = resumirBuscas({
-    buscas: doDia, dia, pedidos, testAccountIds, indiceDeUsuarios,
+    buscas: doDia, dia, pedidos, testAccountIds, indiceDeUsuarios, marcaDaLoja,
   });
 
   // Catalogo lido uma vez por dia resumido, e so se houver termo sem resultado.
@@ -477,6 +481,7 @@ async function rodarResumoDeBuscas({
   testAccountIdsFor = null,
   // Indice de Users montado uma vez por passada e reaproveitado nas quatro lojas.
   indiceDeUsuarios = null,
+  marcaDaLoja = null,
   diasRefeitosPorPassada = DIAS_REFEITOS_POR_PASSADA,
   limpar = true,
 }) {
@@ -489,6 +494,7 @@ async function rodarResumoDeBuscas({
     documentIdPath,
     mirroredProducts,
     indiceDeUsuarios,
+    marcaDaLoja,
   });
   const { resumo, pedidosLidos, catalogoLido, origemDosProdutos } = umDia;
 
