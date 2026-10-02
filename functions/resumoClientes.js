@@ -22,6 +22,8 @@
 //
 // Arquivo puro: nao requer firebase-admin nem firebase-functions. Para gravar, recebe db e
 // o FieldValue de quem chamou.
+const { marcarMudanca } = require('./marcador');
+
 const RESUMO_VERSION = 1;
 const RESUMO_COLLECTION = 'ResumoClientes';
 const TOTAL_DE_BLOCOS = 16;
@@ -364,6 +366,8 @@ function blocoReference(db, lojaId, bloco) {
 // Recalcula um cliente numa loja e grava so a entrada dele no bloco. O segmento nao e
 // recalculado aqui: depende do LTV medio da loja inteira e fica com a rotina da madrugada.
 // Merge com objeto aninhado (e nao caminho com ponto) para o id nunca virar caminho.
+// Depois de gravar ou remover, soma 'clientes' no marcador: e o sinal para a tela Clientes
+// reler os blocos, ja com o resumo pronto.
 async function recalcularCliente({ db, FieldValue, lojaId, clienteId }) {
   const lojaRef = db.collection('estabelecimentos').doc(lojaId);
   const [pedidos, usuario] = await Promise.all([
@@ -383,6 +387,7 @@ async function recalcularCliente({ db, FieldValue, lojaId, clienteId }) {
   if (!resumo) {
     if (!gravado) return { acao: 'nada', bloco };
     await ref.set({ clientes: { [clienteId]: FieldValue.delete() } }, { merge: true });
+    await marcarMudanca({ db, FieldValue, lojaId, tipo: 'clientes' });
     return { acao: 'removeu', bloco };
   }
 
@@ -392,6 +397,7 @@ async function recalcularCliente({ db, FieldValue, lojaId, clienteId }) {
     versaoResumo: RESUMO_VERSION,
     atualizadoEm: FieldValue.serverTimestamp(),
   }, { merge: true });
+  await marcarMudanca({ db, FieldValue, lojaId, tipo: 'clientes' });
   return { acao: 'gravou', bloco };
 }
 

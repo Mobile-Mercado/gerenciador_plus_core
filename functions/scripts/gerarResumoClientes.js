@@ -8,6 +8,7 @@ const {
   resumirCliente,
   segmentoDoCliente,
 } = require('../resumoClientes');
+const { marcarMudanca } = require('../marcador');
 
 const USERS_POR_LOTE = 100;
 
@@ -129,6 +130,8 @@ async function main() {
   });
   await batch.commit();
   console.log(`\nGravados ${blocos.size} blocos em estabelecimentos/${lojaId}/${RESUMO_COLLECTION}.`);
+  await marcarMudanca({ db, FieldValue: admin.firestore.FieldValue, lojaId, tipo: 'clientes' });
+  console.log(`Marcador: clientes somado em estabelecimentos/${lojaId}/Stats/marcador.`);
 }
 
 main().catch((error) => {

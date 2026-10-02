@@ -866,6 +866,15 @@ exports.segmentarClientesNightly = onSchedule(
             await bloco.set({ clientes: { [chave]: { segmento } } }, { merge: true });
             mudaram += 1;
           }
+          // Uma marca por loja, so quando algum segmento mudou: a tela Clientes rele os blocos.
+          if (mudaram > 0) {
+            await marcarMudanca({
+              db,
+              FieldValue: admin.firestore.FieldValue,
+              lojaId: establishmentId,
+              tipo: 'clientes',
+            });
+          }
 
           report.push({ establishmentId, clientes: clientes.length, mudaram, semCadastro });
           await registrarNoite(snapshot.ref, 'segmentarClientesNightly', {
