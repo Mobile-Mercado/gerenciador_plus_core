@@ -52,9 +52,24 @@ test('conversas usa o proprio campo, sem tocar no de pedidos', async () => {
   assert.deepEqual(Object.keys(registro.gravados[0].dados).sort(), ['conversas', 'conversasEm', 'versaoMarcador']);
 });
 
+test('aceita clientes e grava clientes e clientesEm no marcador da loja', async () => {
+  const { db, registro } = firestoreFalso();
+  await marcarMudanca({ db, FieldValue, lojaId: 'loja-1', tipo: 'clientes' });
+
+  assert.deepEqual(registro.gravados, [{
+    caminho: `estabelecimentos/loja-1/Stats/${MARCADOR_DOCUMENT}`,
+    dados: {
+      clientes: { increment: 1 },
+      clientesEm: { serverTimestamp: true },
+      versaoMarcador: MARCADOR_VERSION,
+    },
+    opcoes: { merge: true },
+  }]);
+});
+
 test('recusa tipo invalido e nao grava', async () => {
   const { db, registro } = firestoreFalso();
-  await assert.rejects(marcarMudanca({ db, FieldValue, lojaId: 'loja-1', tipo: 'clientes' }), /invalido/);
+  await assert.rejects(marcarMudanca({ db, FieldValue, lojaId: 'loja-1', tipo: 'vendas' }), /invalido/);
   await assert.rejects(marcarMudanca({ db, FieldValue, lojaId: 'loja-1' }), /invalido/);
   assert.equal(registro.gravados.length, 0);
 });

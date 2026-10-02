@@ -227,12 +227,17 @@ test('cadastroMudou: nome muda, segmento nao conta, sem mudanca e falso', () => 
 });
 
 // FieldValue e Firestore de mentira. O set com merge mescla o mapa clientes como o
-// Firestore faz, e o sentinela de delete tira a entrada.
+// Firestore faz, e o sentinela de delete tira a entrada. Gravacao em Stats (o marcador)
+// fica separada, em registro.marcas.
 const DELETE = { delete: true };
-const FieldValueFalso = { delete: () => DELETE, serverTimestamp: () => ({ serverTimestamp: true }) };
+const FieldValueFalso = {
+  delete: () => DELETE,
+  increment: (n) => ({ increment: n }),
+  serverTimestamp: () => ({ serverTimestamp: true }),
+};
 
 function firestoreDoResumo({ pedidos = [], usuarios = {}, blocos = {} } = {}) {
-  const registro = { blocos: JSON.parse(JSON.stringify(blocos)), sets: [], consultas: [] };
+  const registro = { blocos: JSON.parse(JSON.stringify(blocos)), sets: [], consultas: [], marcas: [] };
   const consulta = (filtros = []) => ({
     where: (campo, _op, valor) => consulta([...filtros, [campo, valor]]),
     async get() {
@@ -245,7 +250,13 @@ function firestoreDoResumo({ pedidos = [], usuarios = {}, blocos = {} } = {}) {
   });
   const lojaDoc = (lojaId) => ({
     path: `estabelecimentos/${lojaId}`,
-    collection: () => ({
+    collection: (subcolecao) => (subcolecao === 'Stats' ? {
+      doc: (documento) => ({
+        async set(dados, opcoes) {
+          registro.marcas.push({ caminho: `estabelecimentos/${lojaId}/Stats/${documento}`, dados, opcoes });
+        },
+      }),
+    } : {
       doc: (bloco) => {
         const chave = `${lojaId}/${bloco}`;
         return {
@@ -343,4 +354,35 @@ test('recalcularCliente nao cria bloco so para remover', async () => {
   const resultado = await recalcularCliente({ db, FieldValue: FieldValueFalso, lojaId: 'loja-1', clienteId: 'cliente-1' });
   assert.deepEqual(resultado, { acao: 'nada', bloco: blocoDoCliente('cliente-1') });
   assert.equal(registro.sets.length, 0);
+});
+
+const MARCA_DE_CLIENTES = {
+  caminho: 'estabelecimentos/loja-1/Stats/marcador',
+  dados: { clientes: { increment: 1 }, clientesEm: { serverTimestamp: true }, versaoMarcador: 1 },
+  opcoes: { merge: true },
+};
+
+test('recalcularCliente soma clientes no marcador quando grava', async () => {
+  const { db, registro } = firestoreDoResumo({ pedidos: [pedidoDaLoja()] });
+  const { acao } = await recalcularCliente({ db, FieldValue: FieldValueFalso, lojaId: 'loja-1', clienteId: 'cliente-1' });
+  assert.equal(acao, 'gravou');
+  assert.deepEqual(registro.marcas, [MARCA_DE_CLIENTES]);
+});
+
+test('recalcularCliente soma clientes no marcador quando remove', async () => {
+  const bloco = blocoDoCliente('cliente-1');
+  const { db, registro } = firestoreDoResumo({
+    pedidos: [],
+    blocos: { [`loja-1/${bloco}`]: { clientes: { 'cliente-1': { segmento: 'Novo' } } } },
+  });
+  const { acao } = await recalcularCliente({ db, FieldValue: FieldValueFalso, lojaId: 'loja-1', clienteId: 'cliente-1' });
+  assert.equal(acao, 'removeu');
+  assert.deepEqual(registro.marcas, [MARCA_DE_CLIENTES]);
+});
+
+test('recalcularCliente nao soma clientes quando a acao e nada', async () => {
+  const { db, registro } = firestoreDoResumo({ pedidos: [pedidoDaLoja({ isTest: true })] });
+  const { acao } = await recalcularCliente({ db, FieldValue: FieldValueFalso, lojaId: 'loja-1', clienteId: 'cliente-1' });
+  assert.equal(acao, 'nada');
+  assert.deepEqual(registro.marcas, []);
 });

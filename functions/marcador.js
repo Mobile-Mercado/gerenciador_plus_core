@@ -2,7 +2,12 @@
 //
 // Existe para o painel trocar os streams sempre abertos de pedidos e conversas por uma
 // leitura pequena a cada 30 s: o painel le este documento e so rele a lista quando o
-// numero de pedidos ou de conversas muda.
+// contador dela muda.
+//
+// Tres contadores: pedidos (pedido gravado), conversas (chat ou mensagem gravados) e
+// clientes (resumo de um cliente gravado ou removido em ResumoClientes). A tela Clientes
+// segue o de clientes, nao o de pedidos, porque o de pedidos sobe antes de o resumo
+// estar pronto.
 //
 // O marcador so CONTA mudancas. Nao guarda dado de pedido, de conversa nem de cliente:
 // apenas um contador e a hora da ultima mudanca de cada tipo.
@@ -11,7 +16,7 @@
 // gravar, o FieldValue de quem chamou.
 const MARCADOR_VERSION = 1;
 const MARCADOR_DOCUMENT = 'marcador';
-const TIPOS = new Set(['pedidos', 'conversas']);
+const TIPOS = new Set(['pedidos', 'conversas', 'clientes']);
 
 function idDeReferencia(valor) {
   if (!valor) return '';
