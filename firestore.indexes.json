@@ -309,6 +309,38 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "PurchaseRequests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "companyReference",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "currentPurchaseStatus",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "PurchaseRequests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "currentPurchaseStatus",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "aceiteExpiraEm",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": [
