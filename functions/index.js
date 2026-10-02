@@ -35,6 +35,13 @@ const {
 } = require('./provedoresDeLogin');
 const { gerarListaDeClientes } = require('./clientesDaLoja');
 const { lojasDaConversa, marcarMudanca } = require('./marcador');
+const {
+  RESUMO_COLLECTION,
+  TOTAL_DE_BLOCOS,
+  cadastroMudou,
+  recalcularCliente,
+  segmentoDoCliente,
+} = require('./resumoClientes');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -164,6 +171,55 @@ exports.marcarMensagemNoMarcador = onDocumentCreated(
       console.error('[marcarMensagemNoMarcador] Falha ao marcar mensagem', {
         chatId: event.params.chatId,
         messageId: event.params.messageId,
+        error,
+      });
+    }
+  },
+);
+
+// Resumo por cliente (estabelecimentos/{loja}/ResumoClientes/{bloco}). Os gatilhos
+// recalculam so o cliente tocado; o segmento fica com segmentarClientesNightly. Falha aqui
+// deixa o cliente desatualizado ate a proxima mudanca: registra e nunca lanca.
+exports.resumirClienteDoPedido = onDocumentWritten(
+  'PurchaseRequests/{orderId}',
+  async (event) => {
+    try {
+      // Antes e depois: pedido que trocou de cliente ou de loja recalcula as duas pontas.
+      const pares = new Map();
+      [event.data?.before?.data(), event.data?.after?.data()].forEach((pedido) => {
+        const lojaId = pedido ? extractCompanyId(pedido) : null;
+        const clienteId = pedido?.clientId ? String(pedido.clientId) : '';
+        if (lojaId && clienteId) pares.set(`${lojaId}|${clienteId}`, { lojaId: String(lojaId), clienteId });
+      });
+      for (const { lojaId, clienteId } of pares.values()) {
+        await recalcularCliente({ db, FieldValue: admin.firestore.FieldValue, lojaId, clienteId });
+      }
+    } catch (error) {
+      console.error('[resumirClienteDoPedido] Falha ao resumir cliente', {
+        orderId: event.params.orderId,
+        error,
+      });
+    }
+  },
+);
+
+exports.resumirClienteDoCadastro = onDocumentWritten(
+  'Users/{userId}',
+  async (event) => {
+    try {
+      if (!cadastroMudou(event.data?.before?.data(), event.data?.after?.data())) return;
+      const { userId } = event.params;
+      const pedidos = await db.collection('PurchaseRequests')
+        .where('clientId', '==', userId)
+        .select('companyId', 'companyReference', 'companyRef')
+        .get();
+      const lojas = new Set(pedidos.docs.map((doc) => extractCompanyId(doc.data())).filter(Boolean).map(String));
+      for (const lojaId of lojas) {
+        await recalcularCliente({ db, FieldValue: admin.firestore.FieldValue, lojaId, clienteId: userId });
+      }
+    } catch (error) {
+      console.error('[resumirClienteDoCadastro] Falha ao resumir cliente', {
+        userId: event.params.userId,
         error,
       });
     }
@@ -740,5 +796,93 @@ exports.listStoreCustomersNightly = onSchedule(
     const result = { lojas: report, segundos: Math.round((Date.now() - startedAt) / 1000) };
     console.log('[listStoreCustomersNightly] Passada concluida', result);
     return result;
+  },
+);
+
+// Segmento de cada cliente, pela regua do painel, em Users.segmento e no bloco do resumo.
+// Roda de madrugada porque o segmento depende do LTV medio da loja e dos dias desde a
+// ultima compra, que mudam sem nenhum pedido novo.
+exports.segmentarClientesNightly = onSchedule(
+  {
+    schedule: '45 1 * * *',
+    timeZone: 'America/Sao_Paulo',
+    region: 'us-central1',
+    memory: '512MiB',
+    timeoutSeconds: 1800,
+    retryCount: 0,
+  },
+  async () => {
+    try {
+      const startedAt = Date.now();
+      const agora = new Date();
+      const configSnapshot = await db.doc(IMAGE_CHECK_CONFIG_PATH).get();
+      const configuredIds = configuredEstablishmentIds(configSnapshot.data());
+      if (!configuredIds.length) {
+        console.log('[segmentarClientesNightly] Nenhuma loja habilitada em', IMAGE_CHECK_CONFIG_PATH);
+        return null;
+      }
+
+      const storeSnapshots = await db.getAll(
+        ...configuredIds.map((id) => db.collection('estabelecimentos').doc(id)),
+      );
+      const report = storeSnapshots
+        .filter((snapshot) => !snapshot.exists)
+        .map((snapshot) => ({ establishmentId: snapshot.id, status: 'inexistente' }));
+
+      for (const snapshot of storeSnapshots.filter((store) => store.exists)) {
+        const establishmentId = snapshot.id;
+        if (Date.now() - startedAt > IMAGE_CHECK_TIME_BUDGET_MS) {
+          report.push({ establishmentId, status: 'adiada' });
+          continue;
+        }
+        try {
+          const blocoRefs = Array.from({ length: TOTAL_DE_BLOCOS }, (_v, numero) => (
+            snapshot.ref.collection(RESUMO_COLLECTION).doc(String(numero).padStart(2, '0'))
+          ));
+          const blocos = await db.getAll(...blocoRefs);
+          const clientes = blocos.flatMap((bloco) => (
+            Object.entries(bloco.exists ? bloco.get('clientes') || {} : {})
+              .map(([chave, resumo]) => ({ bloco: bloco.ref, chave, resumo }))
+          ));
+          const ltvMedio = clientes.length
+            ? clientes.reduce((soma, { resumo }) => soma + (Number(resumo.ltv) || 0), 0) / clientes.length
+            : 0;
+
+          let mudaram = 0;
+          let semCadastro = 0;
+          for (const { bloco, chave, resumo } of clientes) {
+            const segmento = segmentoDoCliente({ resumo, ltvMedio, agora });
+            if (segmento === resumo.segmento) continue;
+            if (resumo.userId) {
+              try {
+                await db.collection('Users').doc(resumo.userId).update({ segmento });
+              } catch (error) {
+                // NOT_FOUND: cliente sem documento em Users. Nao cria; o bloco segue com o segmento.
+                if (error?.code !== 5) throw error;
+                semCadastro += 1;
+                console.log('[segmentarClientesNightly] Cliente sem Users', { establishmentId, userId: resumo.userId });
+              }
+            }
+            await bloco.set({ clientes: { [chave]: { segmento } } }, { merge: true });
+            mudaram += 1;
+          }
+
+          report.push({ establishmentId, clientes: clientes.length, mudaram, semCadastro });
+          await registrarNoite(snapshot.ref, 'segmentarClientesNightly', {
+            dados: { clientes: clientes.length, segmentosMudaram: mudaram, semCadastro },
+          });
+        } catch (error) {
+          console.error('[segmentarClientesNightly] Falha na loja', { establishmentId, error });
+          report.push({ establishmentId, status: 'falhou' });
+        }
+      }
+
+      const result = { lojas: report, segundos: Math.round((Date.now() - startedAt) / 1000) };
+      console.log('[segmentarClientesNightly] Passada concluida', result);
+      return result;
+    } catch (error) {
+      console.error('[segmentarClientesNightly] Falha na passada', { error });
+      return null;
+    }
   },
 );
