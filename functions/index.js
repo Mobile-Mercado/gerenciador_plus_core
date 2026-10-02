@@ -34,6 +34,7 @@ const {
   rodarProvedoresDeLogin,
 } = require('./provedoresDeLogin');
 const { gerarListaDeClientes } = require('./clientesDaLoja');
+const { lojasDaConversa, marcarMudanca } = require('./marcador');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -103,6 +104,71 @@ const extractCompanyId = (orderDoc = {}) => {
   }
   return null;
 };
+
+// Marcador de mudancas (estabelecimentos/{loja}/Stats/marcador). Falha aqui so deixa o
+// painel um ciclo atrasado: registra e nunca lanca, para o gatilho nao entrar em repeticao.
+exports.marcarPedidoNoMarcador = onDocumentWritten(
+  'PurchaseRequests/{orderId}',
+  async (event) => {
+    try {
+      const pedido = event.data?.after?.data() || event.data?.before?.data() || {};
+      await marcarMudanca({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        lojaId: extractCompanyId(pedido),
+        tipo: 'pedidos',
+      });
+    } catch (error) {
+      console.error('[marcarPedidoNoMarcador] Falha ao marcar pedido', {
+        orderId: event.params.orderId,
+        error,
+      });
+    }
+  },
+);
+
+exports.marcarConversaNoMarcador = onDocumentWritten(
+  'Chats/{chatId}',
+  async (event) => {
+    try {
+      const chat = event.data?.after?.data() || event.data?.before?.data() || {};
+      const lojas = await lojasDaConversa({ db, chat });
+      await Promise.all(lojas.map((lojaId) => marcarMudanca({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        lojaId,
+        tipo: 'conversas',
+      })));
+    } catch (error) {
+      console.error('[marcarConversaNoMarcador] Falha ao marcar conversa', {
+        chatId: event.params.chatId,
+        error,
+      });
+    }
+  },
+);
+
+exports.marcarMensagemNoMarcador = onDocumentCreated(
+  'Chats/{chatId}/Messages/{messageId}',
+  async (event) => {
+    try {
+      const chat = await db.collection('Chats').doc(event.params.chatId).get();
+      const lojas = await lojasDaConversa({ db, chat: chat.data() || {} });
+      await Promise.all(lojas.map((lojaId) => marcarMudanca({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        lojaId,
+        tipo: 'conversas',
+      })));
+    } catch (error) {
+      console.error('[marcarMensagemNoMarcador] Falha ao marcar mensagem', {
+        chatId: event.params.chatId,
+        messageId: event.params.messageId,
+        error,
+      });
+    }
+  },
+);
 
 const chunkArray = (items, size) => {
   const chunks = [];
