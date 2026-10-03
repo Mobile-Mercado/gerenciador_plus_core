@@ -1,6 +1,10 @@
 const admin = require('firebase-admin');
 const {
+  CONTAGEM_COLLECTION,
+  CONTAGEM_VERSION,
   DOCUMENTO_ABERTOS,
+  MES_SEM_DATA,
+  contagemDoMes,
   RESUMO_PEDIDOS_COLLECTION,
   RESUMO_PEDIDOS_VERSION,
   mesDoPedido,
@@ -24,8 +28,9 @@ function usage() {
     'Uso:',
     '  node scripts/gerarResumoPedidos.js --loja ID [--gravar] [--project ID]',
     '',
-    'Sem --gravar, so le: mostra pedidos e bytes por mes, o tamanho de abertos e os bytes',
-    'por pedido. Com --gravar, substitui os documentos de estabelecimentos/{loja}/ResumoPedidos.',
+    'Sem --gravar, so le: mostra pedidos e bytes por mes, o tamanho de abertos, os bytes',
+    'por pedido e a contagem por status de cada mes. Com --gravar, substitui os documentos',
+    'de estabelecimentos/{loja}/ResumoPedidos e de ResumoPedidosContagem.',
   ].join('\n');
 }
 
@@ -74,6 +79,17 @@ async function main() {
     : 0;
   console.log(`bytes por pedido: media ${media.toFixed(0)}, maximo ${bytesPorPedido.length ? Math.max(...bytesPorPedido) : 0}`);
 
+  // Contagem por status de cada mes (cards Pedidos, Entregues e Cancelados da Home).
+  const contagens = [...meses.entries()]
+    .filter(([mes]) => mes !== MES_SEM_DATA)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([mes, pedidos]) => [mes, contagemDoMes(pedidos)]);
+  console.log('\ncontagem | pedidos (confirmados) | nao concretizados | em aberto | entregues | cancelados | bytes');
+  contagens.forEach(([mes, contagem]) => {
+    const soma = (grupo) => contagem.app[grupo] + contagem.agent[grupo];
+    console.log(`${mes} | ${soma('confirmed')} | ${soma('notConcretized')} | ${soma('open')} | ${soma('delivered')} | ${soma('canceled')} | ${bytesDe(contagem)}`);
+  });
+
   if (!gravar) {
     console.log('\nSimulacao: nada foi gravado. Use --gravar para gravar os documentos.');
     return;
@@ -92,6 +108,19 @@ async function main() {
     await batch.commit();
   }
   console.log(`\nGravados ${documentos.length} documentos em estabelecimentos/${lojaId}/${RESUMO_PEDIDOS_COLLECTION}.`);
+  // A contagem substitui o documento inteiro de cada mes.
+  for (let inicio = 0; inicio < contagens.length; inicio += OPERACOES_POR_LOTE) {
+    const batch = db.batch();
+    contagens.slice(inicio, inicio + OPERACOES_POR_LOTE).forEach(([mes, contagem]) => {
+      batch.set(lojaRef.collection(CONTAGEM_COLLECTION).doc(mes), {
+        ...contagem,
+        versaoContagem: CONTAGEM_VERSION,
+        atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+    await batch.commit();
+  }
+  console.log(`Gravadas ${contagens.length} contagens em estabelecimentos/${lojaId}/${CONTAGEM_COLLECTION}.`);
   await marcarMudanca({ db, FieldValue: admin.firestore.FieldValue, lojaId, tipo: 'listaDePedidos' });
   console.log(`Marcador: listaDePedidos somado em estabelecimentos/${lojaId}/Stats/marcador.`);
 }

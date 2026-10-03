@@ -456,13 +456,117 @@ async function atualizarResumoDoPedido({
   }
 
   await Promise.all(gravacoes);
+  // Contagem por status dos meses tocados, recontada do mapa ja gravado.
+  const mesesTocados = new Map();
+  [velho, novo].filter(Boolean).forEach(({ lojaId, mes }) => mesesTocados.set(`${lojaId}|${mes}`, { lojaId, mes }));
+  await Promise.all([...mesesTocados.values()].map(({ lojaId, mes }) => recontarMes({ db, FieldValue, lojaId, mes })));
   const lojas = [...new Set([velho?.lojaId, novo?.lojaId].filter(Boolean))];
   await Promise.all(lojas.map((lojaId) => marcarMudanca({ db, FieldValue, lojaId, tipo: 'listaDePedidos' })));
   return { acao: novo ? 'gravou' : 'removeu', lojas };
 }
 
+// ----- Contagem por status (cards Pedidos, Entregues e Cancelados da Home) -----
+//
+// Copia de useDailyStatsBridge.js (web_gerenciador_plus/src/features/dashboard), com
+// purchaseStatus.js e testOrders.js. Conta status, nao venda: por isso nao sai do
+// ResumoVendas. O mes e o de criacao, o mesmo do ResumoPedidos, e a conta sai sempre do
+// mapa pedidos do mes inteiro: numero exato, sem soma dupla.
+// Unica diferenca possivel: o status do resumo cai para o campo stats quando os outros
+// tres faltam; o card nao le stats. Nenhum pedido real das lojas depende disso (medido em
+// 03/10/2026).
+const CONTAGEM_COLLECTION = 'ResumoPedidosContagem';
+const CONTAGEM_VERSION = 1;
+
+const NOT_CONCRETIZED_STATUSES = new Set(['canceled', 'denied', 'giveup', 'refundrequested']);
+const OPEN_STATUSES = new Set(['pending', 'waitingfororderpayment']);
+const DELIVERED_STATUSES = new Set(['completed', 'delivered']);
+const CANCELED_STATUSES = new Set(['canceled', 'cancelled']);
+const confirmedPurchaseStatuses = new Set([
+  'accepted',
+  'picking',
+  'separatingorder',
+  'waitingfordelivery',
+  'waiting',
+  'deliveryroute',
+  'on_route',
+  'completed',
+  'delivered',
+]);
+
+function normalizePurchaseStatus(value) {
+  return String(value || '')
+    .replace(/^PurchaseStatus\./i, '')
+    .trim()
+    .toLowerCase();
+}
+
+function isConfirmedPurchaseStatus(value) {
+  return confirmedPurchaseStatuses.has(normalizePurchaseStatus(value));
+}
+
+// Grupos do card com os nomes do painel: confirmed (Pedidos), notConcretized (nao se
+// concretizaram), open (em aberto), delivered (Entregues) e canceled (Cancelados).
+const contagemVazia = () => ({
+  app: { confirmed: 0, notConcretized: 0, open: 0, delivered: 0, canceled: 0 },
+  agent: { confirmed: 0, notConcretized: 0, open: 0, delivered: 0, canceled: 0 },
+});
+
+// Conta os pedidos do mapa de um mes como summarizeOrders conta a janela. Teste fica fora,
+// pedido sem data fica fora e status fora das tres regras fica fora.
+function contagemDoMes(pedidos = {}) {
+  const contagem = contagemVazia();
+  Object.values(pedidos).forEach((resumo) => {
+    if (!resumo || resumo.isTest === true) return;
+    if (resumo.createdAt === null || resumo.createdAt === undefined) return;
+    const rawStatus = resumo.status === 'indefinido' ? '' : resumo.status;
+    const status = normalizePurchaseStatus(rawStatus);
+    const group = isConfirmedPurchaseStatus(rawStatus)
+      ? 'confirmed'
+      : NOT_CONCRETIZED_STATUSES.has(status)
+        ? 'notConcretized'
+        : OPEN_STATUSES.has(status) ? 'open' : null;
+    if (!group) return;
+    const channel = resumo.channel === 'agent' ? 'agent' : 'app';
+    contagem[channel][group] += 1;
+    if (DELIVERED_STATUSES.has(status)) contagem[channel].delivered += 1;
+    if (CANCELED_STATUSES.has(status)) contagem[channel].canceled += 1;
+  });
+  return contagem;
+}
+
+function contagemReference(db, lojaId, mes) {
+  return db.collection('estabelecimentos').doc(lojaId).collection(CONTAGEM_COLLECTION).doc(mes);
+}
+
+const mesmasContagens = (a, b) => ['app', 'agent'].every((canal) => Object.keys(contagemVazia().app)
+  .every((grupo) => Number(a?.[canal]?.[grupo] || 0) === Number(b?.[canal]?.[grupo] || 0)));
+
+// Le o mes em transacao, reconta e grava so se mudou. Mes sem data nao tem contagem: o
+// card deixa de fora pedido sem createdAt.
+async function recontarMes({ db, FieldValue, lojaId, mes }) {
+  if (mes === MES_SEM_DATA) return false;
+  return db.runTransaction(async (transacao) => {
+    const [mesSnap, contagemSnap] = await Promise.all([
+      transacao.get(resumoReference(db, lojaId, mes)),
+      transacao.get(contagemReference(db, lojaId, mes)),
+    ]);
+    const contagem = contagemDoMes(mesSnap.exists ? mesSnap.get('pedidos') || {} : {});
+    if (contagemSnap.exists && mesmasContagens(contagemSnap.data(), contagem)) return false;
+    transacao.set(contagemReference(db, lojaId, mes), {
+      ...contagem,
+      versaoContagem: CONTAGEM_VERSION,
+      atualizadoEm: FieldValue.serverTimestamp(),
+    });
+    return true;
+  });
+}
+
 module.exports = {
+  CONTAGEM_COLLECTION,
+  CONTAGEM_VERSION,
   DOCUMENTO_ABERTOS,
+  contagemDoMes,
+  recontarMes,
   MES_SEM_DATA,
   RESUMO_PEDIDOS_COLLECTION,
   RESUMO_PEDIDOS_VERSION,
