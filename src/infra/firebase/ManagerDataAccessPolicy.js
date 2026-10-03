@@ -654,11 +654,33 @@ function assertPedidoNaoEncerrado(pedido, data) {
   if (!trocaStatus) return;
   const statusAtual = String(pedido?.currentPurchaseStatus || '').replace(/^PurchaseStatus\./, '');
   if (STATUS_ENCERRADOS.has(statusAtual)) {
+    // Quem encerrou so vale se o carimbo e do status atual: carimbo de um status
+    // anterior, ou status gravado fora do painel, nao diz quem encerrou.
+    const carimbo = pedido?.statusAlteradoPor;
     throw new AppError('Este pedido ja foi encerrado e nao pode mudar de status.', {
       statusCode: 409,
       code: 'pedido_encerrado',
+      details: {
+        status: statusAtual,
+        por: carimbo?.status === statusAtual ? carimbo?.nome ?? null : null,
+      },
     });
   }
+}
+
+// Carimbo de quem trocou o status, gravado pelo Core junto com currentPurchaseStatus.
+// Fica fora de ORDER_UPDATE_FIELDS de proposito: o painel nao pode manda-lo.
+export function carimboDeStatus(actor, data) {
+  if (typeof data?.currentPurchaseStatus !== 'string') return data;
+  const usuario = actor?.userDocument;
+  return {
+    ...data,
+    statusAlteradoPor: {
+      uid: actor?.uid,
+      nome: usuario?.nome || usuario?.name || usuario?.email || null,
+      status: data.currentPurchaseStatus.replace(/^PurchaseStatus\./, ''),
+    },
+  };
 }
 
 // isTest e isTestAccount so aceitam true ou false.

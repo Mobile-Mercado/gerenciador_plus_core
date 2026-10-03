@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ManagerDataAccessPolicy } from '../src/infra/firebase/ManagerDataAccessPolicy.js';
+import { ManagerDataAccessPolicy, carimboDeStatus } from '../src/infra/firebase/ManagerDataAccessPolicy.js';
+import { FirestoreManagerDataGateway } from '../src/infra/firebase/FirestoreManagerDataGateway.js';
 
 const actor = {
   uid: 'uid-manager',
@@ -141,4 +142,133 @@ test('campo proibido em pedido encerrado continua dando o erro de campo, antes d
     mudarPedido('canceled', { ...TROCA_PARA_ACEITO, price: 1 }),
     (error) => error.code === 'data_order_fields_forbidden' && error.statusCode === 403,
   );
+});
+
+// ----- Carimbo de quem trocou o status -----
+
+const atorComNome = (userDocument) => ({ ...actorComPermissao, uid: 'uid-func', userDocument });
+
+test('carimbo com currentPurchaseStatus grava uid, nome e status sem prefixo', () => {
+  const data = { currentPurchaseStatus: 'PurchaseStatus.completed', statusList: [] };
+  const carimbado = carimboDeStatus(atorComNome({ nome: 'Ana Caixa', name: 'Outro' }), data);
+  assert.deepEqual(carimbado, {
+    currentPurchaseStatus: 'PurchaseStatus.completed',
+    statusList: [],
+    statusAlteradoPor: { uid: 'uid-func', nome: 'Ana Caixa', status: 'completed' },
+  });
+  assert.equal(data.statusAlteradoPor, undefined, 'nao altera o objeto recebido');
+});
+
+test('carimbo so com isTest nao muda nada', () => {
+  const data = { isTest: true };
+  assert.equal(carimboDeStatus(atorComNome({ nome: 'Ana' }), data), data);
+  const soLista = { statusList: [] };
+  assert.equal(carimboDeStatus(atorComNome({ nome: 'Ana' }), soLista), soLista);
+});
+
+test('nome do carimbo cai para name, depois email, e sem nenhum fica null', () => {
+  const nomeDe = (userDocument) => carimboDeStatus(
+    atorComNome(userDocument),
+    { currentPurchaseStatus: 'PurchaseStatus.accepted' },
+  ).statusAlteradoPor.nome;
+  assert.equal(nomeDe({ nome: null, name: 'Loja Centro' }), 'Loja Centro');
+  assert.equal(nomeDe({ nome: null, name: null, email: 'func@loja.test' }), 'func@loja.test');
+  assert.equal(nomeDe({ nome: null, name: null, email: null }), null);
+  assert.equal(nomeDe(undefined), null);
+});
+
+const pedidoComCarimbo = (status, carimbo) => ({
+  'PurchaseRequests/p1': {
+    companyReference: { id: 'store-1' },
+    currentPurchaseStatus: `PurchaseStatus.${status}`,
+    ...(carimbo === undefined ? {} : { statusAlteradoPor: carimbo }),
+  },
+});
+
+const erroAoMudar = async (pedidos) => {
+  const policy = new ManagerDataAccessPolicy({ firestore: firestoreDePedidos(pedidos) });
+  try {
+    await policy.assertMutation({
+      actor: actorComPermissao,
+      mutation: { operation: 'update', target: { path: 'PurchaseRequests/p1' }, data: TROCA_PARA_ACEITO },
+    });
+  } catch (error) {
+    return error;
+  }
+  throw new Error('a troca deveria ter sido recusada');
+};
+
+test('pedido_encerrado traz o status atual e quem colocou, quando o carimbo e desse status', async () => {
+  const error = await erroAoMudar(pedidoComCarimbo('giveUp', { uid: 'u1', nome: 'Bruno', status: 'giveUp' }));
+  assert.equal(error.code, 'pedido_encerrado');
+  assert.equal(error.statusCode, 409);
+  assert.equal(error.message, 'Este pedido ja foi encerrado e nao pode mudar de status.');
+  assert.deepEqual(error.details, { status: 'giveUp', por: 'Bruno' });
+});
+
+test('details.por e null com carimbo de outro status ou sem carimbo', async () => {
+  const outro = await erroAoMudar(pedidoComCarimbo('canceled', { uid: 'u1', nome: 'Bruno', status: 'deliveryRoute' }));
+  assert.deepEqual(outro.details, { status: 'canceled', por: null });
+  const semCarimbo = await erroAoMudar(pedidoComCarimbo('completed'));
+  assert.deepEqual(semCarimbo.details, { status: 'completed', por: null });
+});
+
+test('statusAlteradoPor mandado pelo painel continua recusado', async () => {
+  await assert.rejects(
+    mudarPedido('accepted', {
+      currentPurchaseStatus: 'PurchaseStatus.deliveryRoute',
+      statusAlteradoPor: { uid: 'x', nome: 'Forjado', status: 'deliveryRoute' },
+    }),
+    (error) => error.code === 'data_order_fields_forbidden' && error.statusCode === 403,
+  );
+});
+
+// Gateway sem Firestore real: politica de mentira que guarda o que viu, e um Firestore
+// que so registra as gravacoes.
+function gatewayDeMentira() {
+  const registro = { politicaViu: [], gravado: [] };
+  const firestore = {
+    doc: (path) => ({
+      path,
+      async update(data) { registro.gravado.push({ path, data, via: 'update' }); },
+      async set(data) { registro.gravado.push({ path, data, via: 'set' }); },
+    }),
+    batch: () => ({
+      update: (ref, data) => registro.gravado.push({ path: ref.path, data, via: 'batch.update' }),
+      set: (ref, data) => registro.gravado.push({ path: ref.path, data, via: 'batch.set' }),
+      delete: () => {},
+      async commit() {},
+    }),
+  };
+  const policy = {
+    async assertMutation({ mutation }) { registro.politicaViu.push(structuredClone(mutation.data)); },
+  };
+  return { gateway: new FirestoreManagerDataGateway({ firestore, policy }), registro };
+}
+
+test('gateway carimba o status depois da politica, em gravacao unica e em batch', async () => {
+  const ator = atorComNome({ nome: 'Ana Caixa' });
+  const unica = gatewayDeMentira();
+  await unica.gateway.mutate({
+    actor: ator,
+    request: { operation: 'update', target: { path: 'PurchaseRequests/p1' }, data: { currentPurchaseStatus: 'PurchaseStatus.accepted' } },
+  });
+  assert.equal(unica.registro.politicaViu[0].statusAlteradoPor, undefined, 'a politica ve o dado do painel, sem carimbo');
+  assert.deepEqual(unica.registro.gravado[0].data.statusAlteradoPor, { uid: 'uid-func', nome: 'Ana Caixa', status: 'accepted' });
+
+  const lote = gatewayDeMentira();
+  await lote.gateway.mutate({
+    actor: ator,
+    request: {
+      operation: 'batch',
+      operations: [
+        { operation: 'update', target: { path: 'PurchaseRequests/p1' }, data: { currentPurchaseStatus: 'PurchaseStatus.completed' } },
+        { operation: 'update', target: { path: 'PurchaseRequests/p2' }, data: { isTest: true } },
+        { operation: 'set', target: { path: 'estabelecimentos/store-1/Stats/x' }, data: { currentPurchaseStatus: 'PurchaseStatus.completed' } },
+      ],
+    },
+  });
+  assert.equal(lote.registro.gravado[0].data.statusAlteradoPor.status, 'completed');
+  assert.deepEqual(lote.registro.gravado[1].data, { isTest: true });
+  assert.equal(lote.registro.gravado[2].data.statusAlteradoPor, undefined, 'fora de PurchaseRequests nao carimba');
 });

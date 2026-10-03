@@ -5,6 +5,7 @@ import {
   decodeFirestoreValue,
   serializeDocumentSnapshot,
 } from './firestoreTransport.js';
+import { carimboDeStatus } from './ManagerDataAccessPolicy.js';
 
 const MAX_BATCH_OPERATIONS = 450;
 const MAX_QUERY_LIMIT = 500;
@@ -66,6 +67,13 @@ export class FirestoreManagerDataGateway {
     for (const mutation of normalized) {
       await this.policy.assertMutation({ actor, mutation });
     }
+    // Depois da politica: o carimbo nao passa pela lista de campos do painel, so o
+    // Core grava quem trocou o status.
+    normalized.forEach((mutation) => {
+      if (mutation.operation === 'update' && mutation.target.path.startsWith('PurchaseRequests/')) {
+        mutation.data = carimboDeStatus(actor, mutation.data);
+      }
+    });
 
     if (normalized.length === 1 && request.operation !== 'batch') {
       await this.applyMutation(normalized[0]);
