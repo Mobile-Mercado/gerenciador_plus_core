@@ -6,6 +6,7 @@ const {
   dataDaVenda,
   ehVenda,
   momentoDaVenda,
+  montarDias,
   montarMeses,
 } = require('./resumoVendas');
 
@@ -317,4 +318,60 @@ test('montarMeses do script da a mesma soma que o gatilho', async () => {
   const peloScript = montarMeses([contribuicaoDoPedido('ped-1', pedido(), META)]).get('2026-09');
   const { versaoResumo, atualizadoEm, ...semMarcas } = pelaFuncao;
   assert.deepEqual(semMarcas, peloScript);
+});
+
+// ----- Documento do dia (ResumoVendasDia) -----
+
+const diaDoc = (registro, loja, id) => registro.docs.get(`estabelecimentos/${loja}/ResumoVendasDia/${id}`);
+
+test('venda confirmada soma na hora certa do dia, por canal, e o mes nao ganha campo novo', async () => {
+  const { db, registro } = firestoreFalso(PRODUTOS);
+  await atualizar(db, null, pedido());
+  await atualizarResumoDeVendas({ db, FieldValue, antes: null, depois: pedido({ channel: 'agente', price: 12 }), pedidoId: 'ped-2', lojaDe });
+  const doc = diaDoc(registro, 'loja-1', '2026-09-10');
+  assert.deepEqual(doc.horas, { h12: { app: { price: 30, pedidos: 1 }, agent: { price: 12, pedidos: 1 } } });
+  assert.equal(doc.versaoResumo, 1);
+  assert.deepEqual(Object.keys(mes(registro, 'loja-1', '2026-09')).sort(),
+    ['atualizadoEm', 'bairros', 'categorias', 'clientes', 'dias', 'horas', 'produtos', 'semanaHora', 'versaoResumo']);
+});
+
+test('pedido que deixa de ser venda sai do dia', async () => {
+  const { db, registro } = firestoreFalso(PRODUTOS);
+  await atualizar(db, null, pedido());
+  await atualizar(db, pedido(), pedido({ currentPurchaseStatus: 'PurchaseStatus.canceled' }));
+  assert.deepEqual(diaDoc(registro, 'loja-1', '2026-09-10').horas.h12.app, { price: 0, pedidos: 0 });
+});
+
+test('paidAt em outro dia tira de um dia e poe no outro', async () => {
+  const { db, registro } = firestoreFalso(PRODUTOS);
+  await atualizar(db, null, pedido());
+  await atualizar(db, pedido(), pedido({ paidAt: ts('2026-09-12T01:30:00Z') }));
+  assert.deepEqual(diaDoc(registro, 'loja-1', '2026-09-10').horas.h12.app, { price: 0, pedidos: 0 });
+  assert.deepEqual(diaDoc(registro, 'loja-1', '2026-09-11').horas, { h22: { app: { price: 30, pedidos: 1 } } }, 'fuso de Sao Paulo');
+  assert.equal(diaDoc(registro, 'loja-1', '2026-09-12'), undefined);
+});
+
+test('pedido de teste nao entra no dia', async () => {
+  const { db, registro } = firestoreFalso(PRODUTOS);
+  await atualizar(db, null, pedido({ isTest: true }));
+  await atualizarResumoDeVendas({ db, FieldValue, antes: null, depois: pedido({ isTestAccount: true }), pedidoId: 'ped-2', lojaDe });
+  assert.equal(diaDoc(registro, 'loja-1', '2026-09-10'), undefined);
+});
+
+test('mudanca so de produto nao grava o dia', async () => {
+  const { db, registro } = firestoreFalso(PRODUTOS);
+  await atualizar(db, null, pedido());
+  const antes = diaDoc(registro, 'loja-1', '2026-09-10');
+  await atualizar(db, pedido(), pedido({ productsCart: [{ id: 'p-arroz', quantity: 3, product: { name: 'Arroz', price: 10 } }] }));
+  assert.equal(diaDoc(registro, 'loja-1', '2026-09-10'), antes);
+  assert.equal(mes(registro, 'loja-1', '2026-09').produtos['p-arroz'].qtd, 3);
+});
+
+test('montarDias do script da a mesma soma que o gatilho', async () => {
+  const { db, registro } = firestoreFalso(PRODUTOS);
+  await atualizar(db, null, pedido());
+  const { versaoResumo, atualizadoEm, ...pelaFuncao } = diaDoc(registro, 'loja-1', '2026-09-10');
+  const dias = montarDias([contribuicaoDoPedido('ped-1', pedido(), META), contribuicaoDoPedido('ped-2', pedido({ isTest: true }), META)].filter(Boolean));
+  assert.deepEqual([...dias.keys()], ['2026-09-10']);
+  assert.deepEqual(pelaFuncao, dias.get('2026-09-10'));
 });

@@ -17,6 +17,10 @@
 // Os rankings copiam o useHomeRankingsBridge.js: chave e nome do produto, categorias do
 // item ou do produto, chave do cliente e chave de bairro. Mudou a regra la, muda aqui.
 //
+// DIA: estabelecimentos/{loja}/ResumoVendasDia/{AAAA-MM-DD} traz so as vendas do dia por
+// hora e canal (horas.{hHH}.{app|agent}.{price, pedidos}), para a Home somar as vendas de
+// hoje sem ler o ResumoPedidos do mes. Grava na mesma transacao do mes, com o mesmo sinal.
+//
 // IDEMPOTENCIA: cada pedido guarda o que somou em ResumoVendasContribuicoes/{pedidoId}.
 // Numa gravacao do pedido, o Core tira a contribuicao antiga e poe a nova com
 // FieldValue.increment, numa transacao. Pedido que deixa de ser venda, vira teste, e
@@ -30,6 +34,7 @@ const { getOrderTotal } = require('./resumoPedidos');
 
 const RESUMO_VENDAS_VERSION = 1;
 const RESUMO_VENDAS_COLLECTION = 'ResumoVendas';
+const RESUMO_VENDAS_DIA_COLLECTION = 'ResumoVendasDia';
 const CONTRIBUICOES_COLLECTION = 'ResumoVendasContribuicoes';
 const TIME_ZONE = 'America/Sao_Paulo';
 
@@ -310,6 +315,18 @@ function aplicar(acumulador, contribuicao, sinal) {
   }
 }
 
+// Poe (sinal 1) ou tira (sinal -1) uma contribuicao no acumulador do dia dela.
+function aplicarNoDia(acumulador, contribuicao, sinal) {
+  const { hora, canal } = contribuicao;
+  somar(acumulador, ['horas', hora, canal, 'price'], sinal * contribuicao.price);
+  somar(acumulador, ['horas', hora, canal, 'pedidos'], sinal);
+}
+
+// Id do documento do dia: 'AAAA-MM-DD' no fuso de Sao Paulo.
+function idDoDia(contribuicao) {
+  return `${contribuicao.mes}-${contribuicao.dia}`;
+}
+
 // Objeto aninhado para set com merge: o id nunca vira caminho com ponto.
 function objetoDoAcumulador(acumulador, FieldValue) {
   const raiz = {};
@@ -399,6 +416,7 @@ function referencias(db, lojaId, pedidoId) {
   return {
     contribuicao: loja.collection(CONTRIBUICOES_COLLECTION).doc(pedidoId),
     mes: (mes) => loja.collection(RESUMO_VENDAS_COLLECTION).doc(mes),
+    dia: (dia) => loja.collection(RESUMO_VENDAS_DIA_COLLECTION).doc(dia),
   };
 }
 
@@ -429,21 +447,37 @@ async function atualizarResumoDeVendas({ db, FieldValue, antes = null, depois = 
     if (!trocouDeLoja && semMeta(guardadaAntiga) === semMeta(nova)) return 'nada';
 
     const porMes = new Map();
-    const acumuladorDe = (lojaId, mes) => {
-      const chave = `${lojaId}|${mes}`;
-      if (!porMes.has(chave)) porMes.set(chave, { lojaId, mes, acumulador: novoAcumulador() });
-      return porMes.get(chave).acumulador;
+    const porDia = new Map();
+    const acumuladorEm = (mapa, lojaId, id) => {
+      const chave = `${lojaId}|${id}`;
+      if (!mapa.has(chave)) mapa.set(chave, { lojaId, id, acumulador: novoAcumulador() });
+      return mapa.get(chave).acumulador;
+    };
+    const aplicarNaLoja = (lojaId, contribuicao, sinal) => {
+      aplicar(acumuladorEm(porMes, lojaId, contribuicao.mes), contribuicao, sinal);
+      aplicarNoDia(acumuladorEm(porDia, lojaId, idDoDia(contribuicao)), contribuicao, sinal);
     };
     // Tira tudo o que o pedido somou em qualquer loja e poe de novo onde ele esta agora.
     [[lojaAntiga, guardadaAntiga], [trocouDeLoja ? lojaNova : null, trocouDeLoja ? guardadaNaNova : null]]
       .forEach(([lojaId, guardada]) => {
-        if (lojaId && guardada) aplicar(acumuladorDe(String(lojaId), guardada.mes), guardada, -1);
+        if (lojaId && guardada) aplicarNaLoja(String(lojaId), guardada, -1);
       });
-    if (nova) aplicar(acumuladorDe(String(lojaNova), nova.mes), nova, 1);
+    if (nova) aplicarNaLoja(String(lojaNova), nova, 1);
 
-    porMes.forEach(({ lojaId, mes, acumulador }) => {
+    porMes.forEach(({ lojaId, id, acumulador }) => {
       const objeto = objetoDoAcumulador(acumulador, FieldValue);
-      transacao.set(referencias(db, lojaId, pedidoId).mes(mes), {
+      transacao.set(referencias(db, lojaId, pedidoId).mes(id), {
+        ...objeto,
+        versaoResumo: RESUMO_VENDAS_VERSION,
+        atualizadoEm: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      lojasTocadas.add(lojaId);
+    });
+    // Dia sem delta (so produto ou frete mudou) nao e gravado.
+    porDia.forEach(({ lojaId, id, acumulador }) => {
+      const objeto = objetoDoAcumulador(acumulador, FieldValue);
+      if (!Object.keys(objeto).length) return;
+      transacao.set(referencias(db, lojaId, pedidoId).dia(id), {
         ...objeto,
         versaoResumo: RESUMO_VENDAS_VERSION,
         atualizadoEm: FieldValue.serverTimestamp(),
@@ -470,15 +504,16 @@ async function atualizarResumoDeVendas({ db, FieldValue, antes = null, depois = 
 
 // ----- Montagem inteira (script) -----
 
-// Documentos de mes a partir de todas as contribuicoes da loja, ja somados.
-function montarMeses(contribuicoes) {
-  const meses = new Map();
+// Documentos (id -> dados) a partir de todas as contribuicoes da loja, ja somados.
+function montarDocumentos(contribuicoes, idDe, aplicarEm) {
+  const acumuladores = new Map();
   contribuicoes.forEach((contribuicao) => {
-    if (!meses.has(contribuicao.mes)) meses.set(contribuicao.mes, novoAcumulador());
-    aplicar(meses.get(contribuicao.mes), contribuicao, 1);
+    const id = idDe(contribuicao);
+    if (!acumuladores.has(id)) acumuladores.set(id, novoAcumulador());
+    aplicarEm(acumuladores.get(id), contribuicao, 1);
   });
   const documentos = new Map();
-  meses.forEach((acumulador, mes) => {
+  acumuladores.forEach((acumulador, id) => {
     // Sem FieldValue: o valor somado vai direto.
     const raiz = {};
     const por = (caminho, valor) => {
@@ -488,14 +523,23 @@ function montarMeses(contribuicoes) {
     };
     acumulador.deltas.forEach((valor, chave) => por(JSON.parse(chave), valor));
     acumulador.nomes.forEach((nome, chave) => por(JSON.parse(chave), nome));
-    documentos.set(mes, raiz);
+    documentos.set(id, raiz);
   });
   return documentos;
+}
+
+function montarMeses(contribuicoes) {
+  return montarDocumentos(contribuicoes, (contribuicao) => contribuicao.mes, aplicar);
+}
+
+function montarDias(contribuicoes) {
+  return montarDocumentos(contribuicoes, idDoDia, aplicarNoDia);
 }
 
 module.exports = {
   CONTRIBUICOES_COLLECTION,
   RESUMO_VENDAS_COLLECTION,
+  RESUMO_VENDAS_DIA_COLLECTION,
   RESUMO_VENDAS_VERSION,
   atualizarResumoDeVendas,
   carregarMeta,
@@ -503,6 +547,8 @@ module.exports = {
   contribuicaoDoPedido,
   dataDaVenda,
   ehVenda,
+  idDoDia,
   momentoDaVenda,
+  montarDias,
   montarMeses,
 };
