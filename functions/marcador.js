@@ -4,9 +4,10 @@
 // leitura pequena a cada 30 s: o painel le este documento e so rele a lista quando o
 // contador dela muda.
 //
-// Quatro contadores: pedidos (pedido gravado), conversas (chat ou mensagem gravados),
-// clientes (resumo de um cliente gravado ou removido em ResumoClientes) e listaDePedidos
-// (resumo de um pedido gravado ou removido em ResumoPedidos). As telas Clientes e Pedidos
+// Cinco contadores: pedidos (pedido gravado), conversas (chat ou mensagem gravados),
+// clientes (resumo de um cliente gravado ou removido em ResumoClientes), listaDePedidos
+// (resumo de um pedido gravado ou removido em ResumoPedidos) e vendas (soma de vendas
+// mudou em ResumoVendas, lida pela Home e pelo Financeiro). As telas Clientes e Pedidos
 // seguem o contador do resumo delas, nao o de pedidos, porque o de pedidos sobe antes de
 // o resumo estar pronto.
 //
@@ -20,6 +21,8 @@
 //             gerarResumoClientes.js
 //   listaDePedidos resumirPedidoNaLista (atualizarResumoDoPedido, resumoPedidos.js) e o
 //             script gerarResumoPedidos.js: o resumo de um pedido mudou em ResumoPedidos
+//   vendas    resumirVendasDoPedido (atualizarResumoDeVendas, resumoVendas.js) e o script
+//             gerarResumoVendas.js
 //
 // O marcador so CONTA mudancas. Nao guarda dado de pedido, de conversa nem de cliente:
 // apenas um contador e a hora da ultima mudanca de cada tipo.
@@ -28,7 +31,7 @@
 // gravar, o FieldValue de quem chamou.
 const MARCADOR_VERSION = 1;
 const MARCADOR_DOCUMENT = 'marcador';
-const TIPOS = new Set(['pedidos', 'conversas', 'clientes', 'listaDePedidos']);
+const TIPOS = new Set(['pedidos', 'conversas', 'clientes', 'listaDePedidos', 'vendas']);
 
 function idDeReferencia(valor) {
   if (!valor) return '';

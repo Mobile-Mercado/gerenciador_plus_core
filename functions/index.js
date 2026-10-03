@@ -6,7 +6,6 @@ const {
 } = require('firebase-functions/v2/firestore');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { getStorage } = require('firebase-admin/storage');
-const { handleOrderHourlySalesWrite } = require('./hourlySalesAggregation');
 const {
   DEFAULT_SAMPLE_SIZE,
   SALES_WINDOW_DAYS,
@@ -44,6 +43,7 @@ const {
   segmentoDoCliente,
 } = require('./resumoClientes');
 const { atualizarResumoDoPedido } = require('./resumoPedidos');
+const { atualizarResumoDeVendas } = require('./resumoVendas');
 const { avisoDeMensagem, avisoDePedidoCancelado, avisoDePedidoNovo } = require('./avisos');
 
 if (!admin.apps.length) {
@@ -70,30 +70,6 @@ async function registrarNoite(storeRef, rotina, { origem = null, dados = {} } = 
     console.error('[rotinasNoturnas] Nao registrou a origem', { rotina, establishmentId: storeRef.id, error });
   }
 }
-
-exports.aggregateOrderHourlySales = onDocumentWritten(
-  'PurchaseRequests/{orderId}',
-  async (event) => {
-    try {
-      const result = await handleOrderHourlySalesWrite({
-        db,
-        FieldValue: admin.firestore.FieldValue,
-        event,
-      });
-      console.log('[aggregateOrderHourlySales] Pedido reconciliado', {
-        orderId: event.params.orderId,
-        ...result,
-      });
-      return result;
-    } catch (error) {
-      console.error('[aggregateOrderHourlySales] Falha ao agregar pedido', {
-        orderId: event.params.orderId,
-        error,
-      });
-      throw error;
-    }
-  },
-);
 
 const extractCompanyId = (orderDoc = {}) => {
   if (orderDoc.companyId) return orderDoc.companyId;
@@ -227,6 +203,31 @@ exports.marcarMensagemDoAgenteNoMarcador = onDocumentCreated(
         userId: event.params.userId,
         conversationId: event.params.conversationId,
         messageId: event.params.messageId,
+        error,
+      });
+    }
+  },
+);
+
+// Resumo de vendas por mes (estabelecimentos/{loja}/ResumoVendas/{AAAA-MM}), lido pela
+// Home e pelo Financeiro no lugar dos pedidos inteiros. Substitui a aggregateOrderHourlySales,
+// que nunca foi publicada. Falha aqui deixa a venda fora da soma ate a proxima gravacao do
+// pedido: registra e nunca lanca.
+exports.resumirVendasDoPedido = onDocumentWritten(
+  'PurchaseRequests/{orderId}',
+  async (event) => {
+    try {
+      await atualizarResumoDeVendas({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        antes: event.data?.before?.data() || null,
+        depois: event.data?.after?.data() || null,
+        pedidoId: event.params.orderId,
+        lojaDe: extractCompanyId,
+      });
+    } catch (error) {
+      console.error('[resumirVendasDoPedido] Falha ao resumir vendas', {
+        orderId: event.params.orderId,
         error,
       });
     }

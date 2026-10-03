@@ -70,7 +70,7 @@ test('aceita clientes e grava clientes e clientesEm no marcador da loja', async 
 
 test('recusa tipo invalido e nao grava', async () => {
   const { db, registro } = firestoreFalso();
-  await assert.rejects(marcarMudanca({ db, FieldValue, lojaId: 'loja-1', tipo: 'vendas' }), /invalido/);
+  await assert.rejects(marcarMudanca({ db, FieldValue, lojaId: 'loja-1', tipo: 'estoque' }), /invalido/);
   await assert.rejects(marcarMudanca({ db, FieldValue, lojaId: 'loja-1' }), /invalido/);
   assert.equal(registro.gravados.length, 0);
 });
@@ -145,6 +145,21 @@ test('aceita listaDePedidos e grava listaDePedidos e listaDePedidosEm no marcado
     dados: {
       listaDePedidos: { increment: 1 },
       listaDePedidosEm: { serverTimestamp: true },
+      versaoMarcador: MARCADOR_VERSION,
+    },
+    opcoes: { merge: true },
+  }]);
+});
+
+test('aceita vendas e grava vendas e vendasEm no marcador da loja', async () => {
+  const { db, registro } = firestoreFalso();
+  await marcarMudanca({ db, FieldValue, lojaId: 'loja-1', tipo: 'vendas' });
+
+  assert.deepEqual(registro.gravados, [{
+    caminho: `estabelecimentos/loja-1/Stats/${MARCADOR_DOCUMENT}`,
+    dados: {
+      vendas: { increment: 1 },
+      vendasEm: { serverTimestamp: true },
       versaoMarcador: MARCADOR_VERSION,
     },
     opcoes: { merge: true },
