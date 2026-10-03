@@ -135,3 +135,18 @@ test('lojaDaConversaDoAgente sem companyId devolve null', () => {
 test('conversa que existe sem companyId nao herda o de antes', () => {
   assert.equal(lojaDaConversaDoAgente({ antes: { companyId: 'loja-1' }, depois: { userId: 'u1' } }), null);
 });
+
+test('aceita listaDePedidos e grava listaDePedidos e listaDePedidosEm no marcador da loja', async () => {
+  const { db, registro } = firestoreFalso();
+  await marcarMudanca({ db, FieldValue, lojaId: 'loja-1', tipo: 'listaDePedidos' });
+
+  assert.deepEqual(registro.gravados, [{
+    caminho: `estabelecimentos/loja-1/Stats/${MARCADOR_DOCUMENT}`,
+    dados: {
+      listaDePedidos: { increment: 1 },
+      listaDePedidosEm: { serverTimestamp: true },
+      versaoMarcador: MARCADOR_VERSION,
+    },
+    opcoes: { merge: true },
+  }]);
+});

@@ -42,6 +42,7 @@ const {
   recalcularCliente,
   segmentoDoCliente,
 } = require('./resumoClientes');
+const { atualizarResumoDoPedido } = require('./resumoPedidos');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -224,6 +225,30 @@ exports.marcarMensagemDoAgenteNoMarcador = onDocumentCreated(
         userId: event.params.userId,
         conversationId: event.params.conversationId,
         messageId: event.params.messageId,
+        error,
+      });
+    }
+  },
+);
+
+// Resumo dos pedidos por mes (estabelecimentos/{loja}/ResumoPedidos/{AAAA-MM} e abertos),
+// lido pela tela Pedidos no lugar do stream de todos os pedidos. Falha aqui deixa o
+// pedido desatualizado na lista ate a proxima mudanca: registra e nunca lanca.
+exports.resumirPedidoNaLista = onDocumentWritten(
+  'PurchaseRequests/{orderId}',
+  async (event) => {
+    try {
+      await atualizarResumoDoPedido({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        antes: event.data?.before?.data() || null,
+        depois: event.data?.after?.data() || null,
+        pedidoId: event.params.orderId,
+        lojaDe: extractCompanyId,
+      });
+    } catch (error) {
+      console.error('[resumirPedidoNaLista] Falha ao resumir pedido', {
+        orderId: event.params.orderId,
         error,
       });
     }
