@@ -34,7 +34,7 @@ const {
   rodarProvedoresDeLogin,
 } = require('./provedoresDeLogin');
 const { gerarListaDeClientes } = require('./clientesDaLoja');
-const { lojasDaConversa, marcarMudanca } = require('./marcador');
+const { lojaDaConversaDoAgente, lojasDaConversa, marcarMudanca } = require('./marcador');
 const {
   RESUMO_COLLECTION,
   TOTAL_DE_BLOCOS,
@@ -170,6 +170,59 @@ exports.marcarMensagemNoMarcador = onDocumentCreated(
     } catch (error) {
       console.error('[marcarMensagemNoMarcador] Falha ao marcar mensagem', {
         chatId: event.params.chatId,
+        messageId: event.params.messageId,
+        error,
+      });
+    }
+  },
+);
+
+// Conversas do agente: a loja vem do companyId da conversa, nao de participantes.
+exports.marcarConversaDoAgenteNoMarcador = onDocumentWritten(
+  'AgenteVendas/{userId}/conversas/{conversationId}',
+  async (event) => {
+    try {
+      const lojaId = lojaDaConversaDoAgente({
+        antes: event.data?.before?.data() || null,
+        depois: event.data?.after?.data() || null,
+      });
+      if (!lojaId) return;
+      await marcarMudanca({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        lojaId,
+        tipo: 'conversas',
+      });
+    } catch (error) {
+      console.error('[marcarConversaDoAgenteNoMarcador] Falha ao marcar conversa do agente', {
+        userId: event.params.userId,
+        conversationId: event.params.conversationId,
+        error,
+      });
+    }
+  },
+);
+
+exports.marcarMensagemDoAgenteNoMarcador = onDocumentCreated(
+  'AgenteVendas/{userId}/conversas/{conversationId}/mensagens/{messageId}',
+  async (event) => {
+    try {
+      const conversa = await db
+        .collection('AgenteVendas').doc(event.params.userId)
+        .collection('conversas').doc(event.params.conversationId)
+        .get();
+      const lojaId = lojaDaConversaDoAgente({ depois: conversa.exists ? conversa.data() : null });
+      if (!lojaId) return;
+      await marcarMudanca({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        lojaId,
+        tipo: 'conversas',
+      });
+    } catch (error) {
+      console.error('[marcarMensagemDoAgenteNoMarcador] Falha ao marcar mensagem do agente', {
+        userId: event.params.userId,
+        conversationId: event.params.conversationId,
         messageId: event.params.messageId,
         error,
       });

@@ -9,6 +9,15 @@
 // segue o de clientes, nao o de pedidos, porque o de pedidos sobe antes de o resumo
 // estar pronto.
 //
+// Quem soma, em functions/index.js:
+//   pedidos   marcarPedidoNoMarcador            PurchaseRequests/{orderId} gravado
+//   conversas marcarConversaNoMarcador          Chats/{chatId} gravado
+//             marcarMensagemNoMarcador          Chats/{chatId}/Messages/{id} criado
+//             marcarConversaDoAgenteNoMarcador  AgenteVendas/{u}/conversas/{c} gravado
+//             marcarMensagemDoAgenteNoMarcador  AgenteVendas/{u}/conversas/{c}/mensagens/{id} criado
+//   clientes  recalcularCliente (resumoClientes.js), segmentarClientesNightly e o script
+//             gerarResumoClientes.js
+//
 // O marcador so CONTA mudancas. Nao guarda dado de pedido, de conversa nem de cliente:
 // apenas um contador e a hora da ultima mudanca de cada tipo.
 //
@@ -50,9 +59,18 @@ async function lojasDaConversa({ db, chat }) {
   return ids.filter((_id, indice) => snapshots[indice].exists);
 }
 
+// Loja de uma conversa do agente (AgenteVendas/{u}/conversas/{c}): o companyId do
+// documento depois da gravacao ou, se ele foi apagado, o de antes. Sem companyId, null.
+function lojaDaConversaDoAgente({ antes = null, depois = null } = {}) {
+  const dados = depois || antes;
+  const lojaId = typeof dados?.companyId === 'string' ? dados.companyId.trim() : '';
+  return lojaId || null;
+}
+
 module.exports = {
   MARCADOR_DOCUMENT,
   MARCADOR_VERSION,
+  lojaDaConversaDoAgente,
   lojasDaConversa,
   marcarMudanca,
 };
