@@ -1,6 +1,7 @@
 const admin = require('firebase-admin');
 const {
   onDocumentCreated,
+  onDocumentUpdated,
   onDocumentWritten,
 } = require('firebase-functions/v2/firestore');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
@@ -43,6 +44,7 @@ const {
   segmentoDoCliente,
 } = require('./resumoClientes');
 const { atualizarResumoDoPedido } = require('./resumoPedidos');
+const { avisoDeMensagem, avisoDePedidoCancelado, avisoDePedidoNovo } = require('./avisos');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -312,15 +314,114 @@ const chunkArray = (items, size) => {
   return chunks;
 };
 
-// Sanitiza strings para prevenir injeção em notificações
-const sanitizeString = (str, maxLength = 200) => {
-  if (!str || typeof str !== 'string') return '';
-  return str
-    .replace(/<[^>]*>/g, '') // Remove tags HTML
-    .replace(/[<>"'&]/g, '') // Remove caracteres perigosos
-    .trim()
-    .slice(0, maxLength);
-};
+// Envio de Web Push para todos os navegadores ativos da loja (FcmTokens com
+// clientId == loja e active == true), em blocos de MAX_TOKENS_PER_REQUEST. Token que o
+// FCM recusa como invalido e desativado. Vai so como dados: o Service Worker do painel
+// monta a notificacao visivel com title, body, tag e url. O valor do token nunca vai
+// para o log (AGENTS.md).
+async function enviarAvisoParaLoja({
+  companyId,
+  title,
+  body,
+  url,
+  tag,
+  data = {},
+  origem = 'enviarAvisoParaLoja',
+}) {
+  const tokenDocsSnap = await db
+    .collection('FcmTokens')
+    .where('clientId', '==', companyId)
+    .where('active', '==', true)
+    .get();
+
+  if (tokenDocsSnap.empty) {
+    console.log(`[${origem}] Nenhum token ativo para ${companyId}`);
+    return null;
+  }
+
+  const tokenEntries = tokenDocsSnap.docs
+    .map((doc) => ({
+      token: String(doc.data().token || doc.id || '').trim(),
+      ref: doc.ref
+    }))
+    .filter((entry) => entry.token);
+
+  console.log(`[${origem}] ${tokenEntries.length} tokens encontrados`);
+
+  const buildMessagePayload = (targetTokens) => ({
+    data: {
+      ...data,
+      companyId,
+      url,
+      title,
+      body,
+      icon: '/favicon.ico',
+      tag,
+      timestamp: new Date().toISOString()
+    },
+    webpush: {
+      headers: {
+        Urgency: 'high'
+      },
+      fcmOptions: {
+        link: url
+      }
+    },
+    tokens: targetTokens
+  });
+
+  let totalSuccess = 0;
+  let totalFailures = 0;
+  const cleanupPromises = [];
+
+  const tokenChunks = chunkArray(tokenEntries, MAX_TOKENS_PER_REQUEST);
+
+  for (const chunk of tokenChunks) {
+    const chunkTokens = chunk.map((entry) => entry.token);
+    const message = buildMessagePayload(chunkTokens);
+
+    try {
+      const response = await admin.messaging().sendEachForMulticast(message);
+      totalSuccess += response.successCount;
+      totalFailures += response.failureCount;
+
+      response.responses.forEach((resp, idx) => {
+        if (resp.success) return;
+        const errorCode = resp.error?.code || 'unknown';
+        const failedEntry = chunk[idx];
+
+        console.warn(`[${origem}] Erro no token ${failedEntry.ref.id.slice(0, 8)}…: ${errorCode}`);
+
+        if (
+          errorCode === 'messaging/registration-token-not-registered' ||
+          errorCode === 'messaging/invalid-registration-token' ||
+          errorCode === 'messaging/invalid-argument'
+        ) {
+          cleanupPromises.push(
+            failedEntry.ref.update({ active: false }).catch((err) => {
+              console.error(`[${origem}] Falha ao desativar token`, err);
+            })
+          );
+        }
+      });
+    } catch (chunkError) {
+      console.error(`[${origem}] Erro ao enviar chunk de tokens`, chunkError);
+    }
+  }
+
+  if (cleanupPromises.length) {
+    await Promise.all(cleanupPromises);
+    console.log(
+      `[${origem}] ${cleanupPromises.length} tokens inválidos desativados`
+    );
+  }
+
+  console.log(
+    `[${origem}] Envio concluído. Sucessos: ${totalSuccess}, Falhas: ${totalFailures}`
+  );
+
+  return { totalSuccess, totalFailures };
+}
 
 exports.sendOrderNotification = onDocumentCreated(
   'PurchaseRequests/{orderId}',
@@ -347,110 +448,71 @@ exports.sendOrderNotification = onDocumentCreated(
 
     console.log(`[sendOrderNotification] Processando pedido ${orderId} da empresa ${companyId}`);
 
-    const tokenDocsSnap = await db
-      .collection('FcmTokens')
-      .where('clientId', '==', companyId)
-      .where('active', '==', true)
-      .get();
+    const { title, body, orderNumber, clientName } = avisoDePedidoNovo(order);
 
-    if (tokenDocsSnap.empty) {
-      console.log(`[sendOrderNotification] Nenhum token ativo para ${companyId}`);
-      return null;
-    }
-
-    const tokenEntries = tokenDocsSnap.docs
-      .map((doc) => ({
-        token: String(doc.data().token || doc.id || '').trim(),
-        ref: doc.ref
-      }))
-      .filter((entry) => entry.token);
-
-    console.log(`[sendOrderNotification] ${tokenEntries.length} tokens encontrados`);
-
-    const orderNumber = sanitizeString(order.orderNumber ? String(order.orderNumber) : '', 20);
-    const clientName = sanitizeString(order.clientName, 100) || 'Cliente';
-
-    const title = sanitizeString(order.notificationTitle, 100) || '🔔 Novo Pedido!';
-    const body =
-      sanitizeString(order.notificationBody, 200) ||
-      `Pedido ${orderNumber ? `#${orderNumber}` : ''} de ${clientName}`;
-
-    const buildMessagePayload = (targetTokens) => ({
+    return enviarAvisoParaLoja({
+      companyId,
+      title,
+      body,
+      url: '/pedidos',
+      tag: orderId,
       data: {
         orderId,
         orderNumber: orderNumber || '',
         clientName,
-        companyId,
-        url: '/pedidos',
-        title,
-        body,
-        icon: '/favicon.ico',
-        tag: orderId,
-        timestamp: new Date().toISOString()
       },
-      webpush: {
-        headers: {
-          Urgency: 'high'
-        },
-        fcmOptions: {
-          link: '/pedidos'
-        }
-      },
-      tokens: targetTokens
+      origem: 'sendOrderNotification',
     });
-
-    let totalSuccess = 0;
-    let totalFailures = 0;
-    const cleanupPromises = [];
-
-    const tokenChunks = chunkArray(tokenEntries, MAX_TOKENS_PER_REQUEST);
-
-    for (const chunk of tokenChunks) {
-      const chunkTokens = chunk.map((entry) => entry.token);
-      const message = buildMessagePayload(chunkTokens);
-
-      try {
-        const response = await admin.messaging().sendEachForMulticast(message);
-        totalSuccess += response.successCount;
-        totalFailures += response.failureCount;
-
-        response.responses.forEach((resp, idx) => {
-          if (resp.success) return;
-          const errorCode = resp.error?.code || 'unknown';
-          const failedEntry = chunk[idx];
-
-          console.warn(`[sendOrderNotification] Erro no token ${failedEntry.token}: ${errorCode}`);
-
-          if (
-            errorCode === 'messaging/registration-token-not-registered' ||
-            errorCode === 'messaging/invalid-registration-token' ||
-            errorCode === 'messaging/invalid-argument'
-          ) {
-            cleanupPromises.push(
-              failedEntry.ref.update({ active: false }).catch((err) => {
-                console.error('[sendOrderNotification] Falha ao desativar token', err);
-              })
-            );
-          }
-        });
-      } catch (chunkError) {
-        console.error('[sendOrderNotification] Erro ao enviar chunk de tokens', chunkError);
-      }
-    }
-
-    if (cleanupPromises.length) {
-      await Promise.all(cleanupPromises);
-      console.log(
-        `[sendOrderNotification] ${cleanupPromises.length} tokens inválidos desativados`
-      );
-    }
-
-    console.log(
-      `[sendOrderNotification] Envio concluído. Sucessos: ${totalSuccess}, Falhas: ${totalFailures}`
-    );
-
-    return { totalSuccess, totalFailures };
   }
+);
+
+// Mensagem nova do cliente no chat. Mensagem da loja nao avisa. Mensagens do mesmo chat
+// usam a mesma tag e se agrupam numa notificacao so.
+exports.avisarMensagemNova = onDocumentCreated(
+  'Chats/{chatId}/Messages/{messageId}',
+  async (event) => {
+    try {
+      const mensagem = event.data?.data();
+      if (!mensagem) return;
+      const chatSnapshot = await db.collection('Chats').doc(event.params.chatId).get();
+      const chat = chatSnapshot.data() || {};
+      const lojas = await lojasDaConversa({ db, chat });
+      for (const lojaId of lojas) {
+        const aviso = avisoDeMensagem({
+          chat, mensagem, chatId: event.params.chatId, lojaId, lojasDoChat: lojas,
+        });
+        if (!aviso) continue;
+        await enviarAvisoParaLoja({ companyId: lojaId, ...aviso, origem: 'avisarMensagemNova' });
+      }
+    } catch (error) {
+      console.error('[avisarMensagemNova] Falha ao avisar mensagem', {
+        chatId: event.params.chatId,
+        messageId: event.params.messageId,
+        error,
+      });
+    }
+  },
+);
+
+// Pedido cancelado pelo cliente: so quando o status passa para a desistencia.
+exports.avisarPedidoCancelado = onDocumentUpdated(
+  'PurchaseRequests/{orderId}',
+  async (event) => {
+    try {
+      const antes = event.data?.before?.data() || {};
+      const depois = event.data?.after?.data() || {};
+      const aviso = avisoDePedidoCancelado({ antes, depois, pedidoId: event.params.orderId });
+      if (!aviso) return;
+      const companyId = extractCompanyId(depois);
+      if (!companyId) return;
+      await enviarAvisoParaLoja({ companyId, ...aviso, origem: 'avisarPedidoCancelado' });
+    } catch (error) {
+      console.error('[avisarPedidoCancelado] Falha ao avisar cancelamento', {
+        orderId: event.params.orderId,
+        error,
+      });
+    }
+  },
 );
 
 // Pedidos da maior janela de vendas; o corte entre 30 e 90 dias e feito depois,
