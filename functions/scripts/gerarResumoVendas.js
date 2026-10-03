@@ -2,9 +2,11 @@ const admin = require('firebase-admin');
 const {
   CONTRIBUICOES_COLLECTION,
   RESUMO_VENDAS_COLLECTION,
+  RESUMO_VENDAS_DIA_COLLECTION,
   RESUMO_VENDAS_VERSION,
   contribuicaoDoPedido,
   ehVenda,
+  montarDias,
   montarMeses,
 } = require('../resumoVendas');
 const { marcarMudanca } = require('../marcador');
@@ -24,8 +26,9 @@ function usage() {
     'Uso:',
     '  node scripts/gerarResumoVendas.js --loja ID [--gravar] [--project ID]',
     '',
-    'Sem --gravar, so le: mostra os meses e os bytes de cada documento de ResumoVendas.',
-    'Com --gravar, refaz do zero os meses e as contribuicoes da loja e soma o marcador.',
+    'Sem --gravar, so le: mostra os meses e os bytes de cada documento de ResumoVendas,',
+    'e quantos documentos de ResumoVendasDia gravaria, com os bytes do maior.',
+    'Com --gravar, refaz do zero os meses, os dias e as contribuicoes da loja e soma o marcador.',
   ].join('\n');
 }
 
@@ -103,6 +106,7 @@ async function main() {
     })
     .filter(Boolean);
   const meses = montarMeses(contribuicoes);
+  const dias = montarDias(contribuicoes);
 
   console.log(`Loja ${lojaId}: ${snapshot.size} pedidos, ${contribuicoes.length} vendas, ${meses.size} meses`);
   console.log('documento | vendas | bytes');
@@ -117,6 +121,8 @@ async function main() {
   console.log(`bytes por documento: media ${media.toFixed(0)}, maximo ${tamanhos.length ? Math.max(...tamanhos) : 0}`);
   const contribuicaoMaior = contribuicoes.length ? Math.max(...contribuicoes.map(bytesDe)) : 0;
   console.log(`maior contribuicao: ${contribuicaoMaior} bytes`);
+  const bytesDosDias = [...dias.values()].map(bytesDe);
+  console.log(`documentos de dia (${RESUMO_VENDAS_DIA_COLLECTION}): ${dias.size}, maior ${bytesDosDias.length ? Math.max(...bytesDosDias) : 0} bytes`);
 
   if (!gravar) {
     console.log('\nSimulacao: nada foi gravado. Use --gravar para gravar os documentos.');
@@ -124,9 +130,11 @@ async function main() {
   }
 
   const apagadosMeses = await apagarTudo(db, lojaRef.collection(RESUMO_VENDAS_COLLECTION));
+  const apagadosDias = await apagarTudo(db, lojaRef.collection(RESUMO_VENDAS_DIA_COLLECTION));
   const apagadasContribuicoes = await apagarTudo(db, lojaRef.collection(CONTRIBUICOES_COLLECTION));
   const escritas = [
     ...[...meses.entries()].map(([mes, documento]) => [lojaRef.collection(RESUMO_VENDAS_COLLECTION).doc(mes), documento]),
+    ...[...dias.entries()].map(([dia, documento]) => [lojaRef.collection(RESUMO_VENDAS_DIA_COLLECTION).doc(dia), documento]),
     ...contribuicoes.map((contribuicao) => [lojaRef.collection(CONTRIBUICOES_COLLECTION).doc(contribuicao.pedidoId), contribuicao]),
   ];
   for (let inicio = 0; inicio < escritas.length; inicio += OPERACOES_POR_LOTE) {
@@ -136,8 +144,8 @@ async function main() {
     });
     await batch.commit();
   }
-  console.log(`\nApagados ${apagadosMeses} meses e ${apagadasContribuicoes} contribuicoes antigos.`);
-  console.log(`Gravados ${meses.size} meses e ${contribuicoes.length} contribuicoes em estabelecimentos/${lojaId}.`);
+  console.log(`\nApagados ${apagadosMeses} meses, ${apagadosDias} dias e ${apagadasContribuicoes} contribuicoes antigos.`);
+  console.log(`Gravados ${meses.size} meses, ${dias.size} dias e ${contribuicoes.length} contribuicoes em estabelecimentos/${lojaId}.`);
   await marcarMudanca({ db, FieldValue: admin.firestore.FieldValue, lojaId, tipo: 'vendas' });
   console.log(`Marcador: vendas somado em estabelecimentos/${lojaId}/Stats/marcador.`);
 }
