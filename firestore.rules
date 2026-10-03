@@ -8,6 +8,52 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ===== Admin antigo (mobile_old_web_platform, appmobileprod-19505.web.app) =====
+    // So login, guarda e as telas /admin/categorias e /admin/subcategorias.
+    // Tudo restrito a quem tem usersAdmin/{uid}.isAdmin == true. Nenhuma linha
+    // existente muda; sao so colecoes que nao tinham regra (caiam no bloqueio acima).
+    function isAdminAntigo() {
+      return request.auth != null
+        && get(/databases/$(database)/documents/usersAdmin/$(request.auth.uid)).data.get('isAdmin', false) == true;
+    }
+
+    // Guarda e login (auth.service.ts:62-68 e :160-218): cada um le so o proprio
+    // documento, e so se for admin. Ninguem grava pelo navegador.
+    match /usersAdmin/{uid} {
+      allow read: if request.auth != null
+        && request.auth.uid == uid
+        && resource.data.get('isAdmin', false) == true;
+      allow write: if false;
+    }
+
+    // Guarda (auth.service.ts:190-202): lista inteira, so leitura, so admin.
+    match /franquias/{franquiaId} {
+      allow read: if isAdminAntigo();
+      allow write: if false;
+    }
+
+    // Lista padrao: /admin/categorias e /admin/subcategorias leem, criam,
+    // atualizam e apagam (categorias.component.ts:71,156; categorias-detail-dialog
+    // :114-116,:136,:148,:157; subcategorias.component.ts:75,:169;
+    // subcategorias-detail-dialog :47,:61,:67).
+    match /categoriasProdutos/{categoriaId} {
+      allow read, write: if isAdminAntigo();
+    }
+    match /subcategoriasProdutos/{subcategoriaId} {
+      allow read, write: if isAdminAntigo();
+    }
+
+    // Copias antigas por loja: as telas so consultam e atualizam
+    // (categorias-detail-dialog :174,:189; subcategorias-detail-dialog :90,:97,:106;
+    // subcategorias.component.ts :191,:214,:229). Nada no sistema atual le estas colecoes.
+    match /categoriasProdutosEstabelecimentos/{id} {
+      allow read, update: if isAdminAntigo();
+    }
+    match /subcategoriasProdutosEstabelecimento/{id} {
+      allow read, update: if isAdminAntigo();
+    }
+    // ===== fim do admin antigo =====
+
     // Users - apenas o próprio usuário pode ler seus dados
     match /Users/{userId} {
       allow read: if request.auth != null;
