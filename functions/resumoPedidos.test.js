@@ -1,7 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  CONTAGEM_VERSION,
   DOCUMENTO_ABERTOS,
+  contagemDoMes,
+  recontarMes,
   RESUMO_PEDIDOS_VERSION,
   STATUS_ENCERRADOS,
   atualizarResumoDoPedido,
@@ -166,27 +169,52 @@ const FieldValue = {
 // Guarda os documentos de ResumoPedidos por caminho e aplica o merge do mapa pedidos
 // como o Firestore faz. Gravacao em Stats (o marcador) fica em registro.marcas.
 function firestoreFalso(inicial = {}) {
-  const registro = { docs: JSON.parse(JSON.stringify(inicial)), marcas: [], gravacoes: 0 };
+  const registro = { docs: JSON.parse(JSON.stringify(inicial)), marcas: [], gravacoes: 0, contagens: 0 };
   const loja = (lojaId) => ({
     collection: (colecao) => ({
-      doc: (id) => ({
-        async set(dados, opcoes) {
-          const caminho = `${lojaId}/${colecao}/${id}`;
-          if (colecao === 'Stats') { registro.marcas.push({ caminho, dados }); return; }
-          assert.deepEqual(opcoes, { merge: true });
-          registro.gravacoes += 1;
-          const atual = registro.docs[caminho] || { pedidos: {} };
-          const pedidos = { ...atual.pedidos };
-          Object.entries(dados.pedidos || {}).forEach(([pedidoId, valor]) => {
-            if (valor === DELETE) delete pedidos[pedidoId];
-            else pedidos[pedidoId] = valor;
-          });
-          registro.docs[caminho] = { ...atual, ...dados, pedidos };
-        },
-      }),
+      doc: (id) => {
+        const caminho = `${lojaId}/${colecao}/${id}`;
+        return {
+          caminho,
+          async get() {
+            const dados = registro.docs[caminho];
+            return { exists: Boolean(dados), data: () => dados, get: (campo) => dados?.[campo] };
+          },
+          async set(dados, opcoes) {
+            if (colecao === 'Stats') { registro.marcas.push({ caminho, dados }); return; }
+            // A contagem substitui o documento inteiro.
+            if (colecao === 'ResumoPedidosContagem') {
+              registro.contagens += 1;
+              registro.docs[caminho] = dados;
+              return;
+            }
+            assert.deepEqual(opcoes, { merge: true });
+            registro.gravacoes += 1;
+            const atual = registro.docs[caminho] || { pedidos: {} };
+            const pedidos = { ...atual.pedidos };
+            Object.entries(dados.pedidos || {}).forEach(([pedidoId, valor]) => {
+              if (valor === DELETE) delete pedidos[pedidoId];
+              else pedidos[pedidoId] = valor;
+            });
+            registro.docs[caminho] = { ...atual, ...dados, pedidos };
+          },
+        };
+      },
     }),
   });
-  return { db: { collection: () => ({ doc: loja }) }, registro };
+  const db = {
+    collection: () => ({ doc: loja }),
+    async runTransaction(funcao) {
+      const escritas = [];
+      const resultado = await funcao({
+        get: (ref) => ref.get(),
+        set: (ref, dados, opcoes) => escritas.push(() => ref.set(dados, opcoes)),
+      });
+      for (const escrita of escritas) await escrita();
+      return resultado;
+    },
+  };
+  return { db, registro };
 }
 
 const pedido = (extra = {}) => ({
@@ -318,4 +346,89 @@ test('ResumoPedidos v2 traz price sem frete, paidAt em milissegundos e formaPaga
   formas.forEach(([dados, esperado]) => assert.equal(resumirPedido('p', dados).formaPagamento, esperado, JSON.stringify(dados)));
   assert.equal(resumirPedido('p', { price: 'abc' }).price, 0);
   assert.equal(resumirPedido('p', {}).paidAt, null);
+});
+
+// ----- Contagem por status (cards Pedidos, Entregues e Cancelados) -----
+
+const resumoDe = (status, extra = {}) => ({ status, createdAt: ms('2026-09-20T15:00:00Z'), channel: 'app', isTest: false, ...extra });
+
+test('contagem por grupo e canal pela regra do card', () => {
+  const contagem = contagemDoMes({
+    a: resumoDe('completed'),
+    b: resumoDe('delivered', { channel: 'agent' }),
+    c: resumoDe('accepted'),
+    d: resumoDe('deliveryRoute', { channel: 'agent' }),
+    e: resumoDe('canceled'),
+    f: resumoDe('cancelled'),
+    g: resumoDe('denied'),
+    h: resumoDe('giveUp', { channel: 'agent' }),
+    i: resumoDe('refundRequested'),
+    j: resumoDe('pending'),
+    k: resumoDe('waitingForOrderPayment'),
+    l: resumoDe('awaitingPayment'),
+    m: resumoDe('indefinido'),
+  });
+  assert.deepEqual(contagem, {
+    app: { confirmed: 2, notConcretized: 3, open: 2, delivered: 1, canceled: 1 },
+    agent: { confirmed: 2, notConcretized: 1, open: 0, delivered: 1, canceled: 0 },
+  });
+});
+
+test('pedido de teste e pedido sem data ficam fora da contagem', () => {
+  const contagem = contagemDoMes({
+    a: resumoDe('completed', { isTest: true }),
+    b: resumoDe('completed', { createdAt: null }),
+    c: resumoDe('completed'),
+  });
+  assert.equal(contagem.app.confirmed, 1);
+  assert.equal(contagem.app.delivered, 1);
+});
+
+const contagemGravada = (registro, mesId = '2026-09') => registro.docs[`loja-1/ResumoPedidosContagem/${mesId}`];
+
+test('gatilho grava a contagem do mes e muda o pedido de grupo quando o status muda', async () => {
+  const { db, registro } = firestoreFalso();
+  await atualizarResumoDoPedido({ db, FieldValue, antes: null, depois: pedido({ currentPurchaseStatus: 'PurchaseStatus.pending' }), pedidoId: 'p1' });
+  assert.deepEqual(contagemGravada(registro).app, { confirmed: 0, notConcretized: 0, open: 1, delivered: 0, canceled: 0 });
+  assert.equal(contagemGravada(registro).versaoContagem, CONTAGEM_VERSION);
+
+  await atualizarResumoDoPedido({
+    db, FieldValue, antes: pedido({ currentPurchaseStatus: 'PurchaseStatus.pending' }), depois: pedido({ currentPurchaseStatus: 'PurchaseStatus.completed' }), pedidoId: 'p1',
+  });
+  assert.deepEqual(contagemGravada(registro).app, { confirmed: 1, notConcretized: 0, open: 0, delivered: 1, canceled: 0 });
+
+  await atualizarResumoDoPedido({
+    db, FieldValue, antes: pedido({ currentPurchaseStatus: 'PurchaseStatus.completed' }), depois: pedido({ currentPurchaseStatus: 'PurchaseStatus.canceled' }), pedidoId: 'p1',
+  });
+  assert.deepEqual(contagemGravada(registro).app, { confirmed: 0, notConcretized: 1, open: 0, delivered: 0, canceled: 1 });
+});
+
+test('pedido que vira teste sai da contagem e pedido apagado tambem', async () => {
+  const { db, registro } = firestoreFalso();
+  await atualizarResumoDoPedido({ db, FieldValue, antes: null, depois: pedido(), pedidoId: 'p1' });
+  await atualizarResumoDoPedido({ db, FieldValue, antes: null, depois: pedido(), pedidoId: 'p2' });
+  assert.equal(contagemGravada(registro).app.confirmed, 2);
+  await atualizarResumoDoPedido({ db, FieldValue, antes: pedido(), depois: pedido({ isTest: true }), pedidoId: 'p1' });
+  assert.equal(contagemGravada(registro).app.confirmed, 1);
+  await atualizarResumoDoPedido({ db, FieldValue, antes: pedido(), depois: null, pedidoId: 'p2' });
+  assert.equal(contagemGravada(registro).app.confirmed, 0);
+});
+
+test('pedido que troca de mes sai da contagem do mes antigo', async () => {
+  const { db, registro } = firestoreFalso();
+  await atualizarResumoDoPedido({ db, FieldValue, antes: null, depois: pedido(), pedidoId: 'p1' });
+  await atualizarResumoDoPedido({ db, FieldValue, antes: pedido(), depois: pedido({ createdAt: ts('2026-10-05T15:00:00Z') }), pedidoId: 'p1' });
+  assert.equal(contagemGravada(registro, '2026-09').app.confirmed, 0);
+  assert.equal(contagemGravada(registro, '2026-10').app.confirmed, 1);
+});
+
+test('contagem sem mudanca nao grava', async () => {
+  const { db, registro } = firestoreFalso();
+  await atualizarResumoDoPedido({ db, FieldValue, antes: null, depois: pedido(), pedidoId: 'p1' });
+  const antes = registro.contagens;
+  // O resumo muda (nome do cliente), o grupo nao: a contagem nao e regravada.
+  await atualizarResumoDoPedido({ db, FieldValue, antes: pedido(), depois: pedido({ clientName: 'Outro nome' }), pedidoId: 'p1' });
+  assert.equal(registro.contagens, antes);
+  assert.equal(await recontarMes({ db, FieldValue, lojaId: 'loja-1', mes: '2026-09' }), false);
+  assert.equal(await recontarMes({ db, FieldValue, lojaId: 'loja-1', mes: 'sem-data' }), false);
 });
