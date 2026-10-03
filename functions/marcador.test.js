@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const {
   MARCADOR_DOCUMENT,
   MARCADOR_VERSION,
+  lojaDaConversaDoAgente,
   lojasDaConversa,
   marcarMudanca,
 } = require('./marcador');
@@ -112,4 +113,25 @@ test('lojasDaConversa sem participantes nao consulta nada', async () => {
   assert.deepEqual(await lojasDaConversa({ db, chat: {} }), []);
   assert.deepEqual(await lojasDaConversa({ db, chat: null }), []);
   assert.equal(registro.lidos.length, 0);
+});
+
+test('lojaDaConversaDoAgente usa o companyId do documento depois da gravacao', () => {
+  assert.equal(lojaDaConversaDoAgente({ antes: { companyId: 'loja-velha' }, depois: { companyId: 'loja-1' } }), 'loja-1');
+  assert.equal(lojaDaConversaDoAgente({ depois: { companyId: ' loja-1 ' } }), 'loja-1');
+});
+
+test('lojaDaConversaDoAgente usa o de antes quando a conversa foi apagada', () => {
+  assert.equal(lojaDaConversaDoAgente({ antes: { companyId: 'loja-1' }, depois: null }), 'loja-1');
+});
+
+test('lojaDaConversaDoAgente sem companyId devolve null', () => {
+  assert.equal(lojaDaConversaDoAgente({ antes: null, depois: { userId: 'u1' } }), null);
+  assert.equal(lojaDaConversaDoAgente({ depois: { companyId: '' } }), null);
+  assert.equal(lojaDaConversaDoAgente({ depois: { companyId: 42 } }), null);
+  assert.equal(lojaDaConversaDoAgente({}), null);
+  assert.equal(lojaDaConversaDoAgente(), null);
+});
+
+test('conversa que existe sem companyId nao herda o de antes', () => {
+  assert.equal(lojaDaConversaDoAgente({ antes: { companyId: 'loja-1' }, depois: { userId: 'u1' } }), null);
 });
