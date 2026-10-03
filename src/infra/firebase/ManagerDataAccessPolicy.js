@@ -44,6 +44,14 @@ const ORDER_UPDATE_FIELDS = new Set([
   'isTest',
   'isTestAccount',
 ]);
+// Status em que o pedido esta encerrado. Troca de status a partir deles e
+// recusada: o clique vem de uma tela que ainda nao viu o encerramento (cliente
+// desistiu, prazo de aceite venceu) e reabriria o pedido. Reabrir, se um dia for
+// preciso, vira acao propria e explicita.
+const STATUS_ENCERRADOS = new Set([
+  'completed', 'delivered', 'denied', 'giveUp', 'return',
+  'canceled', 'cancelled', 'cancelado',
+]);
 // Chaves aceitas dentro do mapa conferenciaEntrega. Qualquer outra e recusada.
 const CONFERENCIA_FIELDS = new Set([
   'proximaEm',
@@ -181,10 +189,11 @@ export class ManagerDataAccessPolicy {
     const [root] = pathParts(path);
     if (root === 'PurchaseRequests') {
       if (mutation.operation !== 'update') throw forbidden();
-      await this.assertOrderDocument(actor, path);
+      const pedido = await this.assertOrderDocument(actor, path);
       assertOnlyFields(mutation.data, ORDER_UPDATE_FIELDS, 'data_order_fields_forbidden');
       assertBooleanFields(mutation.data, 'data_order_fields_forbidden');
       assertConferenciaEntrega(mutation.data);
+      assertPedidoNaoEncerrado(pedido, mutation.data);
       return;
     }
 
@@ -265,6 +274,7 @@ export class ManagerDataAccessPolicy {
     if (!snapshot.exists || establishmentIdFromOrder(snapshot.data()) !== actor.establishmentId) {
       throw forbidden('Pedido nao pertence ao estabelecimento autenticado.');
     }
+    return snapshot.data();
   }
 
   async assertUserPath(actor, path) {
@@ -633,6 +643,21 @@ function assertConferenciaEntrega(data) {
     || Object.keys(conferencia).some((campo) => !CONFERENCIA_FIELDS.has(campo));
   if (invalida) {
     throw forbidden('A alteracao contem campos nao permitidos.', 'data_order_fields_forbidden');
+  }
+}
+
+// Troca de status so passa em pedido que ainda nao esta encerrado. Usa o pedido que
+// assertOrderDocument ja leu; isTest e conferenciaEntrega sozinhos seguem livres.
+function assertPedidoNaoEncerrado(pedido, data) {
+  const trocaStatus = Object.hasOwn(data || {}, 'currentPurchaseStatus')
+    || Object.hasOwn(data || {}, 'statusList');
+  if (!trocaStatus) return;
+  const statusAtual = String(pedido?.currentPurchaseStatus || '').replace(/^PurchaseStatus\./, '');
+  if (STATUS_ENCERRADOS.has(statusAtual)) {
+    throw new AppError('Este pedido ja foi encerrado e nao pode mudar de status.', {
+      statusCode: 409,
+      code: 'pedido_encerrado',
+    });
   }
 }
 
