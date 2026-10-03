@@ -4,7 +4,7 @@
   "description": "Firebase Cloud Functions para notificações FCM do Web Gerenciador",
   "main": "index.js",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "scripts": {
     "lint": "eslint .",
