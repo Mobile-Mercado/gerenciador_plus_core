@@ -19,7 +19,9 @@
 //     enderecoEmUmaLinha);
 //   - src/features/orders/testOrders.js (isTestOrder);
 //   - src/features/clients/useClientsRealtimeBridge.js (getClientId) e
-//     src/shared/clientPanel.js (refId).
+//     src/shared/clientPanel.js (refId);
+//   - versao 2: src/features/dashboard/useFinanceBridge.js (detectPaymentCategory e os
+//     campos de classifyPayment) e useEarningsBridge.js (price sem frete).
 // Mudou a regra la, muda aqui. Fica de fora so o que e de tela (rotulo, classe, cor e data
 // formatada) e withLocalTestFlags, que so existe na memoria da aba.
 //
@@ -27,7 +29,7 @@
 // o FieldValue de quem chamou.
 const { marcarMudanca } = require('./marcador');
 
-const RESUMO_PEDIDOS_VERSION = 1;
+const RESUMO_PEDIDOS_VERSION = 2;
 const RESUMO_PEDIDOS_COLLECTION = 'ResumoPedidos';
 const DOCUMENTO_ABERTOS = 'abertos';
 const MES_SEM_DATA = 'sem-data';
@@ -266,6 +268,54 @@ function getClientId(data) {
   );
 }
 
+// ----- Copia de useFinanceBridge.js (forma de pagamento) -----
+
+function normalizeText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function detectPaymentCategory(rawType) {
+  const cleaned = normalizeText(String(rawType || '').replace('PaymentType.', ''));
+  if (!cleaned) return null;
+  if (cleaned.includes('pix')) return { key: 'pix', label: 'Pix' };
+  if (cleaned.includes('cash') || cleaned.includes('money') || cleaned.includes('dinheiro') || cleaned.includes('especie')) {
+    return { key: 'dinheiro', label: 'Dinheiro' };
+  }
+  if (cleaned.includes('credit') || cleaned.includes('debit') || cleaned.includes('card') || cleaned.includes('cartao')) {
+    return { key: 'cartao', label: 'Cartão' };
+  }
+  return null;
+}
+
+// Categoria do pagamento como classifyPayment le do pedido. O nome mostrado continua
+// vindo dos paymentMethods da loja, no painel; aqui fica so a categoria detectada.
+function formaDePagamento(data) {
+  const raw = getNestedValue(data, [
+    'purchasePayment.paymentType',
+    'purchasePayment.method',
+    'purchasePayment.type',
+    'payment.paymentType',
+    'payment.method',
+    'payment.type',
+    'payment.paymentMethod',
+    'payment.name',
+    'payment.id',
+    'paymentMethod',
+    'paymentType',
+  ]);
+  return detectPaymentCategory(raw)?.key || null;
+}
+
+// Valor da venda pela regra unica (useEarningsBridge.js): o price do pedido, sem frete.
+function precoDaVenda(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 // ----- Resumo -----
 
 const emMilissegundos = (date) => (date ? date.getTime() : null);
@@ -307,6 +357,10 @@ function resumirPedido(id, data = {}) {
     paymentMode: String(data.purchasePayment?.mode || '').trim(),
     paymentStatus: String(data.purchasePayment?.paymentStatus || '').trim(),
     selo: getSeal(data),
+    // Versao 2: valor da venda, data do pagamento e forma de pagamento.
+    price: precoDaVenda(data.price),
+    paidAt: emMilissegundos(toDate(data.paidAt)),
+    formaPagamento: formaDePagamento(data),
   };
   // Campo ausente vira null: o merge nunca deixa sobra de versao antiga.
   return Object.fromEntries(Object.entries(resumo).map(([campo, valor]) => [campo, valor ?? null]));
@@ -417,5 +471,7 @@ module.exports = {
   lojaDoPedidoPadrao,
   mesDoPedido,
   pedidoAberto,
+  formaDePagamento,
+  getOrderTotal,
   resumirPedido,
 };

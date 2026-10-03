@@ -87,6 +87,9 @@ test('resumirPedido: endereco em objeto, total direto, canal app', () => {
     paymentMode: 'pix',
     paymentStatus: 'paid',
     selo: 'comum',
+    price: 0,
+    paidAt: null,
+    formaPagamento: null,
   });
 });
 
@@ -287,4 +290,32 @@ test('lojaDe do gatilho prevalece sobre a regra padrao', async () => {
     lojaDe: (dados) => dados.companyReference?.id || null,
   });
   assert.deepEqual(ids(registro, 'loja-9/ResumoPedidos/2026-09'), ['p1']);
+});
+
+test('ResumoPedidos v2 traz price sem frete, paidAt em milissegundos e formaPagamento', () => {
+  assert.equal(RESUMO_PEDIDOS_VERSION, 2);
+  const resumo = resumirPedido('p9', {
+    price: 40.5,
+    deliveryPrice: 7,
+    total: 47.5,
+    paidAt: ts('2026-09-10T12:30:00Z'),
+    purchasePayment: { paymentType: 'PaymentType.pix' },
+  });
+  assert.equal(resumo.price, 40.5);
+  assert.equal(resumo.total, 47.5);
+  assert.equal(resumo.paidAt, ms('2026-09-10T12:30:00Z'));
+  assert.equal(resumo.formaPagamento, 'pix');
+
+  const formas = [
+    [{ purchasePayment: { paymentType: 'PaymentType.cash' } }, 'dinheiro'],
+    [{ purchasePayment: { paymentType: 'PaymentType.creditcard' } }, 'cartao'],
+    [{ purchasePayment: { paymentType: 'PaymentType.debitcard' } }, 'cartao'],
+    [{ paymentMethod: 'Cartão' }, 'cartao'],
+    [{ payment: { method: 'Dinheiro em espécie' } }, 'dinheiro'],
+    [{ purchasePayment: { paymentType: 'PaymentType.voucher' } }, null],
+    [{}, null],
+  ];
+  formas.forEach(([dados, esperado]) => assert.equal(resumirPedido('p', dados).formaPagamento, esperado, JSON.stringify(dados)));
+  assert.equal(resumirPedido('p', { price: 'abc' }).price, 0);
+  assert.equal(resumirPedido('p', {}).paidAt, null);
 });
