@@ -98,7 +98,24 @@ export function createDataRoutes({ manageManagerData }) {
     }),
   );
 
-  router.post('/stream', (request, response, next) => {
+  // Desligado em 07/10/2026: o painel atual nao usa stream desde 03/10 e so abas com
+  // codigo antigo chamavam este caminho (99,99% do tempo do backend em 05 e 06/10).
+  // Responde 410 na hora, sem abrir assinatura: o onSnapshot antigo trata 4xx diferente
+  // de 429 como fatal e para de reconectar.
+  router.post('/stream', (_request, response) => {
+    response.status(410).json({
+      error: { code: 'stream_desligado', message: 'Atualize a página do gerenciador.' },
+    });
+  });
+
+  return router;
+}
+
+// Stream antigo, fora da rota desde 07/10/2026. Fica aqui, com o subscribe do
+// ManageManagerData, ate a rodada que apagar o codigo de stream.
+// eslint-disable-next-line no-unused-vars
+function abrirStream(manageManagerData) {
+  return (request, response, next) => {
     let unsubscribe = () => {};
     let heartbeat = null;
     let closed = false;
@@ -162,9 +179,7 @@ export function createDataRoutes({ manageManagerData }) {
         }
         next(error);
       });
-  });
-
-  return router;
+  };
 }
 
 // Falha de item nao passa pelo errorHandler, entao o motivo real e registrado aqui:
