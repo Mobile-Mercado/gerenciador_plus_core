@@ -98,3 +98,36 @@ test('nome de exibicao e formatado, unico na loja e vazio volta ao padrao', asyn
 test('conta sem loja nao usa o catalogo da loja', async () => {
   await assert.rejects(catalogo(banco()).padraoDisponivel({ uid: 'x', establishmentId: null }), (error) => error.statusCode === 403);
 });
+
+// ===== Nunca duplicar pelo nome (12/10) =====
+
+test('categoria do padrao com o mesmo nome de uma da loja (outro id) nao aparece e nao ativa', async () => {
+  const firestore = banco({ 'estabelecimentos/loja-a/ProductCategories/beb_antiga': { name: ' BEBÍDAS ', isActive: false } });
+  const loja = catalogo(firestore);
+  const disponivel = await loja.padraoDisponivel(ATOR);
+  assert.equal(disponivel.categorias.some((item) => item.id === 'bebidas'), false);
+  assert.equal(disponivel.subcategorias.some((item) => item.id === 'refri'), false);
+  await assert.rejects(
+    loja.ativar(ATOR, { tipo: 'categoria', id: 'bebidas' }),
+    (error) => error.code === 'catalogo_nome_ja_na_loja' && error.message.includes('BEBÍDAS'),
+  );
+  await assert.rejects(loja.ativar(ATOR, { tipo: 'subcategoria', id: 'refri' }), (error) => error.code === 'catalogo_nome_ja_na_loja');
+});
+
+test('subcategoria com o mesmo nome dentro da categoria nao aparece e nao ativa', async () => {
+  const firestore = banco({
+    'estabelecimentos/loja-a/ProductCategories/bebidas': { name: 'Bebidas', isActive: true },
+    'estabelecimentos/loja-a/ProductSubcategories/refri_loja': { name: 'refrigerantes', categoryId: 'bebidas', isActive: false },
+  });
+  const loja = catalogo(firestore);
+  assert.equal((await loja.padraoDisponivel(ATOR)).subcategorias.some((item) => item.id === 'refri'), false);
+  await assert.rejects(loja.ativar(ATOR, { tipo: 'subcategoria', id: 'refri' }), (error) => error.code === 'catalogo_nome_ja_na_loja');
+});
+
+test('Mercearia e Todos nao mudam o nome de exibicao', async () => {
+  const firestore = banco({ 'estabelecimentos/loja-a/ProductCategories/mercearia': { name: 'Mercearia', isActive: true } });
+  await assert.rejects(
+    catalogo(firestore).nomeDeExibicao(ATOR, { tipo: 'categoria', id: 'mercearia', nome: 'Mercado' }),
+    (error) => error.code === 'catalogo_categoria_protegida',
+  );
+});

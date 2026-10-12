@@ -146,3 +146,55 @@ test('fila de sugestoes mostra os produtos e a decisao grava estado, por, em e m
   assert.equal(gravada.decisao.motivo, 'Ja existe Pet Shop');
   await assert.rejects(catalogo.decidirSugestao('loja-a', 's1', { decisao: 'aprovada' }, THAY), (error) => error.code === 'catalogo_sugestao_decidida');
 });
+
+// ===== Nome repetido, Mercearia e Todos, Estabelecimentos (12/10) =====
+
+test('criar e editar recusam nome igual, inclusive de arquivado, e dizem qual ja existe', async () => {
+  const firestore = banco({ 'categoriasProdutos/velha': { nome: 'Pet Shop', name: 'Pet Shop', arquivada: true } });
+  const catalogo = new ManageCatalogoPadrao({ firestore });
+  await assert.rejects(catalogo.criar('categoria', { nome: ' pét shop ' }, THAY), (error) => error.code === 'catalogo_nome_arquivado' && error.message.includes('Pet Shop'));
+  await assert.rejects(catalogo.editar('categoria', 'tabacaria', { nome: 'BEBIDAS' }, THAY), (error) => error.code === 'catalogo_nome_repetido' && error.message.includes('Bebidas'));
+  await assert.rejects(catalogo.criar('subcategoria', { nome: 'refrigerantes', categoriaId: 'bebidas' }, THAY), (error) => error.code === 'catalogo_nome_repetido');
+});
+
+test('Mercearia e Todos nao mudam de nome, nao desligam, nao arquivam e nao travam', async () => {
+  const firestore = banco({
+    'categoriasProdutos/mercearia': { nome: 'Mercearia', name: 'Mercearia', isActive: true },
+    'categoriasProdutos/outro_id': { nome: 'Todos', name: 'Todos', isActive: true },
+  });
+  const catalogo = new ManageCatalogoPadrao({ firestore });
+  const recusa = (error) => error.code === 'catalogo_categoria_protegida';
+  await assert.rejects(catalogo.editar('categoria', 'mercearia', { nome: 'Mercado' }, THAY), recusa);
+  await assert.rejects(catalogo.editar('categoria', 'mercearia', { travada: true }, THAY), recusa);
+  await assert.rejects(catalogo.mudarEstado('categoria', 'mercearia', 'desligada', THAY), recusa);
+  await assert.rejects(catalogo.mudarEstado('categoria', 'outro_id', 'arquivada', THAY), recusa);
+  await catalogo.editar('categoria', 'mercearia', { order: 0 }, THAY);
+  assert.equal((await catalogo.listar('categoria')).find((item) => item.id === 'mercearia').protegida, true);
+});
+
+test('estabelecimentos lista nome, cidade, ativa e produtos; a loja mostra as categorias com a trava', async () => {
+  const firestore = banco({
+    'estabelecimentos/loja-a': { name: 'Loja A', address: { city: 'Goiânia', uf: 'GO' }, isActive: true },
+    'estabelecimentos/loja-c': { name: 'Loja C', isActive: false },
+    'categoriasProdutos/tabacaria': { nome: 'Tabacaria', name: 'Tabacaria', travada: true },
+    'estabelecimentos/loja-a/ProductCategories/tabacaria': { name: 'Tabacaria', isActive: false },
+    'estabelecimentos/loja-a/ProductSubcategories/cigarro': { name: 'Cigarro', categoryId: 'tabacaria' },
+  });
+  const catalogo = new ManageCatalogoPadrao({ firestore });
+  const lista = await catalogo.estabelecimentos();
+  const a = lista.find((loja) => loja.id === 'loja-a');
+  assert.equal(a.cidade, 'Goiânia');
+  assert.equal(a.ativa, true);
+  assert.equal(a.produtos, 2);
+  assert.equal(lista.find((loja) => loja.id === 'loja-c').ativa, false);
+
+  const detalhe = await catalogo.estabelecimento('loja-a');
+  const tabacaria = detalhe.categorias.find((categoria) => categoria.id === 'tabacaria');
+  assert.equal(tabacaria.travada, true);
+  assert.equal(tabacaria.ligada, false);
+  assert.equal(tabacaria.subcategorias, 1);
+  await catalogo.liberar({ lojaId: 'loja-a', categoriaId: 'tabacaria' }, THAY);
+  const liberada = (await catalogo.estabelecimento('loja-a')).categorias.find((categoria) => categoria.id === 'tabacaria');
+  assert.equal(liberada.travada, false);
+  assert.equal(liberada.liberada, true);
+});

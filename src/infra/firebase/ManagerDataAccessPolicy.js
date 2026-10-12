@@ -1,6 +1,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 import { assertPermission } from '../../http/middlewares/requirePermission.js';
+import { categoriaProtegida } from '../../domain/catalogo/categoriasProtegidas.js';
 import { logger } from '../logger/logger.js';
 // Lista de clientes gravada pela rotina noturna. Mesmo arquivo que a rotina usa, para a
 // regra de quem e cliente nao existir em duas versoes.
@@ -245,6 +246,14 @@ export class ManagerDataAccessPolicy {
       if (mutation.operation !== 'update') return;
       if (Object.keys(mutation.data || {}).some((campo) => CATEGORIA_NOME_FIELDS.has(campo))) {
         throw forbidden('O nome muda pelo nome de exibicao.', 'categoria_nome_pelo_core');
+      }
+      // Mercearia e Todos sao achadas pelo nome no app: nao desligam.
+      if (colecao === 'ProductCategories' && mutation.data?.isActive === false) {
+        const protegidaPeloId = categoriaProtegida({ id: parts[3] });
+        const nome = protegidaPeloId ? '' : (await this.firestore.doc(parts.join('/')).get()).data()?.name;
+        if (protegidaPeloId || categoriaProtegida({ nome })) {
+          throw forbidden('Mercearia e Todos nao desligam.', 'catalogo_categoria_protegida');
+        }
       }
       if (mutation.data?.isActive === true && this.travas) {
         const categoriaId = colecao === 'ProductCategories'

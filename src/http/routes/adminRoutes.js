@@ -51,6 +51,15 @@ export function createAdminRoutes({ manageCatalogoPadrao }) {
     response.json({ data: await manageCatalogoPadrao.lojas() });
   }));
 
+  // ===== Estabelecimentos: so leitura nesta rodada, mais a liberacao =====
+  router.get('/estabelecimentos', asyncHandler(async (_request, response) => {
+    response.json({ data: await manageCatalogoPadrao.estabelecimentos() });
+  }));
+
+  router.get('/estabelecimentos/:lojaId', asyncHandler(async (request, response) => {
+    response.json({ data: await manageCatalogoPadrao.estabelecimento(request.params.lojaId) });
+  }));
+
   // ===== Sugestoes das lojas =====
   router.get('/sugestoes', asyncHandler(async (request, response) => {
     const estado = typeof request.query.estado === 'string' ? request.query.estado : 'pendente';

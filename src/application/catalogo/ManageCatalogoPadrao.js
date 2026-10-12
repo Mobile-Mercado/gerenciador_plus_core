@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
+import { categoriaProtegida } from '../../domain/catalogo/categoriasProtegidas.js';
 import { chaveDoNome, formatarNome } from '../../domain/catalogo/formatarNome.js';
+import { travadaNaLoja } from '../../domain/catalogo/regraDaTrava.js';
 
 // Lista padrao no Admin: categoriasProdutos e subcategoriasProdutos. Cada item tem tres
 // estados (decisao do Thay de 12/10/2026):
@@ -53,6 +55,13 @@ function tipoValido(tipo) {
   return config;
 }
 
+function protegida() {
+  return new AppError('Mercearia e Todos são achadas pelo nome no app: não mudam de nome, não desligam, não arquivam e não travam.', {
+    statusCode: 409,
+    code: 'catalogo_categoria_protegida',
+  });
+}
+
 function naoEncontrado(tipo) {
   return new AppError(`${tipo === 'categoria' ? 'Categoria' : 'Subcategoria'} não encontrada na lista padrão.`, {
     statusCode: 404,
@@ -75,6 +84,7 @@ function itemDaLista(tipo, documento) {
   if (tipo === 'categoria') {
     item.icon = data.icon || '';
     item.travada = data.travada === true;
+    item.protegida = categoriaProtegida({ id: documento.id, nome: item.nome });
   } else {
     item.categoriaId = data.categoriaProdutoId || '';
     item.categoriaNome = data.categoriaProdutoNome || '';
@@ -188,6 +198,9 @@ export class ManageCatalogoPadrao {
     if (data.arquivada === true) {
       throw new AppError('Item arquivado. Restaure antes de editar.', { statusCode: 409, code: 'catalogo_item_arquivado' });
     }
+    if (tipo === 'categoria' && categoriaProtegida({ id: atual.id, nome: nomeDoItem(data) }) && (nome !== undefined || travada !== undefined)) {
+      throw protegida();
+    }
     const mudancas = { updatedAt: FieldValue.serverTimestamp(), updatedBy: ator.uid || null };
     let nomeNovo = null;
 
@@ -234,6 +247,10 @@ export class ManageCatalogoPadrao {
       throw new AppError('Estado inválido.', { statusCode: 400, code: 'catalogo_estado_invalido' });
     }
     const atual = await this.documento(tipo, id);
+    if (tipo === 'categoria' && (estado === 'desligada' || estado === 'arquivada')
+      && categoriaProtegida({ id: atual.id, nome: nomeDoItem(atual.data()) })) {
+      throw protegida();
+    }
     const arquivada = atual.data()?.arquivada === true;
     if ((estado === 'ligada' || estado === 'desligada') && arquivada) {
       throw new AppError('Item arquivado. Restaure antes de ligar ou desligar.', { statusCode: 409, code: 'catalogo_item_arquivado' });
@@ -350,6 +367,65 @@ export class ManageCatalogoPadrao {
     const icon = `https://firebasestorage.googleapis.com/v0/b/${this.bucket.name}/o/${encodeURIComponent(caminho)}?alt=media&token=${token}`;
     await atual.ref.update({ icon, arquivo, updatedAt: FieldValue.serverTimestamp(), updatedBy: ator.uid || null });
     return itemDaLista('categoria', await atual.ref.get());
+  }
+
+  // ===== Estabelecimentos (rodada 1: so leitura, mais a liberacao) =====
+
+  // Lojas com nome, cidade, ativa ou nao e quantidade de produtos (contagem do Firestore,
+  // uma por loja).
+  async estabelecimentos() {
+    const snapshot = await this.firestore.collection('estabelecimentos').select('name', 'fantasyName', 'address', 'isActive').get();
+    return Promise.all(snapshot.docs.map(async (documento) => {
+      const data = documento.data() || {};
+      const contagem = await this.firestore.collection('estabelecimentos').doc(documento.id).collection('Products').count().get();
+      return {
+        id: documento.id,
+        nome: data.fantasyName || data.name || documento.id,
+        cidade: data.address?.city || null,
+        uf: data.address?.uf || data.address?.state || null,
+        ativa: data.isActive !== false,
+        produtos: Number(contagem.data()?.count) || 0,
+      };
+    }));
+  }
+
+  // Categorias da loja: ligadas, desligadas e travadas (regra da trava, com a liberacao).
+  async estabelecimento(lojaId) {
+    const loja = await this.firestore.collection('estabelecimentos').doc(String(lojaId || '')).get();
+    if (!loja.exists) throw new AppError('Loja não encontrada.', { statusCode: 404, code: 'catalogo_loja_nao_encontrada' });
+    const [categorias, subcategorias, travadasPadrao, liberacao] = await Promise.all([
+      loja.ref.collection('ProductCategories').get(),
+      loja.ref.collection('ProductSubcategories').get(),
+      this.firestore.collection('categoriasProdutos').where('travada', '==', true).get(),
+      this.firestore.collection('liberacoesCategorias').doc(loja.id).get(),
+    ]);
+    const travadas = new Set(travadasPadrao.docs.map((documento) => documento.id));
+    const liberadas = new Set(Object.keys(liberacao.data()?.liberadas || {}));
+    const subsPorCategoria = new Map();
+    subcategorias.docs.forEach((documento) => {
+      const categoriaId = documento.data()?.categoryId;
+      subsPorCategoria.set(categoriaId, (subsPorCategoria.get(categoriaId) || 0) + 1);
+    });
+    const data = loja.data() || {};
+    return {
+      id: loja.id,
+      nome: data.fantasyName || data.name || loja.id,
+      cidade: data.address?.city || null,
+      ativa: data.isActive !== false,
+      categorias: categorias.docs.map((documento) => {
+        const categoria = documento.data() || {};
+        return {
+          id: documento.id,
+          nome: categoria.name || documento.id,
+          nomeExibicao: categoria.nomeExibicao || null,
+          ligada: categoria.isActive !== false,
+          travadaNoPadrao: travadas.has(documento.id),
+          liberada: liberadas.has(documento.id),
+          travada: travadaNaLoja(documento.id, { travadas, liberadas }),
+          subcategorias: subsPorCategoria.get(documento.id) || 0,
+        };
+      }).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
+    };
   }
 
   // ===== Liberacao por loja: liberacoesCategorias/{lojaId}.liberadas.{categoriaId} =====

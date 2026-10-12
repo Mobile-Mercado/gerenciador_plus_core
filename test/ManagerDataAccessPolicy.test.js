@@ -368,3 +368,16 @@ test('sugestao de categoria so nasce pendente e nao muda depois', async () => {
     (error) => error.code === 'sugestao_campos_recusados',
   );
 });
+
+test('Mercearia e Todos nao desligam na loja, pelo id ou pelo nome', async () => {
+  const policy = politicaDoCatalogo({ 'estabelecimentos/store-1/ProductCategories/xyz': { name: 'TODOS' } });
+  await assert.rejects(
+    policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductCategories/mercearia', { isActive: false }) }),
+    (error) => error.code === 'catalogo_categoria_protegida',
+  );
+  await assert.rejects(
+    policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductCategories/xyz', { isActive: false }) }),
+    (error) => error.code === 'catalogo_categoria_protegida',
+  );
+  await policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductCategories/mercearia', { order: 2 }) });
+});
