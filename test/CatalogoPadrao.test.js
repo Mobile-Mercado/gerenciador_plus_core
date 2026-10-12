@@ -95,11 +95,26 @@ test('desligar deixa o item na lista do Admin', async () => {
   assert.equal(lista.find((item) => item.id === 'bebidas').estado, 'desligada');
 });
 
-test('nao existe excluir na lista padrao', () => {
-  const catalogo = new ManageCatalogoPadrao({ firestore: banco() });
-  const metodos = Object.getOwnPropertyNames(ManageCatalogoPadrao.prototype);
-  assert.equal(metodos.some((nome) => /excluir|apagar|remover|delete/i.test(nome)), false);
-  assert.equal(typeof catalogo.mudarEstado, 'function');
+test('excluir so com 0 lojas e 0 produtos, e registra o documento como estava', async () => {
+  const firestore = banco({ 'categoriasProdutos/vinhos': { nome: 'Vinhos', name: 'Vinhos', isActive: true } });
+  const catalogo = new ManageCatalogoPadrao({ firestore });
+  const resultado = await catalogo.excluir('categoria', 'vinhos', THAY);
+  assert.equal(resultado.excluido, true);
+  assert.equal(firestore.dados('categoriasProdutos/vinhos'), undefined);
+  const registro = firestore.escritas.find((escrita) => escrita.caminho.startsWith('adminAuditLogs/'));
+  assert.equal(registro.dados.acao, 'excluir');
+  assert.equal(registro.dados.uid, 'uid-thay');
+  assert.equal(registro.dados.documento.nome, 'Vinhos');
+});
+
+test('excluir recusa item que alguma loja tem ou com produto, e categoria com subcategoria', async () => {
+  const firestore = banco({ 'categoriasProdutos/sem_loja': { nome: 'Sem Loja', name: 'Sem Loja' } });
+  const catalogo = new ManageCatalogoPadrao({ firestore });
+  await assert.rejects(catalogo.excluir('categoria', 'bebidas', THAY), (error) => error.code === 'catalogo_exclusao_recusada' && error.details.lojas === 2);
+  firestore.docs.set('subcategoriasProdutos/filha', { nome: 'Filha', categoriaProdutoId: 'sem_loja' });
+  await assert.rejects(catalogo.excluir('categoria', 'sem_loja', THAY), (error) => error.code === 'catalogo_exclusao_com_subcategorias');
+  assert.ok(firestore.dados('categoriasProdutos/sem_loja'));
+  assert.ok(firestore.dados('categoriasProdutos/bebidas'));
 });
 
 test('trava: a chave vale para a lista padrao e limpa o cache das travas', async () => {

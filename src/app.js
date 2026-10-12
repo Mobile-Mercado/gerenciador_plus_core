@@ -18,6 +18,7 @@ import { createFirebaseAuthMiddleware } from './http/middlewares/firebaseAuth.js
 import { createImplantationAdminMiddleware } from './http/middlewares/implantationAdmin.js';
 import { createPermissionGuard } from './http/middlewares/requirePermission.js';
 import { createPlatformAdminGuard } from './http/middlewares/requirePlatformAdmin.js';
+import { createContaDeLojaOuAdminGuard } from './http/middlewares/requireContaDeLojaOuAdmin.js';
 import { requestLogger } from './http/middlewares/requestLogger.js';
 
 export function createApp({
@@ -43,7 +44,9 @@ export function createApp({
   // Barreira de escrita por chave de permissao, com cache por token.
   const { requirePermission, accountForRequest } = createPermissionGuard({ accessRepository });
   // Admin da plataforma (usersAdmin), conferido em toda chamada de /api/admin.
-  const { requirePlatformAdmin } = createPlatformAdminGuard({ platformAdminRepository });
+  const { requirePlatformAdmin, isPlatformAdminForRequest } = createPlatformAdminGuard({ platformAdminRepository });
+  // IA so para conta de loja ou admin da plataforma (decisao do Thay de 12/10/2026).
+  const requireContaDeLojaOuAdmin = createContaDeLojaOuAdminGuard({ accountForRequest, isPlatformAdminForRequest });
 
   app.disable('x-powered-by');
   app.use(helmet());
@@ -75,6 +78,7 @@ export function createApp({
   app.use(
     '/api/ai',
     createFirebaseAuthMiddleware({ required: env.REQUIRE_FIREBASE_AUTH }),
+    requireContaDeLojaOuAdmin,
     createAiRoutes({
       generateAiResponseUseCase, getDailyHomeOverviewUseCase, requirePermission, accountForRequest,
     }),

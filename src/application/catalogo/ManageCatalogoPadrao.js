@@ -10,7 +10,8 @@ import { travadaNaLoja } from '../../domain/catalogo/regraDaTrava.js';
 // - ligada: aparece para as lojas ativarem;
 // - desligada: fica na lista do Admin e nao aparece para as lojas ativarem;
 // - arquivada: some de tudo; so a visao "Arquivadas" do Admin mostra, com Restaurar.
-// Nao existe excluir: categoria retirada e arquivada, nao apagada (regra de 07/10).
+// Categoria retirada e arquivada, nao apagada (regra de 07/10). Excluir de vez so vale para
+// item que nenhuma loja tem e sem produto (decisao do Thay de 12/10), conferido de novo aqui.
 
 export const TIPOS = Object.freeze({
   categoria: { padrao: 'categoriasProdutos', loja: 'ProductCategories', campoProduto: 'categoriesIds' },
@@ -369,18 +370,59 @@ export class ManageCatalogoPadrao {
     return itemDaLista('categoria', await atual.ref.get());
   }
 
+  // Excluir de vez: so com 0 lojas com o item e 0 produtos nele (a mesma contagem do
+  // Arquivar), conferido de novo antes de apagar. Categoria com subcategoria na lista padrao
+  // tambem e recusada: a subcategoria ficaria sem categoria pai. O documento como estava vai
+  // para adminAuditLogs.
+  async excluir(tipo, id, ator = {}) {
+    const atual = await this.documento(tipo, id);
+    const impacto = await this.impacto(tipo, id);
+    if (impacto.lojas > 0 || impacto.produtos > 0) {
+      throw new AppError(`Não dá para excluir: ${impacto.lojas} loja(s) têm o item e ${impacto.produtos} produto(s) estão nele. Use Arquivar.`, {
+        statusCode: 409,
+        code: 'catalogo_exclusao_recusada',
+        details: { lojas: impacto.lojas, produtos: impacto.produtos },
+      });
+    }
+    if (tipo === 'categoria') {
+      const filhas = await this.colecao('subcategoria').where('categoriaProdutoId', '==', atual.id).get();
+      if (!filhas.empty) {
+        throw new AppError(`Não dá para excluir: a categoria tem ${filhas.size} subcategoria(s) na lista padrão. Exclua ou arquive as subcategorias antes.`, {
+          statusCode: 409,
+          code: 'catalogo_exclusao_com_subcategorias',
+        });
+      }
+    }
+    const lote = this.firestore.batch();
+    lote.set(this.firestore.collection('adminAuditLogs').doc(), {
+      acao: 'excluir',
+      tipo,
+      id: atual.id,
+      caminho: atual.ref.path,
+      documento: atual.data() || {},
+      uid: ator.uid || null,
+      email: ator.email || null,
+      em: FieldValue.serverTimestamp(),
+    });
+    lote.delete(atual.ref);
+    await lote.commit();
+    return { id: atual.id, excluido: true };
+  }
+
   // ===== Estabelecimentos (rodada 1: so leitura, mais a liberacao) =====
 
   // Lojas com nome, cidade, ativa ou nao e quantidade de produtos (contagem do Firestore,
   // uma por loja).
   async estabelecimentos() {
-    const snapshot = await this.firestore.collection('estabelecimentos').select('name', 'fantasyName', 'address', 'isActive').get();
+    const snapshot = await this.firestore.collection('estabelecimentos').select('name', 'fantasyName', 'address', 'isActive', 'createdAt').get();
     return Promise.all(snapshot.docs.map(async (documento) => {
       const data = documento.data() || {};
       const contagem = await this.firestore.collection('estabelecimentos').doc(documento.id).collection('Products').count().get();
       return {
         id: documento.id,
         nome: data.fantasyName || data.name || documento.id,
+        semNome: !String(data.fantasyName || data.name || '').trim(),
+        criadaEm: quando(data.createdAt),
         cidade: data.address?.city || null,
         uf: data.address?.uf || data.address?.state || null,
         ativa: data.isActive !== false,

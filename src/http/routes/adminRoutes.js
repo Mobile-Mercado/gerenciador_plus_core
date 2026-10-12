@@ -116,6 +116,13 @@ export function createAdminRoutes({ manageCatalogoPadrao, sugestoesDosClientes }
     response.json({ data: await manageCatalogoPadrao.editar(tipo, request.params.id, input, atorDe(request)) });
   }));
 
+  // Excluir de vez: o Core confere de novo 0 lojas e 0 produtos antes de apagar.
+  router.delete('/:tipo/:id', asyncHandler(async (request, response) => {
+    const tipo = tipoDe(request.params.tipo);
+    response.locals.auditoria = { item: `${tipo}:${request.params.id}`, acao: 'excluir' };
+    response.json({ data: await manageCatalogoPadrao.excluir(tipo, request.params.id, atorDe(request)) });
+  }));
+
   router.post('/:tipo/:id/estado', asyncHandler(async (request, response) => {
     const tipo = tipoDe(request.params.tipo);
     const { estado } = estadoSchema.parse(request.body);
