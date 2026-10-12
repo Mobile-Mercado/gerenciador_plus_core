@@ -50,3 +50,55 @@ test('home_assistant limita a resposta aos dados recebidos', async () => {
   assert.match(gateway.input.userPrompt, /"orders": 2/);
   assert.doesNotMatch(gateway.input.userPrompt, /uid-que-nao-deve-chegar-ao-modelo/);
 });
+
+test('registra o uso da IA na loja da sessao, sem segurar a resposta', async () => {
+  const registros = [];
+  const gateway = capturingGateway({
+    provider: 'openai', model: 'gpt-4o', output: 'ok', usage: { inputTokens: 1000, outputTokens: 500, totalTokens: 1500 },
+  });
+  const useCase = new GenerateAiResponseUseCase({
+    aiGateway: gateway,
+    usoIaRepository: { registrar: async (lojaId, registro) => registros.push({ lojaId, registro }) },
+  });
+
+  const result = await useCase.execute({
+    prompt: 'Sugira prateleiras.',
+    task: 'categorizador_sugestoes',
+    establishmentId: 'loja-a',
+    metadata: { tela: 'categorizador', produtos: 20, firebaseUid: 'uid-1' },
+  });
+  await new Promise((resolve) => { setImmediate(resolve); });
+
+  assert.equal(result.output, 'ok');
+  assert.equal(registros.length, 1);
+  assert.equal(registros[0].lojaId, 'loja-a');
+  assert.equal(registros[0].registro.tokensEntrada, 1000);
+  assert.equal(registros[0].registro.tokensSaida, 500);
+  assert.equal(registros[0].registro.custoEstimadoUsd, 0.0075);
+  assert.equal(registros[0].registro.tela, 'categorizador');
+  assert.equal(registros[0].registro.produtos, 20);
+});
+
+test('sem loja da sessao, o uso nao e gravado', async () => {
+  const registros = [];
+  const useCase = new GenerateAiResponseUseCase({
+    aiGateway: capturingGateway({ model: 'gpt-4o', output: 'ok' }),
+    usoIaRepository: { registrar: async (...args) => registros.push(args) },
+  });
+  await useCase.execute({ prompt: 'Oi.' });
+  await new Promise((resolve) => { setImmediate(resolve); });
+  assert.equal(registros.length, 0);
+});
+
+test('falha ao gravar o uso nao derruba a resposta', async () => {
+  const erros = [];
+  const useCase = new GenerateAiResponseUseCase({
+    aiGateway: capturingGateway({ model: 'gpt-4o', output: 'ok' }),
+    usoIaRepository: { registrar: async () => { throw new Error('sem rede'); } },
+    logger: { error: (mensagem) => erros.push(mensagem) },
+  });
+  const result = await useCase.execute({ prompt: 'Oi.', establishmentId: 'loja-a' });
+  await new Promise((resolve) => { setImmediate(resolve); });
+  assert.equal(result.output, 'ok');
+  assert.deepEqual(erros, ['uso_ia_registro_falhou']);
+});

@@ -62,6 +62,7 @@ export class GetDailyHomeOverviewUseCase {
 
     try {
       const result = await this.generateAiResponseUseCase.execute({
+        establishmentId,
         task: 'home_overview',
         responseFormat: 'json',
         maxOutputTokens: 900,

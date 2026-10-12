@@ -24,6 +24,7 @@ export function createImplantacaoRoutes({
   updateImplantationApprovalUseCase,
   implantationAdminMiddleware,
   requirePermission,
+  accountForRequest,
 }) {
   const router = Router();
 
@@ -77,6 +78,8 @@ export function createImplantacaoRoutes({
 
       const summary = await importProductsFromCsvUseCase.execute({
         establishmentId: input.establishmentId,
+        // Loja da sessao: o caso de uso recusa importar em outra loja.
+        actorEstablishmentId: (await accountForRequest(request))?.establishmentId,
         csvText: input.csvText,
         metadata: {
           fileName: input.fileName,

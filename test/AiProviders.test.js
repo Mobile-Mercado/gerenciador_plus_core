@@ -64,3 +64,16 @@ test('OpenAI preserva o override de modelo usado pela automacao', async () => {
   assert.equal(client.request.model, 'gpt-4o');
   assert.equal(result.provider, 'openai');
 });
+
+test('o gateway devolve os tokens da chamada', async () => {
+  const client = {
+    responses: {
+      create: async () => ({ output_text: 'ok', usage: { input_tokens: 120, output_tokens: 30, total_tokens: 150 } }),
+    },
+  };
+  const gateway = new OpenAiResponsesGateway({
+    apiKey: 'teste', model: 'gpt-4.1-mini', temperature: 0.2, client,
+  });
+  const result = await gateway.generate({ systemInstruction: 'x', userPrompt: 'y', responseFormat: 'text' });
+  assert.deepEqual(result.usage, { inputTokens: 120, outputTokens: 30, totalTokens: 150 });
+});

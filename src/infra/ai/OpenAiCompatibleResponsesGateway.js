@@ -68,6 +68,12 @@ export class OpenAiCompatibleResponsesGateway extends AiGateway {
         responseFormat,
         output: responseFormat === 'json' ? tryParseJson(text) : text,
         rawText: text,
+        // Tokens da chamada, para o registro de uso (UsoIa).
+        usage: {
+          inputTokens: Number(response.usage?.input_tokens) || 0,
+          outputTokens: Number(response.usage?.output_tokens) || 0,
+          totalTokens: Number(response.usage?.total_tokens) || 0,
+        },
       };
     } catch (error) {
       if (error instanceof AppError) {

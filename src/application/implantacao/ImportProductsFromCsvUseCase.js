@@ -1,9 +1,19 @@
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { AppError } from '../../domain/errors/AppError.js';
 import { productSearchKeys } from './catalogSearchIndex.js';
 
 const BATCH_OP_LIMIT = 400;
 const PROGRESS_LOG_EVERY = 25;
 const EXISTING_PRODUCTS_PAGE_SIZE = 500;
+// Prateleira de quem nao casou com o par categoria/subcategoria ativo da loja: o mesmo
+// objeto do fallback de resolve-shelves e dos produtos novos do integrador.
+const TODOS_TODOS = Object.freeze({
+  id: 'todos_todos',
+  productCategoryId: 'todos',
+  productSubcategoryId: 'todos',
+  categoryName: 'todos',
+  subcategoryName: 'todos',
+});
 
 function normalizeKey(value) {
   return String(value ?? '')
@@ -126,7 +136,10 @@ async function loadExistingProductBarcodes(productsRef) {
   return map;
 }
 
-async function loadCategoriesAndSubcategories(categoriesRef, subcategoriesRef) {
+// So categorias e subcategorias ativas da loja, sem as travadas na loja. A importacao nao
+// cria categoria nem subcategoria: categoria desligada, travada ou que nao existe conta
+// como desconhecida.
+async function loadCategoriesAndSubcategories(categoriesRef, subcategoriesRef, travadas = new Set()) {
   const categories = new Map();
   const subcategories = new Map();
   const [categoriesSnap, subcategoriesSnap] = await Promise.all([
@@ -136,50 +149,51 @@ async function loadCategoriesAndSubcategories(categoriesRef, subcategoriesRef) {
 
   categoriesSnap.forEach((docSnap) => {
     const data = docSnap.data();
-    if (data.name) categories.set(normalizeKey(data.name), { id: docSnap.id, name: data.name });
+    if (data.name && data.isActive !== false && !travadas.has(docSnap.id)) {
+      categories.set(normalizeKey(data.name), { id: docSnap.id, name: data.name });
+    }
   });
   subcategoriesSnap.forEach((docSnap) => {
     const data = docSnap.data();
-    if (data.name && data.categoryId) {
+    if (data.name && data.categoryId && data.isActive !== false) {
       subcategories.set(`${data.categoryId}::${normalizeKey(data.name)}`, { id: docSnap.id, name: data.name });
     }
   });
   return { categories, subcategories };
 }
 
-async function resolveCategory(categories, categoryName, categoriesRef, order) {
-  const key = normalizeKey(categoryName);
-  if (categories.has(key)) return categories.get(key);
-  const created = await categoriesRef.add({
-    name: categoryName,
-    isActive: true,
-    icon: '',
-    order,
-  });
-  const entry = { id: created.id, name: categoryName };
-  categories.set(key, entry);
-  return entry;
-}
-
-async function resolveSubcategory(subcategories, subcategoryName, categoryId, subcategoriesRef) {
-  const key = `${categoryId}::${normalizeKey(subcategoryName)}`;
-  if (subcategories.has(key)) return subcategories.get(key);
-  const created = await subcategoriesRef.add({
-    name: subcategoryName,
-    categoryId,
-    isActive: true,
-  });
-  const entry = { id: created.id, name: subcategoryName };
-  subcategories.set(key, entry);
-  return entry;
+// Par categoria/subcategoria existente e ativo, pelo nome; sem par, Todos.
+export function shelvesForRow({ categoryName, subcategoryName }, { categories, subcategories }) {
+  const category = categoryName ? categories.get(normalizeKey(categoryName)) : null;
+  const subcategory = category && subcategoryName
+    ? subcategories.get(`${category.id}::${normalizeKey(subcategoryName)}`)
+    : null;
+  if (!category || !subcategory) return [{ ...TODOS_TODOS }];
+  return [{
+    id: `${category.id}_${subcategory.id}`,
+    productCategoryId: category.id,
+    productSubcategoryId: subcategory.id,
+    categoryName: category.name,
+    subcategoryName: subcategory.name,
+  }];
 }
 
 export class ImportProductsFromCsvUseCase {
-  constructor({ firestore }) {
+  constructor({ firestore, travas = null }) {
     this.firestore = firestore;
+    this.travas = travas;
   }
 
-  async execute({ establishmentId, csvText, onProgress = () => {} }) {
+  // `actorEstablishmentId` e a loja de quem chama (sessao). A loja do corpo precisa ser ela.
+  async execute({
+    establishmentId, actorEstablishmentId, csvText, onProgress = () => {},
+  }) {
+    if (!establishmentId || establishmentId !== actorEstablishmentId) {
+      throw new AppError('A importacao so grava na loja da sua conta.', {
+        statusCode: 403,
+        code: 'implantacao_loja_de_outro',
+      });
+    }
     const rows = parseCsv(csvText);
     if (!rows.length) {
       return { created: 0, updated: 0, skipped: 0, total: 0 };
@@ -192,9 +206,10 @@ export class ImportProductsFromCsvUseCase {
     const subcategoriesRef = this.firestore.collection('estabelecimentos').doc(establishmentId).collection('ProductSubcategories');
     const establishmentRef = this.firestore.collection('estabelecimentos').doc(establishmentId);
 
-    const [existingBarcodes, { categories, subcategories }] = await Promise.all([
+    const travadas = this.travas ? await this.travas.travadasNaLoja(establishmentId) : new Set();
+    const [existingBarcodes, tree] = await Promise.all([
       loadExistingProductBarcodes(productsRef),
-      loadCategoriesAndSubcategories(categoriesRef, subcategoriesRef),
+      loadCategoriesAndSubcategories(categoriesRef, subcategoriesRef, travadas),
     ]);
 
     let processed = 0;
@@ -230,33 +245,7 @@ export class ImportProductsFromCsvUseCase {
         continue;
       }
 
-      let categoryId = '';
-      let resolvedCategoryName = '';
-      if (categoryName) {
-        // eslint-disable-next-line no-await-in-loop
-        const category = await resolveCategory(categories, categoryName, categoriesRef, categories.size);
-        categoryId = category.id;
-        resolvedCategoryName = category.name;
-      }
-
-      let subcategoryId = '';
-      let resolvedSubcategoryName = '';
-      if (subcategoryName && categoryId) {
-        // eslint-disable-next-line no-await-in-loop
-        const subcategory = await resolveSubcategory(subcategories, subcategoryName, categoryId, subcategoriesRef);
-        subcategoryId = subcategory.id;
-        resolvedSubcategoryName = subcategory.name;
-      }
-
-      const shelves = categoryId
-        ? [{
-          id: `${categoryId}_${subcategoryId}`,
-          productCategoryId: categoryId,
-          productSubcategoryId: subcategoryId,
-          categoryName: resolvedCategoryName,
-          subcategoryName: resolvedSubcategoryName,
-        }]
-        : [];
+      const shelves = shelvesForRow({ categoryName, subcategoryName }, tree);
 
       const existingProductId = existingBarcodes.get(ean);
       const isNewProduct = !existingProductId;
@@ -272,11 +261,14 @@ export class ImportProductsFromCsvUseCase {
         agranelValue: price,
         barCode: ean,
         hasBarCode: true,
+        updatedAt: timestamp,
+      };
+      // Prateleira so no produto novo: o que ja existe mantem as prateleiras que tem.
+      const shelfFields = {
         shelves,
         shelvesIds: shelves.map((shelf) => shelf.id),
         categoriesIds: shelves.map((shelf) => shelf.productCategoryId).filter(Boolean),
         subcategoriesIds: shelves.map((shelf) => shelf.productSubcategoryId).filter(Boolean),
-        updatedAt: timestamp,
       };
       if (photoUrl && /^https?:\/\//i.test(photoUrl)) {
         sharedFields.images = [{
@@ -292,6 +284,7 @@ export class ImportProductsFromCsvUseCase {
       if (isNewProduct) {
         batch.set(productRef, {
           ...sharedFields,
+          ...shelfFields,
           isActive: true,
           isTrashed: false,
           mobileId: null,

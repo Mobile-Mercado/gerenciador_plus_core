@@ -35,11 +35,13 @@ export function createPermissionGuard({ accessRepository, clock = () => Date.now
     return Number.isFinite(exp) && exp > 0 ? exp * 1000 : clock() + FALLBACK_TTL_MS;
   };
 
-  const permissionsForRequest = async (request) => {
+  // Conta de quem chama (loja e permissoes), no mesmo cache. As rotas que precisam da loja
+  // (catalogo, uso da IA, importacao) leem daqui em vez do corpo da requisicao.
+  const accountForRequest = async (request) => {
     const chave = cacheKey(request);
     const agora = clock();
     const guardado = cache.get(chave);
-    if (guardado && guardado.expiresAt > agora) return guardado.permissions;
+    if (guardado && guardado.expiresAt > agora) return guardado.account;
     cache.forEach((valor, key) => {
       if (valor.expiresAt <= agora) cache.delete(key);
     });
@@ -55,9 +57,16 @@ export function createPermissionGuard({ accessRepository, clock = () => Date.now
       });
     }
     const permissions = account.permissions || { isAdmin: true, groupId: null, keys: [] };
-    if (chave) cache.set(chave, { permissions, expiresAt: expiresAt(request) });
-    return permissions;
+    const resumo = {
+      establishmentId: account.establishmentId,
+      hasEstablishment: account.hasEstablishment,
+      permissions,
+    };
+    if (chave) cache.set(chave, { account: resumo, expiresAt: expiresAt(request) });
+    return resumo;
   };
+
+  const permissionsForRequest = async (request) => (await accountForRequest(request)).permissions;
 
   const requirePermission = (key) => async (request, _response, next) => {
     try {
@@ -68,5 +77,5 @@ export function createPermissionGuard({ accessRepository, clock = () => Date.now
     }
   };
 
-  return { requirePermission, permissionsForRequest };
+  return { requirePermission, permissionsForRequest, accountForRequest };
 }

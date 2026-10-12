@@ -22,7 +22,14 @@ const VERIFICATION_TTL_MS = 10 * 60 * 1000;
 // Status que contam como cancelamento do pedido: exigem requests.cancel.
 const CANCEL_STATUSES = new Set(['canceled', 'cancelled', 'cancelado', 'denied', 'giveUp']);
 const PRICE_FIELDS = new Set(['price', 'promotionPrice', 'historyPrice', 'previewPrice']);
-const PRODUCT_EDIT_COLLECTIONS = new Set(['implantacaoGrenciador', 'ProductCategories', 'ProductSubcategories']);
+const PRODUCT_EDIT_COLLECTIONS = new Set(['implantacaoGrenciador', 'ProductCategories', 'ProductSubcategories', 'SugestoesCategorias']);
+// Catalogo da loja (decisao do Thay de 12/10/2026): nome de categoria e subcategoria so
+// muda pela rota do nome de exibicao, que formata e confere repetido.
+const CATEGORIA_NOME_FIELDS = new Set(['name', 'nomeExibicao']);
+// Campos aceitos na sugestao de categoria criada pelo painel.
+const SUGESTAO_FIELDS = new Set([
+  'nome', 'tipo', 'categoriaId', 'categoriaNome', 'observacao', 'produtos', 'produtosIds', 'quem', 'em', 'estado',
+]);
 const COUPON_COLLECTIONS = new Set(['Cupons', 'Campaigns']);
 const ALLOWED_AUTOMATIONS = new Set([
   'padronizador_nomes',
@@ -124,11 +131,14 @@ export class ManagerDataAccessPolicy {
     // Injetavel para o teste conferir quais ids sao acrescentados: a sentinela do
     // FieldValue nao mostra o conteudo.
     arrayUnion = (valores) => FieldValue.arrayUnion(...valores),
+    // Trava de categoria (TravasDeCategoria). Sem ela, o ligar nao confere trava.
+    travas = null,
   }) {
     this.firestore = firestore;
     this.clock = clock;
     this.customerCache = new Map();
     this.arrayUnion = arrayUnion;
+    this.travas = travas;
   }
 
   assertActor(actor) {
@@ -184,7 +194,10 @@ export class ManagerDataAccessPolicy {
       permissionKeyForMutation(mutation, actor.establishmentId),
     );
 
-    if (isOwnEstablishmentPath(path, actor.establishmentId)) return;
+    if (isOwnEstablishmentPath(path, actor.establishmentId)) {
+      await this.assertCatalogoDaLoja(actor, mutation, pathParts(path));
+      return;
+    }
 
     const [root] = pathParts(path);
     if (root === 'PurchaseRequests') {
@@ -216,6 +229,46 @@ export class ManagerDataAccessPolicy {
     }
 
     throw forbidden();
+  }
+
+  // Categoria e subcategoria da loja nascem so pelo Ativar do Core (copia da lista padrao),
+  // o nome muda so pelo nome de exibicao e categoria travada na loja nao liga. Sugestao de
+  // categoria nasce pendente e nao muda pelo painel: quem decide e o Admin.
+  async assertCatalogoDaLoja(actor, mutation, parts) {
+    const colecao = parts[2];
+    if (parts.length !== 4) return;
+
+    if (colecao === 'ProductCategories' || colecao === 'ProductSubcategories') {
+      if (mutation.operation === 'set') {
+        throw forbidden('Categoria nova vem da lista padrao: use Ativar.', 'categoria_avulsa_recusada');
+      }
+      if (mutation.operation !== 'update') return;
+      if (Object.keys(mutation.data || {}).some((campo) => CATEGORIA_NOME_FIELDS.has(campo))) {
+        throw forbidden('O nome muda pelo nome de exibicao.', 'categoria_nome_pelo_core');
+      }
+      if (mutation.data?.isActive === true && this.travas) {
+        const categoriaId = colecao === 'ProductCategories'
+          ? parts[3]
+          : (await this.firestore.doc(parts.join('/')).get()).data()?.categoryId;
+        if (categoriaId && await this.travas.estaTravada(actor.establishmentId, categoriaId)) {
+          throw forbidden('Venda restrita. Fale com o suporte do app.', 'categoria_travada');
+        }
+      }
+      return;
+    }
+
+    if (colecao === 'SugestoesCategorias') {
+      if (mutation.operation !== 'set' || mutation.options?.merge === true) {
+        throw forbidden('Sugestao so pode ser criada.', 'sugestao_so_criacao');
+      }
+      assertOnlyFields(mutation.data, SUGESTAO_FIELDS, 'sugestao_campos_recusados');
+      if (mutation.data?.estado !== 'pendente') {
+        throw forbidden('Sugestao nasce pendente.', 'sugestao_so_pendente');
+      }
+      if ((await this.firestore.doc(parts.join('/')).get()).exists) {
+        throw forbidden('Sugestao so pode ser criada.', 'sugestao_so_criacao');
+      }
+    }
   }
 
   async scopeQuery({ actor, target, queryReference }) {

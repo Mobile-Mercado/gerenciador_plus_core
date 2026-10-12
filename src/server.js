@@ -2,6 +2,9 @@ import { createApp } from './app.js';
 import { GenerateAiResponseUseCase } from './application/ai/GenerateAiResponseUseCase.js';
 import { GetDailyHomeOverviewUseCase } from './application/ai/GetDailyHomeOverviewUseCase.js';
 import { GetManagerSession } from './application/auth/GetManagerSession.js';
+import { CatalogoDaLoja } from './application/catalogo/CatalogoDaLoja.js';
+import { ManageCatalogoPadrao } from './application/catalogo/ManageCatalogoPadrao.js';
+import { TravasDeCategoria } from './application/catalogo/TravasDeCategoria.js';
 import { ManageCoupons } from './application/coupons/ManageCoupons.js';
 import { ManageManagerData } from './application/data/ManageManagerData.js';
 import { DeliveryByCodeUseCase } from './application/delivery/DeliveryByCodeUseCase.js';
@@ -16,19 +19,29 @@ import { FirestoreDailyAiInsightRepository } from './infra/firebase/FirestoreDai
 import { FirestoreCouponRepository } from './infra/firebase/FirestoreCouponRepository.js';
 import { FirestoreEstablishmentAccessRepository } from './infra/firebase/FirestoreEstablishmentAccessRepository.js';
 import { FirestoreManagerDataGateway } from './infra/firebase/FirestoreManagerDataGateway.js';
+import { FirestorePlatformAdminRepository } from './infra/firebase/FirestorePlatformAdminRepository.js';
+import { FirestoreUsoIaRepository } from './infra/firebase/FirestoreUsoIaRepository.js';
 import { FirestoreWebNotificationTokenRepository } from './infra/firebase/FirestoreWebNotificationTokenRepository.js';
 import { ManagerDataAccessPolicy } from './infra/firebase/ManagerDataAccessPolicy.js';
-import { getFirestoreDb } from './infra/firebase/firebaseAdmin.js';
+import { getFirestoreDb, getStorageBucket } from './infra/firebase/firebaseAdmin.js';
+import { createAdminAuditMiddleware } from './http/middlewares/adminAudit.js';
 import { createAiGateway } from './infra/ai/createAiGateway.js';
 import { logger } from './infra/logger/logger.js';
 
 const aiGateway = createAiGateway(env);
 
-const generateAiResponseUseCase = new GenerateAiResponseUseCase({ aiGateway });
 const firestore = getFirestoreDb();
+const generateAiResponseUseCase = new GenerateAiResponseUseCase({
+  aiGateway,
+  usoIaRepository: new FirestoreUsoIaRepository({ firestore }),
+  logger,
+});
 const accessRepository = new FirestoreEstablishmentAccessRepository({ firestore });
-const getManagerSession = new GetManagerSession({ accessRepository });
-const dataPolicy = new ManagerDataAccessPolicy({ firestore });
+const platformAdminRepository = new FirestorePlatformAdminRepository({ firestore });
+const getManagerSession = new GetManagerSession({ accessRepository, platformAdminRepository });
+// Trava de categoria (lista padrao + liberacao por loja), com cache de cinco minutos.
+const travas = new TravasDeCategoria({ firestore });
+const dataPolicy = new ManagerDataAccessPolicy({ firestore, travas });
 const manageManagerData = new ManageManagerData({
   accessRepository,
   gateway: new FirestoreManagerDataGateway({ firestore, policy: dataPolicy }),
@@ -40,6 +53,7 @@ const getDailyHomeOverviewUseCase = new GetDailyHomeOverviewUseCase({
 });
 const importProductsFromCsvUseCase = new ImportProductsFromCsvUseCase({
   firestore,
+  travas,
 });
 const manageImplantationPipelines = new ManageImplantationPipelines({
   firestore,
@@ -63,7 +77,17 @@ const recalculateCategoryCountsUseCase = new RecalculateCategoryCountsUseCase({
   accessRepository,
 });
 const deliveryByCodeUseCase = new DeliveryByCodeUseCase({ firestore });
+const manageCatalogoPadrao = new ManageCatalogoPadrao({
+  firestore,
+  travas,
+  bucket: getStorageBucket(env.STORAGE_BUCKET),
+});
+const catalogoDaLoja = new CatalogoDaLoja({ firestore, travas });
 const app = createApp({
+  manageCatalogoPadrao,
+  catalogoDaLoja,
+  platformAdminRepository,
+  adminAuditMiddleware: createAdminAuditMiddleware({ firestore }),
   accessRepository,
   generateAiResponseUseCase,
   getDailyHomeOverviewUseCase,
