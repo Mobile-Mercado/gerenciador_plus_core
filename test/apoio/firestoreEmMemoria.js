@@ -1,7 +1,7 @@
-// Firestore em memoria para os testes dos casos de uso do catalogo. Cobre so o que eles
-// usam: doc, collection, collectionGroup, where (== e array-contains), select, count,
-// getAll, batch, create, set (com merge), update (com caminho pontuado) e delete, mais as
-// sentinelas serverTimestamp e delete do FieldValue.
+// Firestore em memoria para os testes dos casos de uso do catalogo e do Admin. Cobre so o
+// que eles usam: doc, collection, collectionGroup, where (== e array-contains), orderBy,
+// startAfter (snapshot), limit, select, count, getAll, batch, create, set (com merge),
+// update (com caminho pontuado) e delete, mais as sentinelas serverTimestamp e delete.
 
 const AGORA = new Date('2026-10-12T15:00:00.000Z');
 
@@ -80,19 +80,30 @@ class QuerySnapshot {
 }
 
 class Query {
-  constructor(banco, filtroDeCaminho, filtros = [], limite = null) {
+  constructor(banco, filtroDeCaminho, filtros = [], limite = null, ordem = null, depoisDe = null) {
     this.banco = banco;
     this.filtroDeCaminho = filtroDeCaminho;
     this.filtros = filtros;
     this.limite = limite;
+    this.ordem = ordem;
+    this.depoisDe = depoisDe;
+  }
+
+  copia(mudancas) {
+    const { filtros, limite, ordem, depoisDe } = { ...this, ...mudancas };
+    return new Query(this.banco, this.filtroDeCaminho, filtros, limite, ordem, depoisDe);
   }
 
   where(campo, operador, valor) {
-    return new Query(this.banco, this.filtroDeCaminho, [...this.filtros, { campo, operador, valor }], this.limite);
+    return this.copia({ filtros: [...this.filtros, { campo, operador, valor }] });
   }
 
-  orderBy() {
-    return this;
+  orderBy(campo, direcao = 'asc') {
+    return this.copia({ ordem: { campo, direcao } });
+  }
+
+  startAfter(snapshot) {
+    return this.copia({ depoisDe: snapshot.ref.path });
   }
 
   select() {
@@ -100,7 +111,7 @@ class Query {
   }
 
   limit(limite) {
-    return new Query(this.banco, this.filtroDeCaminho, this.filtros, limite);
+    return this.copia({ limite });
   }
 
   documentos() {
@@ -114,6 +125,17 @@ class Query {
         throw new Error(`operador nao suportado: ${operador}`);
       }))
       .map(([caminho, dados]) => new Snapshot(this.banco.doc(caminho), copiar(dados)));
+    if (this.ordem) {
+      // Como o Firestore: documento sem o campo fica de fora; empate, pelo caminho.
+      const valor = (snapshot) => { const v = lerCampo(snapshot.dados, this.ordem.campo); return v instanceof Date ? v.getTime() : v; };
+      const sinal = this.ordem.direcao === 'desc' ? -1 : 1;
+      lista = lista.filter((snapshot) => valor(snapshot) !== undefined && valor(snapshot) !== null)
+        .sort((a, b) => (valor(a) < valor(b) ? -sinal : valor(a) > valor(b) ? sinal : a.ref.path.localeCompare(b.ref.path)));
+    }
+    if (this.depoisDe) {
+      const posicao = lista.findIndex((snapshot) => snapshot.ref.path === this.depoisDe);
+      lista = lista.slice(posicao + 1);
+    }
     if (this.limite !== null) lista = lista.slice(0, this.limite);
     return lista;
   }

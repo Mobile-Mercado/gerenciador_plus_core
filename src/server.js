@@ -2,6 +2,7 @@ import { createApp } from './app.js';
 import { GenerateAiResponseUseCase } from './application/ai/GenerateAiResponseUseCase.js';
 import { GetDailyHomeOverviewUseCase } from './application/ai/GetDailyHomeOverviewUseCase.js';
 import { GetManagerSession } from './application/auth/GetManagerSession.js';
+import { SugestoesDosClientes } from './application/admin/SugestoesDosClientes.js';
 import { CatalogoDaLoja } from './application/catalogo/CatalogoDaLoja.js';
 import { ManageCatalogoPadrao } from './application/catalogo/ManageCatalogoPadrao.js';
 import { TravasDeCategoria } from './application/catalogo/TravasDeCategoria.js';
@@ -88,6 +89,7 @@ const app = createApp({
   catalogoDaLoja,
   platformAdminRepository,
   adminAuditMiddleware: createAdminAuditMiddleware({ firestore }),
+  sugestoesDosClientes: new SugestoesDosClientes({ firestore }),
   accessRepository,
   generateAiResponseUseCase,
   getDailyHomeOverviewUseCase,

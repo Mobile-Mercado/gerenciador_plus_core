@@ -35,7 +35,13 @@ const formatarSchema = z.object({ nome: z.string().max(200) });
 const tipoDe = (plural) => (tipoSchema.parse(plural) === 'categorias' ? 'categoria' : 'subcategoria');
 const atorDe = (request) => ({ uid: request.auth?.uid || null, email: request.auth?.email || null });
 
-export function createAdminRoutes({ manageCatalogoPadrao }) {
+const sugestoesClientesSchema = z.object({
+  lojaId: z.string().min(1).max(120).optional(),
+  busca: z.string().max(200).optional(),
+  cursor: z.string().min(1).max(400).optional(),
+});
+
+export function createAdminRoutes({ manageCatalogoPadrao, sugestoesDosClientes }) {
   const router = Router();
 
   router.get('/sessao', (request, response) => {
@@ -58,6 +64,12 @@ export function createAdminRoutes({ manageCatalogoPadrao }) {
 
   router.get('/estabelecimentos/:lojaId', asyncHandler(async (request, response) => {
     response.json({ data: await manageCatalogoPadrao.estabelecimento(request.params.lojaId) });
+  }));
+
+  // ===== Sugestoes dos clientes (app), de todas as lojas: so leitura =====
+  router.get('/sugestoes-clientes', asyncHandler(async (request, response) => {
+    const input = sugestoesClientesSchema.parse(request.query);
+    response.json({ data: await sugestoesDosClientes.listar(input) });
   }));
 
   // ===== Sugestoes das lojas =====
