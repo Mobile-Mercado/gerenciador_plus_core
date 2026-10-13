@@ -257,3 +257,21 @@ test('rotas: POST /loja sem login, App Check quando ligado, login nas outras e f
     comAppCheck.close();
   }
 });
+
+test('foto acima de 50 megapixels e recusada com mensagem, e as conversoes rodam uma por vez', async () => {
+  const { default: sharp } = await import('sharp');
+  const { umaPorVez } = await import('../src/application/cadastro/ImagensDaLoja.js');
+  const enorme = await sharp({ create: { width: 8000, height: 7000, channels: 3, background: '#ffffff' } }).png().toBuffer();
+  assert.ok(enorme.length < LIMITE_ENTRADA_BYTES);
+  await assert.rejects(
+    converterParaWebp(enorme, { largura: 512, altura: 512 }),
+    (erro) => erro.code === 'imagem_pixels_demais' && /50 megapixels/.test(erro.message),
+  );
+  const ordem = [];
+  const trabalho = (nome, ms) => () => new Promise((resolve) => {
+    ordem.push(`inicio ${nome}`);
+    setTimeout(() => { ordem.push(`fim ${nome}`); resolve(nome); }, ms);
+  });
+  await Promise.all([umaPorVez(trabalho('a', 30)), umaPorVez(trabalho('b', 1)), umaPorVez(() => Promise.reject(new Error('x'))).catch(() => 'falhou'), umaPorVez(trabalho('c', 1))]);
+  assert.deepEqual(ordem, ['inicio a', 'fim a', 'inicio b', 'fim b', 'inicio c', 'fim c']);
+});

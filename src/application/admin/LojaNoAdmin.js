@@ -42,27 +42,35 @@ export class LojaNoAdmin {
 
   // ===== Contas da loja =====
 
-  // Uids ligados a loja: o dono por userReference, quem tem Users.id = loja e os funcionarios
-  // de AdminUsers. Para cada um, o papel e se a conta entra no Gerenciador Plus nesta loja.
+  // Dono e so a conta do Users apontado em userReference (13/10/2026). Funcionarios vem de
+  // AdminUsers. Quem so tem Users.id = loja, sem a loja apontar para ele, aparece como
+  // "sem vinculo". Para cada um, o papel e se a conta entra no Gerenciador Plus nesta loja.
   async contas(lojaId) {
     const loja = await this.loja(lojaId);
     const papeis = new Map();
-    const referencia = loja.data()?.userReference;
-    const [donoDoc, porId, funcionarios] = await Promise.all([
-      referencia ? referencia.get() : null,
+    const [uidDono, porId, funcionarios] = await Promise.all([
+      this.uidDoDono(loja),
       this.firestore.collection('Users').where('id', '==', loja.id).get(),
       loja.ref.collection('AdminUsers').get(),
     ]);
-    if (donoDoc?.exists && donoDoc.data()?.userAuthId) papeis.set(donoDoc.data().userAuthId, 'dono');
+    if (uidDono) papeis.set(uidDono, 'dono');
+    funcionarios.docs.forEach((documento) => {
+      if (!papeis.has(documento.id)) papeis.set(documento.id, 'funcionario');
+    });
     porId.docs.forEach((documento) => {
       const uid = documento.data()?.userAuthId;
-      if (uid && !papeis.has(uid)) papeis.set(uid, 'dono');
-    });
-    funcionarios.docs.forEach((documento) => {
-      if (!papeis.has(documento.id) || papeis.get(documento.id) !== 'dono') papeis.set(documento.id, 'funcionario');
+      if (uid && !papeis.has(uid)) papeis.set(uid, 'sem_vinculo');
     });
     const contas = await Promise.all([...papeis.entries()].map(([uid, papel]) => this.conta(loja, uid, papel)));
-    return contas.sort((a, b) => (a.papel === b.papel ? String(a.email).localeCompare(String(b.email)) : a.papel === 'dono' ? -1 : 1));
+    const ordem = { dono: 0, funcionario: 1, sem_vinculo: 2 };
+    return contas.sort((a, b) => (ordem[a.papel] - ordem[b.papel]) || String(a.email).localeCompare(String(b.email)));
+  }
+
+  // Conta dona: a do Users apontado em userReference da loja.
+  async uidDoDono(loja) {
+    const referencia = loja.data()?.userReference;
+    const usuario = referencia ? await referencia.get() : null;
+    return usuario?.exists ? usuario.data()?.userAuthId || null : null;
   }
 
   async conta(loja, uid, papel) {
@@ -76,6 +84,9 @@ export class LojaNoAdmin {
     const base = { uid, papel, email: registro?.email || null, claims };
     if (!registro) return { ...base, entra: false, motivo: 'A conta não existe mais no login.' };
     if (registro.disabled) return { ...base, entra: false, motivo: 'A conta está desativada no login.' };
+    if (papel === 'sem_vinculo') {
+      return { ...base, entra: false, motivo: 'O Users desta conta aponta para a loja, mas a loja não aponta para ele (userReference).' };
+    }
     let resolvida = null;
     try {
       resolvida = await this.accessRepository.findAccountByClaims({ uid, adminOf: claims.adminOf, groupId: claims.groupId });
@@ -102,8 +113,12 @@ export class LojaNoAdmin {
 
   // Corrigir acesso: a claim adminOf passa a ser a loja. groupId so fica se o grupo existe
   // nesta loja; sem ele, o dono entra com acesso total (no painel e no app gerenciador).
+  // So para a conta dona (A9): funcionario perderia o groupId e ficaria sem permissao.
   async previaDoAcesso(lojaId, uid) {
     const loja = await this.loja(lojaId);
+    if (!uid || uid !== await this.uidDoDono(loja)) {
+      throw new AppError('Corrigir acesso é só para a conta dona da loja.', { statusCode: 403, code: 'acesso_so_do_dono' });
+    }
     const registro = await this.auth.getUser(uid);
     const claimsAntigas = { ...(registro.customClaims || {}) };
     const claimsNovas = { ...claimsAntigas, adminOf: loja.id };

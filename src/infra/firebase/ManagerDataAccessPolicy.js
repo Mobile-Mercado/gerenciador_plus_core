@@ -33,8 +33,9 @@ const SUGESTAO_FIELDS = new Set([
 ]);
 const COUPON_COLLECTIONS = new Set(['Cupons', 'Campaigns']);
 // Campos do documento da loja e da implantacao que so o Admin muda.
+// isActive (ligar no app Mobile Supermercados) e so pelo botao do Admin.
 const CAMPOS_DA_LOJA_SO_ADMIN = [
-  'status', 'motivoRecusa', 'aprovadoPor', 'aprovadoEm', 'recusadoPor', 'recusadoEm', 'enviadoEm',
+  'isActive', 'status', 'motivoRecusa', 'aprovadoPor', 'aprovadoEm', 'recusadoPor', 'recusadoEm', 'enviadoEm',
   'origemCadastro', 'cnpjConferido', 'offerColor', 'scheduling.contracted',
 ];
 const CAMPOS_DA_IMPLANTACAO_SO_ADMIN = ['aprovacaoFormal', 'appNasLojas'];

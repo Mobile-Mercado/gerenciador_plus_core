@@ -42,11 +42,6 @@ export function parseOrigins(value) {
   return [...new Set([...REQUIRED_CORS_ORIGINS, ...configured])];
 }
 
-function parseList(value) {
-  if (!value) return [];
-  return value.split(',').map((item) => item.trim()).filter(Boolean);
-}
-
 function parseAiProvider(value) {
   const provider = String(value || 'openai').trim().toLowerCase();
   if (provider === 'openai' || provider === 'groq') return provider;
@@ -71,9 +66,10 @@ export const env = Object.freeze({
     process.env.REQUIRE_FIREBASE_AUTH,
     nodeEnv === 'production',
   ),
-  IMPLANTATION_ADMIN_UIDS: parseList(process.env.IMPLANTATION_ADMIN_UIDS),
   // Bucket dos icones de categoria da lista padrao (Admin).
   STORAGE_BUCKET: process.env.STORAGE_BUCKET || 'appmobileprod-19505.appspot.com',
+  // Projeto do Firestore para as gravacoes pela API REST (banners com tamanho em decimal).
+  FIRESTORE_PROJECT_ID: process.env.FIRESTORE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || 'appmobileprod-19505',
   // Cadastro de loja: App Check preparado e desligado ate o app gerenciador mandar o token.
   CADASTRO_EXIGE_APP_CHECK: toBoolean(process.env.CADASTRO_EXIGE_APP_CHECK, false),
 });

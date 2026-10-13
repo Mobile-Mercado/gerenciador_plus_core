@@ -96,6 +96,28 @@ test('contas da loja: dono com claim para loja inexistente nao entra; Corrigir a
   assert.equal(feito.entraDepois, true);
 });
 
+test('Corrigir acesso so para a conta dona; Users.id sem userReference aparece sem vinculo', async () => {
+  const banco = new FirestoreEmMemoria({
+    'Users/doc-dono': { id: 'doc-dono', userAuthId: 'uid-dono' },
+    'Users/doc-intruso': { id: 'loja-1', userAuthId: 'uid-intruso' },
+    'estabelecimentos/loja-1/AdminUsers/uid-func': { active: true, groupId: 'g1' },
+  });
+  banco.docs.set('estabelecimentos/loja-1', { name: 'Loja', userReference: banco.doc('Users/doc-dono') });
+  const auth = new AuthEmMemoria([
+    { uid: 'uid-dono', email: 'dono@x', customClaims: {} },
+    { uid: 'uid-func', email: 'func@x', customClaims: { adminOf: 'loja-1', groupId: 'g1' } },
+    { uid: 'uid-intruso', email: 'intruso@x', customClaims: {} },
+  ]);
+  const admin = new LojaNoAdmin({ firestore: banco, auth, accessRepository: new FirestoreEstablishmentAccessRepository({ firestore: banco }), serverTimestamp: HORA });
+  const contas = await admin.contas('loja-1');
+  assert.deepEqual(contas.map((conta) => [conta.uid, conta.papel]), [['uid-dono', 'dono'], ['uid-func', 'funcionario'], ['uid-intruso', 'sem_vinculo']]);
+  assert.equal(contas[2].entra, false);
+  await assert.rejects(admin.previaDoAcesso('loja-1', 'uid-func'), (erro) => erro.code === 'acesso_so_do_dono');
+  await assert.rejects(admin.corrigirAcesso('loja-1', 'uid-intruso'), (erro) => erro.code === 'acesso_so_do_dono');
+  assert.deepEqual((await auth.getUser('uid-func')).customClaims, { adminOf: 'loja-1', groupId: 'g1' });
+  assert.deepEqual((await admin.previaDoAcesso('loja-1', 'uid-dono')).claimsNovas, { adminOf: 'loja-1' });
+});
+
 test('editar com previa, ligar no app e excluir so loja vazia com o nome', async () => {
   const banco = new FirestoreEmMemoria({
     'estabelecimentos/loja-1': { name: 'Loja Um', phone: '2733334444', address: { city: 'Serra', uf: 'ES' }, isActive: true },

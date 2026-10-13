@@ -158,7 +158,7 @@ GET   /api/implantacao/admin/pipelines/{establishmentId}
 PATCH /api/implantacao/admin/pipelines/{establishmentId}/checks/{step}/{checkId}
 ```
 
-Além do token Firebase, o UID precisa existir em `IMPLANTATION_ADMIN_UIDS`. Separe múltiplos UIDs por vírgula. O painel lê e altera somente o documento compacto `implantacaoGrenciador/pipeline`.
+Além do token Firebase, a conta precisa ser admin da plataforma (`usersAdmin/{uid}.isAdmin`); cada alteração fica registrada em `adminAuditLogs`. O painel lê e altera somente o documento compacto `implantacaoGrenciador/pipeline`.
 
 ### Gestão de cupons
 

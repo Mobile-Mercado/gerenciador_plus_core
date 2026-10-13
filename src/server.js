@@ -11,6 +11,8 @@ import { SugestoesDosClientes } from './application/admin/SugestoesDosClientes.j
 import { CadastroDeLoja } from './application/cadastro/CadastroDeLoja.js';
 import { ImagensDaLoja } from './application/cadastro/ImagensDaLoja.js';
 import { LimiteDeTentativas } from './application/cadastro/LimiteDeTentativas.js';
+import { BannersDaLoja } from './application/loja/BannersDaLoja.js';
+import { FirestoreRest } from './infra/firebase/FirestoreRest.js';
 import { CatalogoDaLoja } from './application/catalogo/CatalogoDaLoja.js';
 import { ManageCatalogoPadrao } from './application/catalogo/ManageCatalogoPadrao.js';
 import { TravasDeCategoria } from './application/catalogo/TravasDeCategoria.js';
@@ -119,6 +121,11 @@ const app = createApp({
   dadosDoAdmin: new DadosDoAdmin({ firestore }),
   firestore,
   registrarAcaoDoAdmin: (registro) => registrarAcaoDoAdmin(firestore, registro),
+  bannersDaLoja: new BannersDaLoja({
+    firestore,
+    bucket: getStorageBucket(env.STORAGE_BUCKET),
+    restFirestore: new FirestoreRest({ projectId: env.FIRESTORE_PROJECT_ID }),
+  }),
   manageCatalogoPadrao,
   catalogoDaLoja,
   platformAdminRepository,

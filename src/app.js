@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import { env } from './config/env.js';
 import { createAdminRoutes } from './http/routes/adminRoutes.js';
 import { createAiRoutes } from './http/routes/aiRoutes.js';
+import { createBannersDaLojaRoutes } from './http/routes/bannersDaLojaRoutes.js';
 import { createCadastroRoutes } from './http/routes/cadastroRoutes.js';
 import { createCatalogoRoutes } from './http/routes/catalogoRoutes.js';
 import { createCouponRoutes } from './http/routes/couponRoutes.js';
@@ -52,6 +53,7 @@ export function createApp({
   dadosDoAdmin,
   firestore,
   registrarAcaoDoAdmin,
+  bannersDaLoja,
 }) {
   const app = express();
   // Barreira de escrita por chave de permissao, com cache por token.
@@ -151,6 +153,12 @@ export function createApp({
     '/api/catalogo',
     createFirebaseAuthMiddleware({ required: true }),
     createCatalogoRoutes({ catalogoDaLoja, requirePermission, accountForRequest }),
+  );
+  // Banners da loja: imagem recortada pelo painel, documento gravado com image.size em decimal.
+  app.use(
+    '/api/loja/banners',
+    createFirebaseAuthMiddleware({ required: true }),
+    createBannersDaLojaRoutes({ bannersDaLoja, requirePermission, accountForRequest }),
   );
   // Logo e capa da loja pelo painel: foto como sai do celular, convertida pelo Core.
   app.use(

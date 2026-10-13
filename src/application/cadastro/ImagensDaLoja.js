@@ -15,6 +15,32 @@ export const TIPOS_DE_IMAGEM = Object.freeze({
 });
 
 export const MENSAGEM_ACIMA_DO_LIMITE = 'A foto passa de 20 MB. Tire a foto de novo com resolução menor ou envie uma captura de tela dela.';
+// Teto de pixels por foto (50 milhoes): acima disso o sharp nem decodifica, para nao estourar a
+// memoria da instancia (512 MB) com uma imagem enorme e pequena em bytes.
+export const LIMITE_PIXELS = 50_000_000;
+const OPCOES_DE_ENTRADA = Object.freeze({ failOn: 'none', limitInputPixels: LIMITE_PIXELS });
+
+// Uma imagem por vez por instancia: a proxima so comeca quando a anterior termina.
+let fila = Promise.resolve();
+export function umaPorVez(trabalho) {
+  const vez = fila.then(trabalho, trabalho);
+  fila = vez.catch(() => {});
+  return vez;
+}
+
+export function erroDeImagem(error) {
+  if (error instanceof AppError) return error;
+  if (/pixel limit/i.test(String(error?.message))) {
+    return new AppError('A foto tem resolução alta demais (mais de 50 megapixels). Reduza a foto ou envie uma captura de tela dela.', {
+      statusCode: 400,
+      code: 'imagem_pixels_demais',
+    });
+  }
+  return new AppError('Não deu para abrir esta foto. Envie uma foto em JPG, PNG ou WEBP.', {
+    statusCode: 400,
+    code: 'imagem_ilegivel',
+  });
+}
 
 export function tipoDeImagem(tipo) {
   const config = TIPOS_DE_IMAGEM[tipo];
@@ -25,7 +51,11 @@ export function tipoDeImagem(tipo) {
 }
 
 // Reduz ate caber: primeiro baixa a qualidade, depois o tamanho, ate 300 KB.
-export async function converterParaWebp(conteudo, { largura, altura }) {
+export function converterParaWebp(conteudo, medidas) {
+  return umaPorVez(() => converter(conteudo, medidas));
+}
+
+async function converter(conteudo, { largura, altura }) {
   if (!conteudo?.length) {
     throw new AppError('Envie uma foto.', { statusCode: 400, code: 'imagem_vazia' });
   }
@@ -36,7 +66,7 @@ export async function converterParaWebp(conteudo, { largura, altura }) {
   try {
     for (let rodada = 0; rodada < 8; rodada += 1) {
       for (const qualidade of [82, 70, 58, 46]) {
-        const saida = await sharp(conteudo, { failOn: 'none' })
+        const saida = await sharp(conteudo, OPCOES_DE_ENTRADA)
           .rotate()
           .resize({
             width: Math.round(largura * escala),
@@ -51,11 +81,7 @@ export async function converterParaWebp(conteudo, { largura, altura }) {
       escala *= 0.8;
     }
   } catch (error) {
-    if (error instanceof AppError) throw error;
-    throw new AppError('Não deu para abrir esta foto. Envie uma foto em JPG, PNG ou WEBP.', {
-      statusCode: 400,
-      code: 'imagem_ilegivel',
-    });
+    throw erroDeImagem(error);
   }
   throw new AppError('Não deu para reduzir esta foto. Envie outra.', { statusCode: 400, code: 'imagem_nao_reduziu' });
 }

@@ -16,6 +16,7 @@ function banco() {
     'estabelecimentos/loja-contratada': { name: 'Com agendamento', scheduling: { contracted: true } },
   });
   firestore.docs.set('estabelecimentos/loja-nova', { name: 'Nova', status: 'em_analise', userReference: firestore.doc('Users/uid-novo') });
+  firestore.docs.set('estabelecimentos/loja-antiga', { name: 'Antiga', userReference: firestore.doc('Users/uid-antigo') });
   return firestore;
 }
 
@@ -66,6 +67,7 @@ test('politica: lojista nao grava status, offerColor nem o contrato; scheduling.
   });
   await assert.rejects(mutar('loja-antiga', { offerColor: '#000000' }), (erro) => erro.code === 'campo_so_admin');
   await assert.rejects(mutar('loja-antiga', { status: 'aprovada' }), (erro) => erro.code === 'campo_so_admin');
+  await assert.rejects(mutar('loja-antiga', { isActive: false }), (erro) => erro.code === 'campo_so_admin');
   await assert.rejects(mutar('loja-antiga', { 'scheduling.contracted': true }), (erro) => erro.code === 'campo_so_admin');
   await assert.rejects(mutar('loja-antiga', { scheduling: { contracted: true } }, 'set', { merge: true }), (erro) => erro.code === 'campo_so_admin');
   await assert.rejects(mutar('loja-antiga', { 'scheduling.enabled': true }), (erro) => erro.code === 'agendamento_nao_contratado');
