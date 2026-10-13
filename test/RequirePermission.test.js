@@ -136,3 +136,12 @@ test('a politica barra a escrita sem a chave e deixa passar com ela', async () =
     mutation,
   });
 });
+
+test('promocao do produto pede a permissao de preco (B2.3)', async () => {
+  const { permissionKeyForMutation } = await import('../src/infra/firebase/ManagerDataAccessPolicy.js');
+  const alvo = { operation: 'update', target: { path: 'estabelecimentos/store-1/Products/p1' } };
+  for (const campo of ['promotionalPrice', 'promotionStartAt', 'promotionEndAt', 'promotionSource']) {
+    assert.equal(permissionKeyForMutation({ ...alvo, data: { [campo]: null } }, 'store-1'), 'products.edit_price');
+  }
+  assert.equal(permissionKeyForMutation({ ...alvo, data: { name: 'Arroz' } }, 'store-1'), 'products.edit');
+});

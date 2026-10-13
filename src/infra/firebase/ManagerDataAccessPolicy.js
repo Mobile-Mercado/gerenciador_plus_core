@@ -22,7 +22,11 @@ const CUSTOMER_CACHE_TTL_MS = 30 * 60 * 1000;
 const VERIFICATION_TTL_MS = 10 * 60 * 1000;
 // Status que contam como cancelamento do pedido: exigem requests.cancel.
 const CANCEL_STATUSES = new Set(['canceled', 'cancelled', 'cancelado', 'denied', 'giveUp']);
-const PRICE_FIELDS = new Set(['price', 'promotionPrice', 'historyPrice', 'previewPrice']);
+// Campos de preco: a promocao (como o app gerenciador grava) pede a mesma permissao de preco.
+const PRICE_FIELDS = new Set([
+  'price', 'promotionPrice', 'historyPrice', 'previewPrice',
+  'promotionalPrice', 'promotionStartAt', 'promotionEndAt', 'promotionSource',
+]);
 const PRODUCT_EDIT_COLLECTIONS = new Set(['implantacaoGrenciador', 'ProductCategories', 'ProductSubcategories', 'SugestoesCategorias']);
 // Catalogo da loja (decisao do Thay de 12/10/2026): nome de categoria e subcategoria so
 // muda pela rota do nome de exibicao, que formata e confere repetido.

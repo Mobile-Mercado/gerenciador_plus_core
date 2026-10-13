@@ -102,7 +102,7 @@ export class ManageWebNotifications {
       };
     }
 
-    const safeTitle = sanitizeText(title, 100) || 'Gerenciador Mobile Mercado';
+    const safeTitle = sanitizeText(title, 100) || 'Móbile Gerenciador';
     const safeBody = sanitizeText(body, 240);
     const safeUrl = normalizeRedirectUrl(url);
     const safeTag = sanitizeText(tag, 100) || 'gerenciador-notification';
