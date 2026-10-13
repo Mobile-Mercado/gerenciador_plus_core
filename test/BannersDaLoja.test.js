@@ -25,7 +25,7 @@ const bucket = () => ({ name: 'b', apagados: [], file(caminho) { const dono = th
 test('documento REST: largura e altura em doubleValue, datas em timestamp e produtos vazios', () => {
   const doc = documentoRest(camposDoBanner({
     id: 'b1', path: 'https://x', storageRef: 'estabelecimentos/l/banners/1.jpg', largura: 1080, altura: 500,
-    inicio: new Date('2026-10-13T00:00:00Z'), fim: new Date('2026-10-19T00:00:00Z'), tipo: 'principal', products: [],
+    inicio: new Date('2026-10-13T00:00:00Z'), fim: new Date('2026-10-19T00:00:00Z'), tipo: 'principal', products: [], novo: true,
   }));
   assert.deepEqual(doc.fields.image.mapValue.fields.size.mapValue.fields, { width: { doubleValue: 1080 }, height: { doubleValue: 500 } });
   assert.deepEqual(doc.fields.products, { arrayValue: {} });
@@ -59,4 +59,26 @@ test('recusas: imagem sem tamanho legivel, tamanho diferente de 1080x500 e perio
   await assert.rejects(banners.criar('l', pequena, periodo), (erro) => erro.code === 'banner_tamanho_errado');
   const certa = await sharp({ create: { width: 1080, height: 500, channels: 3, background: '#000' } }).jpeg().toBuffer();
   await assert.rejects(banners.criar('l', certa, { inicio: periodo.fim, fim: periodo.inicio }), (erro) => erro.code === 'banner_periodo_invalido');
+});
+
+test('C2.1: editar deixa status e started como estao; so a criacao grava os dois em true', async () => {
+  const rest = restEmMemoria();
+  const firestore = { doc: (caminho) => ({ get: async () => ({ exists: rest.documentos.has(caminho), data: () => ({ type: 'principal', products: [] }) }) }) };
+  const banners = new BannersDaLoja({ firestore, bucket: bucket(), restFirestore: rest, novoId: () => 'b1' });
+  const foto = await sharp({ create: { width: 1080, height: 500, channels: 3, background: '#fff' } }).jpeg().toBuffer();
+  await banners.criar('loja-1', foto, { inicio: '2026-10-13T00:00:00Z', fim: '2026-10-19T00:00:00Z' });
+  const caminho = 'estabelecimentos/loja-1/Banners/b1';
+  assert.equal(rest.documentos.get(caminho).fields.status.booleanValue, true);
+  assert.equal(rest.documentos.get(caminho).fields.started.booleanValue, true);
+  // Lojista pausou o banner (status false, started false); a edicao troca imagem e periodo e nao religa.
+  rest.documentos.get(caminho).fields.status = { booleanValue: false };
+  rest.documentos.get(caminho).fields.started = { booleanValue: false };
+  await banners.editar('loja-1', 'b1', foto, { inicio: '2026-10-14T00:00:00Z', fim: '2026-10-20T00:00:00Z' });
+  const campos = rest.documentos.get(caminho).fields;
+  assert.equal(campos.status.booleanValue, false);
+  assert.equal(campos.started.booleanValue, false);
+  assert.equal(campos.startAt.timestampValue, '2026-10-14T00:00:00.000Z');
+  const semAtivacao = documentoRest(camposDoBanner({ id: 'b1', path: 'x', storageRef: 'y', largura: 1080, altura: 500, inicio: new Date(), fim: new Date(), tipo: 'principal' }));
+  assert.equal('status' in semAtivacao.fields, false);
+  assert.equal('started' in semAtivacao.fields, false);
 });

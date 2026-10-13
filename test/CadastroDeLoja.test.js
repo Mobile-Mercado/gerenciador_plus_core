@@ -275,3 +275,54 @@ test('foto acima de 50 megapixels e recusada com mensagem, e as conversoes rodam
   await Promise.all([umaPorVez(trabalho('a', 30)), umaPorVez(trabalho('b', 1)), umaPorVez(() => Promise.reject(new Error('x'))).catch(() => 'falhou'), umaPorVez(trabalho('c', 1))]);
   assert.deepEqual(ordem, ['inicio a', 'fim a', 'inicio b', 'fim b', 'inicio c', 'fim c']);
 });
+
+test('C3.1: limite por IP de 5 tentativas por dia; CNPJ e e-mail como estavam', async () => {
+  const { LIMITES } = await import('../src/application/cadastro/LimiteDeTentativas.js');
+  assert.deepEqual(LIMITES.ip, { maximo: 5, janelaMs: 24 * 60 * 60 * 1000 });
+  assert.deepEqual(LIMITES.cnpj, { maximo: 5, janelaMs: 24 * 60 * 60 * 1000 });
+  assert.deepEqual(LIMITES.email, { maximo: 5, janelaMs: 24 * 60 * 60 * 1000 });
+  const { cadastro } = montar({ receita: { encontrado: true, ativa: false } });
+  // CNPJs validos e diferentes: so o IP se repete.
+  const cnpjValido = (base) => {
+    const digito = (numeros, pesos) => { const resto = numeros.reduce((soma, n, i) => soma + n * pesos[i], 0) % 11; return resto < 2 ? 0 : 11 - resto; };
+    const numeros = base.split('').map(Number);
+    const primeiro = digito(numeros, [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+    return base + primeiro + digito([...numeros, primeiro], [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+  };
+  for (let tentativa = 0; tentativa < 5; tentativa += 1) {
+    await recusa(cadastro.consultarCnpj(cnpjValido(`1122233300${10 + tentativa}`), { ip: '200.9.9.9' }), 'cadastro_cnpj_inativo');
+  }
+  await recusa(cadastro.consultarCnpj(cnpjValido('112223330099'), { ip: '200.9.9.9' }), 'cadastro_tentativas_excedidas');
+  await recusa(cadastro.consultarCnpj(cnpjValido('112223330098'), { ip: '200.9.9.10' }), 'cadastro_cnpj_inativo');
+});
+
+test('C3.2 (temporario): registro do X-Forwarded-For so com quantidade e posicoes do Google, nunca os IPs', async () => {
+  const { default: express } = await import('express');
+  const { createCadastroRoutes, resumoDoEncaminhamento } = await import('../src/http/routes/cadastroRoutes.js');
+  assert.deepEqual(resumoDoEncaminhamento('203.0.113.7, 35.191.10.4'), { quantidade: 2, posicoesDoGoogle: [1] });
+  assert.deepEqual(resumoDoEncaminhamento('130.211.1.2,198.51.100.1, 130.211.4.1'), { quantidade: 3, posicoesDoGoogle: [0] });
+  assert.deepEqual(resumoDoEncaminhamento(undefined), { quantidade: 0, posicoesDoGoogle: [] });
+  const registros = [];
+  const { cadastro } = montar();
+  const app = express();
+  app.use(express.json());
+  app.use('/api/cadastro', createCadastroRoutes({
+    cadastroDeLoja: cadastro,
+    appCheck: (_request, _response, next) => next(),
+    exigirLogin: (_request, _response, next) => next(),
+    registrar: (meta) => registros.push(meta),
+  }));
+  const servidor = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
+  try {
+    const base = `http://127.0.0.1:${servidor.address().port}/api/cadastro`;
+    await fetch(`${base}/loja/cnpj`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '203.0.113.7, 35.191.10.4' }, body: '{"cnpj":"1"}' });
+    await fetch(`${base}/loja/situacao`);
+  } finally {
+    servidor.close();
+  }
+  assert.deepEqual(registros, [
+    { path: '/api/cadastro/loja/cnpj', quantidade: 2, posicoesDoGoogle: [1] },
+    { path: '/api/cadastro/loja/situacao', quantidade: 0, posicoesDoGoogle: [] },
+  ]);
+  assert.equal(JSON.stringify(registros).includes('203.0.113.7'), false);
+});

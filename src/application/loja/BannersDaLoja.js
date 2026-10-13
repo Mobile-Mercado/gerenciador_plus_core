@@ -25,15 +25,15 @@ function valorFirestore(valor) {
 
 export const decimal = (numero) => ({ __double: numero });
 
-export function camposDoBanner({ id, path, storageRef, largura, altura, inicio, fim, tipo, products }) {
+// status e started so na criacao (novo: true); a edicao deixa os dois como estao.
+export function camposDoBanner({ id, path, storageRef, largura, altura, inicio, fim, tipo, products, novo = false }) {
   return {
     id,
     image: { path, storageRef, size: { width: decimal(largura), height: decimal(altura) } },
     ...(products !== undefined ? { products } : {}),
     startAt: inicio,
     endAt: fim,
-    started: true,
-    status: true,
+    ...(novo ? { started: true, status: true } : {}),
     type: tipo,
   };
 }
@@ -115,12 +115,12 @@ export class BannersDaLoja {
     const datas = this.periodo({ inicio, fim });
     const imagem = await this.enviarImagem(lojaId, conteudo);
     const id = this.novoId();
-    const campos = camposDoBanner({ id, ...imagem, ...datas, tipo: 'principal', products: [] });
+    const campos = camposDoBanner({ id, ...imagem, ...datas, tipo: 'principal', products: [], novo: true });
     await this.rest.gravar(this.caminho(lojaId, id), documentoRest(campos), { criar: true });
     return this.conferir(lojaId, id);
   }
 
-  // Editar: troca a imagem e o periodo; produtos e tipo ficam como estao. O arquivo antigo sai.
+  // Editar: troca a imagem e o periodo; produtos, tipo, status e started ficam como estao. O arquivo antigo sai.
   async editar(lojaId, bannerId, conteudo, { inicio, fim }) {
     const atual = await this.firestore.doc(this.caminho(lojaId, bannerId)).get();
     if (!atual.exists) throw new AppError('Banner não encontrado.', { statusCode: 404, code: 'banner_nao_encontrado' });
