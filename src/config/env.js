@@ -72,6 +72,8 @@ export const env = Object.freeze({
     nodeEnv === 'production',
   ),
   IMPLANTATION_ADMIN_UIDS: parseList(process.env.IMPLANTATION_ADMIN_UIDS),
+  // Bucket dos icones de categoria da lista padrao (Admin).
+  STORAGE_BUCKET: process.env.STORAGE_BUCKET || 'appmobileprod-19505.appspot.com',
 });
 
 export function isProduction() {

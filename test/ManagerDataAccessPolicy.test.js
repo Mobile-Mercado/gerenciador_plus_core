@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ManagerDataAccessPolicy, carimboDeStatus } from '../src/infra/firebase/ManagerDataAccessPolicy.js';
+import { ManagerDataAccessPolicy, carimboDeStatus, permissionKeyForMutation } from '../src/infra/firebase/ManagerDataAccessPolicy.js';
 import { FirestoreManagerDataGateway } from '../src/infra/firebase/FirestoreManagerDataGateway.js';
+import { TravasDeCategoria } from '../src/application/catalogo/TravasDeCategoria.js';
+import { FirestoreEmMemoria } from './apoio/firestoreEmMemoria.js';
 
 const actor = {
   uid: 'uid-manager',
@@ -271,4 +273,111 @@ test('gateway carimba o status depois da politica, em gravacao unica e em batch'
   assert.equal(lote.registro.gravado[0].data.statusAlteradoPor.status, 'completed');
   assert.deepEqual(lote.registro.gravado[1].data, { isTest: true });
   assert.equal(lote.registro.gravado[2].data.statusAlteradoPor, undefined, 'fora de PurchaseRequests nao carimba');
+});
+
+// ===== Catalogo da loja (12/10/2026) =====
+
+function politicaDoCatalogo(extra = {}) {
+  const firestore = new FirestoreEmMemoria({
+    'categoriasProdutos/tabacaria': { nome: 'Tabacaria', travada: true },
+    'estabelecimentos/store-1/ProductSubcategories/cigarro_e_fumo': { name: 'Cigarro e Fumo', categoryId: 'tabacaria' },
+    'estabelecimentos/store-1/SugestoesCategorias/ja-existe': { nome: 'Pet', estado: 'pendente' },
+    ...extra,
+  });
+  return new ManagerDataAccessPolicy({ firestore, travas: new TravasDeCategoria({ firestore }) });
+}
+
+const mutacao = (operation, path, data, options = {}) => ({ operation, target: { kind: 'document', path }, data, options });
+
+test('categoria avulsa e recusada: categoria nova vem do Ativar', async () => {
+  const policy = politicaDoCatalogo();
+  for (const colecao of ['ProductCategories', 'ProductSubcategories']) {
+    await assert.rejects(
+      policy.assertMutation({ actor, mutation: mutacao('set', `estabelecimentos/store-1/${colecao}/nova`, { name: 'Nova' }) }),
+      (error) => error.code === 'categoria_avulsa_recusada',
+    );
+    await assert.rejects(
+      policy.assertMutation({ actor, mutation: mutacao('set', `estabelecimentos/store-1/${colecao}/nova`, { order: 1 }, { merge: true }) }),
+      (error) => error.code === 'categoria_avulsa_recusada',
+    );
+  }
+});
+
+test('nome de categoria nao muda pelo proxy', async () => {
+  const policy = politicaDoCatalogo();
+  for (const campo of ['name', 'nomeExibicao']) {
+    await assert.rejects(
+      policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductCategories/bebidas', { [campo]: 'Outro' }) }),
+      (error) => error.code === 'categoria_nome_pelo_core',
+    );
+  }
+  await policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductCategories/bebidas', { order: 3 }) });
+});
+
+test('categoria travada nao liga, nem a subcategoria dela', async () => {
+  const policy = politicaDoCatalogo();
+  await assert.rejects(
+    policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductCategories/tabacaria', { isActive: true }) }),
+    (error) => error.code === 'categoria_travada',
+  );
+  await assert.rejects(
+    policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductSubcategories/cigarro_e_fumo', { isActive: true }) }),
+    (error) => error.code === 'categoria_travada',
+  );
+  await policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductCategories/tabacaria', { isActive: false }) });
+  await policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductCategories/bebidas', { isActive: true }) });
+});
+
+test('com liberacao para a loja, a travada liga', async () => {
+  const policy = politicaDoCatalogo({ 'liberacoesCategorias/store-1': { liberadas: { tabacaria: { por: 'thay' } } } });
+  await policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductCategories/tabacaria', { isActive: true }) });
+});
+
+test('lojista nao grava trava nem liberacao', async () => {
+  const policy = politicaDoCatalogo();
+  await assert.rejects(
+    policy.assertMutation({ actor, mutation: mutacao('set', 'liberacoesCategorias/store-1', { liberadas: { tabacaria: {} } }, { merge: true }) }),
+    (error) => error.code === 'data_access_forbidden',
+  );
+  await assert.rejects(
+    policy.assertMutation({ actor, mutation: mutacao('update', 'categoriasProdutos/tabacaria', { travada: false }) }),
+    (error) => error.code === 'data_access_forbidden',
+  );
+});
+
+test('sugestao de categoria so nasce pendente e nao muda depois', async () => {
+  const policy = politicaDoCatalogo();
+  const caminho = 'estabelecimentos/store-1/SugestoesCategorias/nova';
+  const sugestao = { nome: 'Pet', tipo: 'categoria', estado: 'pendente', produtos: [{ id: 'p1', nome: 'Racao' }] };
+  await policy.assertMutation({ actor, mutation: mutacao('set', caminho, sugestao) });
+  assert.equal(permissionKeyForMutation(mutacao('set', caminho, sugestao), 'store-1'), 'products.edit');
+  await assert.rejects(
+    policy.assertMutation({ actor, mutation: mutacao('set', caminho, { ...sugestao, estado: 'aprovada' }) }),
+    (error) => error.code === 'sugestao_so_pendente',
+  );
+  await assert.rejects(
+    policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/SugestoesCategorias/ja-existe', { estado: 'aprovada' }) }),
+    (error) => error.code === 'sugestao_so_criacao',
+  );
+  await assert.rejects(
+    policy.assertMutation({ actor, mutation: mutacao('set', 'estabelecimentos/store-1/SugestoesCategorias/ja-existe', sugestao) }),
+    (error) => error.code === 'sugestao_so_criacao',
+  );
+  await assert.rejects(
+    policy.assertMutation({ actor, mutation: mutacao('set', caminho, { ...sugestao, decisao: { por: 'eu' } }) }),
+    (error) => error.code === 'sugestao_campos_recusados',
+  );
+});
+
+test('Mercearia e Todos nao desligam na loja, pelo id ou pelo nome', async () => {
+  const policy = politicaDoCatalogo({ 'estabelecimentos/store-1/ProductCategories/xyz': { name: 'TODOS' } });
+  await assert.rejects(
+    policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductCategories/mercearia', { isActive: false }) }),
+    (error) => error.code === 'catalogo_categoria_protegida',
+  );
+  await assert.rejects(
+    policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductCategories/xyz', { isActive: false }) }),
+    (error) => error.code === 'catalogo_categoria_protegida',
+  );
+  await policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductCategories/mercearia', { order: 2 }) });
 });

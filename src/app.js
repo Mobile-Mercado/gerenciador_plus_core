@@ -2,7 +2,9 @@ import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
 import { env } from './config/env.js';
+import { createAdminRoutes } from './http/routes/adminRoutes.js';
 import { createAiRoutes } from './http/routes/aiRoutes.js';
+import { createCatalogoRoutes } from './http/routes/catalogoRoutes.js';
 import { createCouponRoutes } from './http/routes/couponRoutes.js';
 import { createDataRoutes } from './http/routes/dataRoutes.js';
 import { createDeliveryRoutes } from './http/routes/deliveryRoutes.js';
@@ -15,6 +17,8 @@ import { errorHandler, notFoundHandler } from './http/middlewares/errorHandler.j
 import { createFirebaseAuthMiddleware } from './http/middlewares/firebaseAuth.js';
 import { createImplantationAdminMiddleware } from './http/middlewares/implantationAdmin.js';
 import { createPermissionGuard } from './http/middlewares/requirePermission.js';
+import { createPlatformAdminGuard } from './http/middlewares/requirePlatformAdmin.js';
+import { createContaDeLojaOuAdminGuard } from './http/middlewares/requireContaDeLojaOuAdmin.js';
 import { requestLogger } from './http/middlewares/requestLogger.js';
 
 export function createApp({
@@ -30,10 +34,19 @@ export function createApp({
   recalculateCategoryCountsUseCase,
   deliveryByCodeUseCase,
   accessRepository,
+  manageCatalogoPadrao,
+  catalogoDaLoja,
+  platformAdminRepository,
+  adminAuditMiddleware,
+  sugestoesDosClientes,
 }) {
   const app = express();
   // Barreira de escrita por chave de permissao, com cache por token.
-  const { requirePermission } = createPermissionGuard({ accessRepository });
+  const { requirePermission, accountForRequest } = createPermissionGuard({ accessRepository });
+  // Admin da plataforma (usersAdmin), conferido em toda chamada de /api/admin.
+  const { requirePlatformAdmin, isPlatformAdminForRequest } = createPlatformAdminGuard({ platformAdminRepository });
+  // IA so para conta de loja ou admin da plataforma (decisao do Thay de 12/10/2026).
+  const requireContaDeLojaOuAdmin = createContaDeLojaOuAdminGuard({ accountForRequest, isPlatformAdminForRequest });
 
   app.disable('x-powered-by');
   app.use(helmet());
@@ -65,7 +78,10 @@ export function createApp({
   app.use(
     '/api/ai',
     createFirebaseAuthMiddleware({ required: env.REQUIRE_FIREBASE_AUTH }),
-    createAiRoutes({ generateAiResponseUseCase, getDailyHomeOverviewUseCase, requirePermission }),
+    requireContaDeLojaOuAdmin,
+    createAiRoutes({
+      generateAiResponseUseCase, getDailyHomeOverviewUseCase, requirePermission, accountForRequest,
+    }),
   );
   app.use(
     '/api/implantacao',
@@ -78,6 +94,7 @@ export function createApp({
         allowedUids: env.IMPLANTATION_ADMIN_UIDS,
       }),
       requirePermission,
+      accountForRequest,
     }),
   );
   app.use(
@@ -94,6 +111,20 @@ export function createApp({
     '/api/coupons',
     createFirebaseAuthMiddleware({ required: true }),
     createCouponRoutes({ manageCoupons, requirePermission }),
+  );
+  // Catalogo da loja a partir da lista padrao (Ativar, travadas, nome de exibicao).
+  app.use(
+    '/api/catalogo',
+    createFirebaseAuthMiddleware({ required: true }),
+    createCatalogoRoutes({ catalogoDaLoja, requirePermission, accountForRequest }),
+  );
+  // Admin da plataforma: login, barreira de admin em toda chamada e registro de quem agiu.
+  app.use(
+    '/api/admin',
+    createFirebaseAuthMiddleware({ required: true }),
+    requirePlatformAdmin,
+    adminAuditMiddleware,
+    createAdminRoutes({ manageCatalogoPadrao, sugestoesDosClientes }),
   );
 
   app.use(notFoundHandler);

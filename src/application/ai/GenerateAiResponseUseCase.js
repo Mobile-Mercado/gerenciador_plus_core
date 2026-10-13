@@ -1,3 +1,4 @@
+import { custoEstimadoUsd } from '../../domain/ai/precosIa.js';
 import { AppError } from '../../domain/errors/AppError.js';
 
 const MAX_PROMPT_LENGTH = 12000;
@@ -30,12 +31,15 @@ const TASK_INSTRUCTIONS = Object.freeze({
 });
 
 export class GenerateAiResponseUseCase {
-  constructor({ aiGateway }) {
+  // `usoIaRepository`: registro do uso por loja (UsoIa). Opcional: sem ele, nada e gravado.
+  constructor({ aiGateway, usoIaRepository = null, logger = null }) {
     if (!aiGateway || typeof aiGateway.generate !== 'function') {
       throw new TypeError('GenerateAiResponseUseCase exige um AiGateway valido.');
     }
 
     this.aiGateway = aiGateway;
+    this.usoIaRepository = usoIaRepository;
+    this.logger = logger;
   }
 
   async execute(input) {
@@ -58,7 +62,7 @@ export class GenerateAiResponseUseCase {
     const responseFormat = input.responseFormat === 'json' ? 'json' : 'text';
     const task = input.task || 'responder';
 
-    return this.aiGateway.generate({
+    const result = await this.aiGateway.generate({
       responseFormat,
       content: input.content,
       model: input.model,
@@ -70,6 +74,31 @@ export class GenerateAiResponseUseCase {
         context: input.context,
       }),
     });
+    this.registrarUso(input, task, result);
+    return result;
+  }
+
+  // Grava o uso sem segurar a resposta. `establishmentId` vem da sessao de quem chamou
+  // (rota), nunca do corpo; sem ele, nada e gravado.
+  registrarUso(input, task, result) {
+    if (!this.usoIaRepository || !input.establishmentId) return;
+    const usage = result?.usage || {};
+    const metadata = input.metadata || {};
+    const registro = {
+      task,
+      provedor: result?.provider || null,
+      modelo: result?.model || null,
+      tokensEntrada: Number(usage.inputTokens) || 0,
+      tokensSaida: Number(usage.outputTokens) || 0,
+      tokensTotal: Number(usage.totalTokens) || (Number(usage.inputTokens) || 0) + (Number(usage.outputTokens) || 0),
+      custoEstimadoUsd: custoEstimadoUsd(result?.model, usage),
+      tela: typeof metadata.tela === 'string' ? metadata.tela.slice(0, 80) : null,
+      produtos: Number.isFinite(Number(metadata.produtos)) ? Number(metadata.produtos) : null,
+      uid: metadata.firebaseUid || null,
+    };
+    Promise.resolve()
+      .then(() => this.usoIaRepository.registrar(input.establishmentId, registro))
+      .catch((error) => this.logger?.error('uso_ia_registro_falhou', { task, originalMessage: error?.message }));
   }
 }
 

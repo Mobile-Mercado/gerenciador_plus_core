@@ -26,9 +26,18 @@ const homeOverviewRequestSchema = z.object({
 });
 
 export function createAiRoutes({
-  generateAiResponseUseCase, getDailyHomeOverviewUseCase, requirePermission,
+  generateAiResponseUseCase, getDailyHomeOverviewUseCase, requirePermission, accountForRequest,
 }) {
   const router = Router();
+  // Loja de quem chama, para o registro de uso (UsoIa). Sem login ou sem loja, nao grava.
+  const lojaDoUso = async (request) => {
+    if (!request.auth?.uid || !accountForRequest) return null;
+    try {
+      return (await accountForRequest(request))?.establishmentId || null;
+    } catch {
+      return null;
+    }
+  };
 
   router.post(
     '/home-overview',
@@ -50,6 +59,7 @@ export function createAiRoutes({
       const input = aiRequestSchema.parse(request.body);
       const result = await generateAiResponseUseCase.execute({
         ...input,
+        establishmentId: await lojaDoUso(request),
         task: input.task || 'responder',
         responseFormat: input.responseFormat || 'text',
         content: input.content,
@@ -71,6 +81,7 @@ export function createAiRoutes({
     asyncHandler(async (request, response) => {
       const input = insightsRequestSchema.parse(request.body);
       const result = await generateAiResponseUseCase.execute({
+        establishmentId: await lojaDoUso(request),
         prompt: input.question,
         context: input.data,
         metadata: {
