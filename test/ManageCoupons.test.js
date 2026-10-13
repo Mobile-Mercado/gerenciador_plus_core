@@ -303,3 +303,54 @@ function createManager({
     clock: () => new Date('2026-08-12T12:00:00.000Z'),
   });
 }
+
+test('C5.2: funcionario com coupons.manage (adminOf) usa a loja da conta da requisicao, nao a do dono', async () => {
+  const { default: express } = await import('express');
+  const { createCouponRoutes } = await import('../src/http/routes/couponRoutes.js');
+  const { createPermissionGuard } = await import('../src/http/middlewares/requirePermission.js');
+  const { errorHandler } = await import('../src/http/middlewares/errorHandler.js');
+  const created = [];
+  const updated = [];
+  const coupons = [
+    { id: 'c1', code: 'LOJA', active: true, establishmentIds: ['loja-func'] },
+    { id: 'c2', code: 'OUTRA', active: true, establishmentIds: ['loja-outra'] },
+  ];
+  const manageCoupons = new ManageCoupons({
+    couponRepository: {
+      create: async (coupon) => { created.push(coupon); return { id: 'novo', ...coupon }; },
+      list: async () => coupons,
+      findById: async (id) => coupons.find((coupon) => coupon.id === id) || null,
+      update: async (id, patch) => { updated.push({ id, patch }); },
+      delete: async () => {},
+    },
+    // O funcionario nao e dono de loja: pelo uid nao acha nada.
+    accessRepository: { findAccountByUid: async () => null },
+  });
+  const accessRepository = {
+    findAccountByClaims: async ({ adminOf }) => (adminOf
+      ? { establishmentId: adminOf, hasEstablishment: true, permissions: { isAdmin: false, keys: ['coupons.manage'] } }
+      : null),
+  };
+  const { requirePermission, accountForRequest } = createPermissionGuard({ accessRepository });
+  const app = express();
+  app.use(express.json());
+  app.use((request, _response, next) => { request.auth = { uid: 'func-1', adminOf: 'loja-func' }; next(); });
+  app.use('/api/coupons', createCouponRoutes({ manageCoupons, requirePermission, accountForRequest }));
+  app.use(errorHandler);
+  const servidor = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
+  try {
+    const base = `http://127.0.0.1:${servidor.address().port}/api/coupons`;
+    const lista = await (await fetch(base)).json();
+    assert.deepEqual(lista.data.map((coupon) => coupon.id), ['c1']);
+    const criado = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(validPayload) });
+    assert.equal(criado.status, 201);
+    assert.deepEqual(created[0].establishmentIds, ['loja-func']);
+    const editado = await fetch(`${base}/c1`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: 'Nova' }) });
+    assert.equal(editado.status, 200);
+    const alheio = await fetch(`${base}/c2`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: 'X' }) });
+    assert.equal(alheio.status, 403);
+    assert.deepEqual(updated, [{ id: 'c1', patch: { description: 'Nova' } }]);
+  } finally {
+    servidor.close();
+  }
+});

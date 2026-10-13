@@ -381,3 +381,9 @@ test('Mercearia e Todos nao desligam na loja, pelo id ou pelo nome', async () =>
   );
   await policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductCategories/mercearia', { order: 2 }) });
 });
+
+test('C8: mudar currentPrice de produto pede products.edit_price', () => {
+  const caminho = 'estabelecimentos/store-1/Products/p1';
+  assert.equal(permissionKeyForMutation(mutacao('update', caminho, { currentPrice: 9.9 }), 'store-1'), 'products.edit_price');
+  assert.equal(permissionKeyForMutation(mutacao('update', caminho, { name: 'Arroz' }), 'store-1'), 'products.edit');
+});

@@ -255,6 +255,42 @@
       ]
     },
     {
+      "collectionGroup": "Products",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "categoriesIds",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "isTrashed",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "Products",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "subcategoriesIds",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "isTrashed",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "PurchaseRequests",
       "queryScope": "COLLECTION",
       "fields": [

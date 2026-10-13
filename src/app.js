@@ -146,7 +146,7 @@ export function createApp({
   app.use(
     '/api/coupons',
     createFirebaseAuthMiddleware({ required: true }),
-    createCouponRoutes({ manageCoupons, requirePermission }),
+    createCouponRoutes({ manageCoupons, requirePermission, accountForRequest }),
   );
   // Catalogo da loja a partir da lista padrao (Ativar, travadas, nome de exibicao).
   app.use(

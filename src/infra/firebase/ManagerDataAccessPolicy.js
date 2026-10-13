@@ -24,7 +24,7 @@ const VERIFICATION_TTL_MS = 10 * 60 * 1000;
 const CANCEL_STATUSES = new Set(['canceled', 'cancelled', 'cancelado', 'denied', 'giveUp']);
 // Campos de preco: a promocao (como o app gerenciador grava) pede a mesma permissao de preco.
 const PRICE_FIELDS = new Set([
-  'price', 'promotionPrice', 'historyPrice', 'previewPrice',
+  'price', 'currentPrice', 'promotionPrice', 'historyPrice', 'previewPrice',
   'promotionalPrice', 'promotionStartAt', 'promotionEndAt', 'promotionSource',
 ]);
 const PRODUCT_EDIT_COLLECTIONS = new Set(['implantacaoGrenciador', 'ProductCategories', 'ProductSubcategories', 'SugestoesCategorias']);

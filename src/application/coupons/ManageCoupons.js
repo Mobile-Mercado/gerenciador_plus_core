@@ -9,10 +9,10 @@ export class ManageCoupons {
   }
 
   async createCoupon({
-    actorUid, code, description, termsText, scopeName, firstPurchaseOnly, rules, discount,
+    actorUid, establishmentId, code, description, termsText, scopeName, firstPurchaseOnly, rules, discount,
     startAt, endAt, perCustomerLimit, totalUsageLimit, stackable,
   }) {
-    const account = await this.requireEstablishment(actorUid);
+    const account = await this.requireEstablishment(actorUid, establishmentId);
 
     const normalizedCode = String(code || '').trim().toUpperCase();
     await this.assertCodeNotActive(normalizedCode, account.establishmentId);
@@ -51,14 +51,14 @@ export class ManageCoupons {
     }
   }
 
-  async listCoupons({ actorUid }) {
-    const account = await this.requireEstablishment(actorUid);
+  async listCoupons({ actorUid, establishmentId }) {
+    const account = await this.requireEstablishment(actorUid, establishmentId);
     const coupons = await this.couponRepository.list();
     return coupons.filter((coupon) => coupon.establishmentIds?.includes(account.establishmentId));
   }
 
-  async updateCoupon({ actorUid, couponId, patch }) {
-    const account = await this.requireEstablishment(actorUid);
+  async updateCoupon({ actorUid, establishmentId, couponId, patch }) {
+    const account = await this.requireEstablishment(actorUid, establishmentId);
     const coupon = await this.requireCoupon(couponId);
     this.assertOwnership(coupon, account.establishmentId);
 
@@ -80,15 +80,15 @@ export class ManageCoupons {
     await this.couponRepository.update(couponId, normalizedPatch);
   }
 
-  async deactivateCoupon({ actorUid, couponId }) {
-    const account = await this.requireEstablishment(actorUid);
+  async deactivateCoupon({ actorUid, establishmentId, couponId }) {
+    const account = await this.requireEstablishment(actorUid, establishmentId);
     const coupon = await this.requireCoupon(couponId);
     this.assertOwnership(coupon, account.establishmentId);
     await this.couponRepository.update(couponId, { active: false });
   }
 
-  async deleteCoupon({ actorUid, couponId }) {
-    const account = await this.requireEstablishment(actorUid);
+  async deleteCoupon({ actorUid, establishmentId, couponId }) {
+    const account = await this.requireEstablishment(actorUid, establishmentId);
     const coupon = await this.requireCoupon(couponId);
     this.assertOwnership(coupon, account.establishmentId);
 
@@ -122,7 +122,10 @@ export class ManageCoupons {
     }
   }
 
-  async requireEstablishment(actorUid) {
+  // Loja da conta da requisicao (accountForRequest, que entende adminOf do funcionario e o Admin da
+  // plataforma). Sem ela, cai na conta do dono pelo uid.
+  async requireEstablishment(actorUid, establishmentId = null) {
+    if (establishmentId) return { establishmentId, hasEstablishment: true };
     const account = await this.accessRepository.findAccountByUid(actorUid);
     if (!account?.hasEstablishment) {
       throw new AppError('Conta sem estabelecimento vinculado.', {

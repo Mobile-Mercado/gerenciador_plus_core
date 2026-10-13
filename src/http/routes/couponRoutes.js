@@ -64,13 +64,16 @@ const updateCouponSchema = z.object({
   { message: 'Envie ao menos um campo para atualizar.' },
 );
 
-export function createCouponRoutes({ manageCoupons, requirePermission }) {
+// A loja vem da conta da requisicao (accountForRequest): dono, funcionario com adminOf e Admin da
+// plataforma na loja escolhida (C5.2, 13/10/2026).
+export function createCouponRoutes({ manageCoupons, requirePermission, accountForRequest }) {
   const router = Router();
+  const lojaDaRequisicao = async (request) => (await accountForRequest(request)).establishmentId;
 
   router.get(
     '/',
     asyncHandler(async (request, response) => {
-      const result = await manageCoupons.listCoupons({ actorUid: request.auth.uid });
+      const result = await manageCoupons.listCoupons({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request) });
       response.json({ data: result });
     }),
   );
@@ -80,7 +83,7 @@ export function createCouponRoutes({ manageCoupons, requirePermission }) {
     requirePermission('coupons.manage'),
     asyncHandler(async (request, response) => {
       const payload = createCouponSchema.parse(request.body);
-      const result = await manageCoupons.createCoupon({ actorUid: request.auth.uid, ...payload });
+      const result = await manageCoupons.createCoupon({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request), ...payload });
       response.status(201).json({ data: result });
     }),
   );
@@ -91,7 +94,7 @@ export function createCouponRoutes({ manageCoupons, requirePermission }) {
     asyncHandler(async (request, response) => {
       const { couponId } = couponIdParamsSchema.parse(request.params);
       const patch = updateCouponSchema.parse(request.body);
-      await manageCoupons.updateCoupon({ actorUid: request.auth.uid, couponId, patch });
+      await manageCoupons.updateCoupon({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request), couponId, patch });
       response.json({ data: { couponId, ...patch } });
     }),
   );
@@ -101,7 +104,7 @@ export function createCouponRoutes({ manageCoupons, requirePermission }) {
     requirePermission('coupons.manage'),
     asyncHandler(async (request, response) => {
       const { couponId } = couponIdParamsSchema.parse(request.params);
-      await manageCoupons.deactivateCoupon({ actorUid: request.auth.uid, couponId });
+      await manageCoupons.deactivateCoupon({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request), couponId });
       response.json({ data: { couponId, active: false } });
     }),
   );
@@ -111,7 +114,7 @@ export function createCouponRoutes({ manageCoupons, requirePermission }) {
     requirePermission('coupons.manage'),
     asyncHandler(async (request, response) => {
       const { couponId } = couponIdParamsSchema.parse(request.params);
-      await manageCoupons.deleteCoupon({ actorUid: request.auth.uid, couponId });
+      await manageCoupons.deleteCoupon({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request), couponId });
       response.json({ data: { couponId } });
     }),
   );
