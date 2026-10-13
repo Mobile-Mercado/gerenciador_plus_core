@@ -116,7 +116,10 @@ export class ManageImplantationPipelines {
     await this.firestore.runTransaction(async (transaction) => {
       const snapshot = await transaction.get(reference);
       const pipeline = normalizePipeline(snapshot.exists ? snapshot.data() : {}, establishmentId);
-      if (!pipeline.unlockedSteps.includes('06')) {
+      // Mesma regra da faixa do painel: a 06 aberta ou as etapas antes dela (menos a 05, pulada)
+      // terminadas.
+      const antesDaValidacao = ['01', '02', '03', '04'].every((step) => Number(pipeline.steps?.[step]?.pct) >= 100);
+      if (!pipeline.unlockedSteps.includes('06') && !antesDaValidacao) {
         throw new AppError('A aprovação formal abre quando a implantação chega na validação.', {
           statusCode: 409,
           code: 'implantacao_aprovacao_antes_da_validacao',
