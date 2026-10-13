@@ -7,7 +7,7 @@ import { AppError } from '../../domain/errors/AppError.js';
 // A chave guarda so o hash do IP, do CNPJ ou do e-mail. O campo expiraEm e o da politica
 // de expiracao (TTL) que o Thay cria no console depois da publicacao.
 export const LIMITES = Object.freeze({
-  ip: { maximo: 20, janelaMs: 60 * 60 * 1000 },
+  ip: { maximo: 5, janelaMs: 24 * 60 * 60 * 1000 },
   cnpj: { maximo: 5, janelaMs: 24 * 60 * 60 * 1000 },
   email: { maximo: 5, janelaMs: 24 * 60 * 60 * 1000 },
 });

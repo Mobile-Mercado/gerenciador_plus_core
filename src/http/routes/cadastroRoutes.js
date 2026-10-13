@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../middlewares/asyncHandler.js';
 import { corpoDeImagem } from '../middlewares/corpoDeImagem.js';
+import { logger } from '../../infra/logger/logger.js';
 
 // Cadastro de loja pelo app gerenciador. POST /loja e POST /loja/cnpj sao publicas (sem login),
 // com limite de tentativas por IP, CNPJ e e-mail contado no Firestore e App Check preparado.
@@ -20,8 +21,16 @@ const pedidoSchema = z.object({
 const cnpjSchema = z.object({ cnpj: z.string().max(32) });
 const tipoSchema = z.object({ tipo: z.enum(['logo', 'fachada']) });
 
-export function createCadastroRoutes({ cadastroDeLoja, appCheck, exigirLogin }) {
+export function createCadastroRoutes({ cadastroDeLoja, appCheck, exigirLogin, registrar = (meta) => logger.info('cadastro_x_forwarded_for', meta) }) {
   const router = Router();
+
+  // TEMPORARIO (13/10/2026): conferir em producao a posicao do IP do cliente no X-Forwarded-For.
+  // Grava so a quantidade de enderecos e as posicoes que sao do Google; nunca os IPs. Sai depois
+  // de corrigida a posicao em origemDaRequisicao.
+  router.use('/loja', (request, _response, next) => {
+    registrar({ path: request.originalUrl.split('?')[0], ...resumoDoEncaminhamento(request.headers['x-forwarded-for']) });
+    next();
+  });
 
   router.post('/loja/cnpj', appCheck, asyncHandler(async (request, response) => {
     const { cnpj } = cnpjSchema.parse(request.body);
@@ -47,6 +56,29 @@ export function createCadastroRoutes({ cadastroDeLoja, appCheck, exigirLogin }) 
   }));
 
   return router;
+}
+
+// TEMPORARIO (13/10/2026), junto com o registro acima. Faixas que o Google documenta para os
+// proxies do Google Front End e do balanceador (35.191.0.0/16 e 130.211.0.0/22). Posicoes contam de 0.
+const FAIXAS_DO_GOOGLE = [['35.191.0.0', 16], ['130.211.0.0', 22]];
+
+function numeroDoIpv4(ip) {
+  const partes = String(ip).split('.');
+  if (partes.length !== 4 || partes.some((parte) => !/^\d{1,3}$/.test(parte) || Number(parte) > 255)) return null;
+  return partes.reduce((soma, parte) => soma * 256 + Number(parte), 0);
+}
+
+export function resumoDoEncaminhamento(cabecalho) {
+  const enderecos = String(cabecalho || '').split(',').map((item) => item.trim()).filter(Boolean);
+  const posicoesDoGoogle = enderecos
+    .map((endereco, posicao) => {
+      const numero = numeroDoIpv4(endereco);
+      if (numero === null) return null;
+      const doGoogle = FAIXAS_DO_GOOGLE.some(([base, bits]) => Math.floor(numero / 2 ** (32 - bits)) === Math.floor(numeroDoIpv4(base) / 2 ** (32 - bits)));
+      return doGoogle ? posicao : null;
+    })
+    .filter((posicao) => posicao !== null);
+  return { quantidade: enderecos.length, posicoesDoGoogle };
 }
 
 // Atras do Cloud Run, o IP do cliente vem no primeiro salto do X-Forwarded-For.
