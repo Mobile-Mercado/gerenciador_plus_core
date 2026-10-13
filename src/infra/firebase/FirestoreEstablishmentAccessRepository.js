@@ -26,15 +26,25 @@ export class FirestoreEstablishmentAccessRepository extends EstablishmentAccessR
     const establishmentId = String(userData.id || userSnapshot.id || '').trim();
     if (!establishmentId) return null;
 
-    const establishmentSnapshot = await this.firestore
+    let establishmentSnapshot = await this.firestore
       .collection('estabelecimentos')
       .doc(establishmentId)
       .get();
+    // Loja do cadastro pelo servidor (13/10/2026): Users/{uid}.id e o proprio uid, como o app
+    // gerenciador espera, e a loja e achada por userReference = Users/{uid}.
+    if (!establishmentSnapshot.exists) {
+      const porReferencia = await this.firestore
+        .collection('estabelecimentos')
+        .where('userReference', '==', userSnapshot.ref)
+        .limit(1)
+        .get();
+      if (!porReferencia.empty) establishmentSnapshot = porReferencia.docs[0];
+    }
 
     return {
       uid,
       userId: userSnapshot.id,
-      establishmentId,
+      establishmentId: establishmentSnapshot.exists ? establishmentSnapshot.id : establishmentId,
       userDocument: {
         id: userSnapshot.id,
         name: userData.name || null,
@@ -126,5 +136,8 @@ function sessionEstablishment(id, data = {}) {
     coorporativeName: data.coorporativeName || null,
     image: data.image || data.imageUrl || null,
     userType: data.userType || null,
+    // Pedido de loja do cadastro novo. Loja antiga nao tem status e segue como hoje.
+    status: data.status || null,
+    motivoRecusa: data.status === 'recusada' ? data.motivoRecusa || null : null,
   };
 }

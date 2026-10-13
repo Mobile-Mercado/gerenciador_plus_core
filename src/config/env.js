@@ -74,6 +74,8 @@ export const env = Object.freeze({
   IMPLANTATION_ADMIN_UIDS: parseList(process.env.IMPLANTATION_ADMIN_UIDS),
   // Bucket dos icones de categoria da lista padrao (Admin).
   STORAGE_BUCKET: process.env.STORAGE_BUCKET || 'appmobileprod-19505.appspot.com',
+  // Cadastro de loja: App Check preparado e desligado ate o app gerenciador mandar o token.
+  CADASTRO_EXIGE_APP_CHECK: toBoolean(process.env.CADASTRO_EXIGE_APP_CHECK, false),
 });
 
 export function isProduction() {

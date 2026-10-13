@@ -108,6 +108,52 @@ export class ManageImplantationPipelines {
     return this.get(establishmentId);
   }
 
+  // Aprovacao formal do lojista (faixa de implantacao do Gerenciador Plus): so depois que a
+  // implantacao chega na validacao (etapa 06 liberada). Grava o nome de quem aprovou e a data,
+  // e marca a verificacao clientApprovalRecorded da etapa 06.
+  async aprovarFormalmente({ establishmentId, nome, uid }) {
+    const reference = this.pipelineRef(establishmentId);
+    await this.firestore.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(reference);
+      const pipeline = normalizePipeline(snapshot.exists ? snapshot.data() : {}, establishmentId);
+      if (!pipeline.unlockedSteps.includes('06')) {
+        throw new AppError('A aprovação formal abre quando a implantação chega na validação.', {
+          statusCode: 409,
+          code: 'implantacao_aprovacao_antes_da_validacao',
+        });
+      }
+      if (pipeline.aprovacaoFormal?.em) {
+        throw new AppError('A implantação já tem aprovação formal.', { statusCode: 409, code: 'implantacao_ja_aprovada' });
+      }
+      transaction.set(reference, {
+        aprovacaoFormal: { nome, uid, em: FieldValue.serverTimestamp() },
+        manualChecks: {
+          '06': {
+            clientApprovalRecorded: {
+              ...pipeline.manualChecks['06'].clientApprovalRecorded,
+              approved: true,
+              note: `Aprovação formal de ${nome}`,
+              approvedByUid: uid,
+              approvedAt: FieldValue.serverTimestamp(),
+            },
+          },
+        },
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    });
+    return this.get(establishmentId);
+  }
+
+  // Fase final da Ficha no Admin: "App nas lojas", marcada pela equipe.
+  async marcarAppNasLojas({ establishmentId, feito, uid }) {
+    await this.pipelineRef(establishmentId).set({
+      type: 'pipeline',
+      appNasLojas: feito ? { em: FieldValue.serverTimestamp(), uid } : null,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return this.get(establishmentId);
+  }
+
   pipelineRef(establishmentId) {
     return this.firestore
       .collection('estabelecimentos')

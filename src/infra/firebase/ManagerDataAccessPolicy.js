@@ -32,6 +32,12 @@ const SUGESTAO_FIELDS = new Set([
   'nome', 'tipo', 'categoriaId', 'categoriaNome', 'observacao', 'produtos', 'produtosIds', 'quem', 'em', 'estado',
 ]);
 const COUPON_COLLECTIONS = new Set(['Cupons', 'Campaigns']);
+// Campos do documento da loja e da implantacao que so o Admin muda.
+const CAMPOS_DA_LOJA_SO_ADMIN = [
+  'status', 'motivoRecusa', 'aprovadoPor', 'aprovadoEm', 'recusadoPor', 'recusadoEm', 'enviadoEm',
+  'origemCadastro', 'cnpjConferido', 'offerColor', 'scheduling.contracted',
+];
+const CAMPOS_DA_IMPLANTACAO_SO_ADMIN = ['aprovacaoFormal', 'appNasLojas'];
 const ALLOWED_AUTOMATIONS = new Set([
   'padronizador_nomes',
   'taggeador',
@@ -237,6 +243,7 @@ export class ManagerDataAccessPolicy {
   // categoria nasce pendente e nao muda pelo painel: quem decide e o Admin.
   async assertCatalogoDaLoja(actor, mutation, parts) {
     const colecao = parts[2];
+    await this.assertCamposDoAdmin(actor, mutation, parts);
     if (parts.length !== 4) return;
 
     if (colecao === 'ProductCategories' || colecao === 'ProductSubcategories') {
@@ -276,6 +283,34 @@ export class ManagerDataAccessPolicy {
       }
       if ((await this.firestore.doc(parts.join('/')).get()).exists) {
         throw forbidden('Sugestao so pode ser criada.', 'sugestao_so_criacao');
+      }
+    }
+  }
+
+  // Campos que so o Admin muda (rodada de 13/10/2026): situacao do pedido de loja, cor de oferta,
+  // agendamento contratado e as marcas da implantacao. scheduling.enabled o lojista so liga com o
+  // agendamento contratado. O admin da plataforma agindo na loja (X-Loja-Alvo) passa.
+  async assertCamposDoAdmin(actor, mutation, parts) {
+    if (actor.porAdminDaPlataforma || mutation.operation === 'delete') return;
+    const ehLoja = parts.length === 2;
+    const ehPipeline = parts.length === 4 && parts[2] === 'implantacaoGrenciador';
+    if (!ehLoja && !ehPipeline) return;
+    const tocados = caminhosTocados(mutation.data, mutation.operation === 'update');
+    const proibidos = ehLoja ? CAMPOS_DA_LOJA_SO_ADMIN : CAMPOS_DA_IMPLANTACAO_SO_ADMIN;
+    if (tocados.some((caminho) => proibidos.some((campo) => caminho === campo || caminho.startsWith(`${campo}.`) || campo.startsWith(`${caminho}.`)))) {
+      throw forbidden('Este campo muda só pelo Admin.', 'campo_so_admin');
+    }
+    // Gravar o documento inteiro (set sem merge) apagaria os campos do Admin que ja existem.
+    if (mutation.operation === 'set' && mutation.options?.merge !== true) {
+      const atual = (await this.firestore.doc(parts.join('/')).get()).data() || {};
+      if (proibidos.some((campo) => campo.split('.').reduce((valor, parte) => valor?.[parte], atual) !== undefined)) {
+        throw forbidden('Este campo muda só pelo Admin.', 'campo_so_admin');
+      }
+    }
+    if (ehLoja && tocados.some((caminho) => caminho === 'scheduling.enabled')) {
+      const loja = await this.firestore.doc(parts.join('/')).get();
+      if (loja.data()?.scheduling?.contracted !== true) {
+        throw forbidden('O agendamento não está contratado para esta loja.', 'agendamento_nao_contratado');
       }
     }
   }
@@ -556,6 +591,22 @@ function sourcePath(target) {
 
 function pathParts(path) {
   return String(path || '').split('/').filter(Boolean);
+}
+
+// Caminhos de campo que a escrita mexe. No update, a chave (com ponto ou nao) troca o campo
+// inteiro; no set, mapas aninhados viram caminhos com ponto.
+function caminhosTocados(data, ehUpdate) {
+  const caminhos = [];
+  const visitar = (valor, prefixo) => {
+    Object.entries(valor || {}).forEach(([chave, item]) => {
+      const caminho = prefixo ? `${prefixo}.${chave}` : chave;
+      const mapa = item && typeof item === 'object' && !Array.isArray(item) && !item.__managerDataType && !item.methodName;
+      if (!ehUpdate && mapa && Object.keys(item).length) visitar(item, caminho);
+      else caminhos.push(caminho);
+    });
+  };
+  visitar(data && typeof data === 'object' ? data : {}, '');
+  return caminhos;
 }
 
 function isOwnEstablishmentPath(path, establishmentId) {

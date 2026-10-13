@@ -2,15 +2,28 @@
 // que eles usam: doc, collection, collectionGroup, where (== e array-contains), orderBy,
 // startAfter (snapshot), limit, select, count, getAll, batch, create, set (com merge),
 // update (com caminho pontuado) e delete, mais as sentinelas serverTimestamp e delete.
+// Referencia de documento gravada como campo (userReference) fica como referencia e o == compara
+// pelo caminho; runTransaction e recursiveDelete cobrem o cadastro e o Admin.
 
 const AGORA = new Date('2026-10-12T15:00:00.000Z');
 
+function ehReferencia(valor) {
+  return valor instanceof DocRef;
+}
+
 function copiar(valor) {
-  return valor === undefined ? undefined : structuredClone(valor);
+  if (valor === undefined) return undefined;
+  if (ehReferencia(valor)) return valor;
+  if (valor instanceof Date) return new Date(valor);
+  if (Array.isArray(valor)) return valor.map(copiar);
+  if (valor && typeof valor === 'object') {
+    return Object.fromEntries(Object.entries(valor).map(([chave, item]) => [chave, copiar(item)]));
+  }
+  return valor;
 }
 
 function ehMapa(valor) {
-  return valor !== null && typeof valor === 'object' && !Array.isArray(valor) && !(valor instanceof Date);
+  return valor !== null && typeof valor === 'object' && !Array.isArray(valor) && !(valor instanceof Date) && !ehReferencia(valor);
 }
 
 function sentinela(valor) {
@@ -120,7 +133,7 @@ class Query {
       .sort(([a], [b]) => a.localeCompare(b))
       .filter(([, dados]) => this.filtros.every(({ campo, operador, valor }) => {
         const atual = lerCampo(dados, campo);
-        if (operador === '==') return atual === valor;
+        if (operador === '==') return ehReferencia(valor) ? ehReferencia(atual) && atual.path === valor.path : atual === valor;
         if (operador === 'array-contains') return Array.isArray(atual) && atual.includes(valor);
         throw new Error(`operador nao suportado: ${operador}`);
       }))
@@ -255,6 +268,31 @@ export class FirestoreEmMemoria {
 
   async getAll(...refs) {
     return Promise.all(refs.map((ref) => ref.get()));
+  }
+
+  // Transacao: le na hora e grava tudo junto no fim (falha no meio nao grava nada).
+  async runTransaction(trabalho) {
+    const lote = new Batch(this);
+    const transacao = {
+      get: (ref) => ref.get(),
+      set: (ref, dados, opcoes) => { lote.set(ref, dados, opcoes); return transacao; },
+      update: (ref, dados) => { lote.update(ref, dados); return transacao; },
+      create: (ref, dados) => { lote.create(ref, dados); return transacao; },
+      delete: (ref) => { lote.delete(ref); return transacao; },
+    };
+    const resultado = await trabalho(transacao);
+    await lote.commit();
+    return resultado;
+  }
+
+  // Apaga o documento e tudo abaixo dele.
+  async recursiveDelete(ref) {
+    [...this.docs.keys()]
+      .filter((caminho) => caminho === ref.path || caminho.startsWith(`${ref.path}/`))
+      .forEach((caminho) => {
+        this.escritas.push({ tipo: 'delete', caminho });
+        this.docs.delete(caminho);
+      });
   }
 
   // Lote atomico: confere tudo antes de gravar qualquer coisa.

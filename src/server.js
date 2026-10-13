@@ -2,7 +2,15 @@ import { createApp } from './app.js';
 import { GenerateAiResponseUseCase } from './application/ai/GenerateAiResponseUseCase.js';
 import { GetDailyHomeOverviewUseCase } from './application/ai/GetDailyHomeOverviewUseCase.js';
 import { GetManagerSession } from './application/auth/GetManagerSession.js';
+import { AdministradoresDaPlataforma } from './application/admin/AdministradoresDaPlataforma.js';
+import { DadosDoAdmin } from './application/admin/DadosDoAdmin.js';
+import { Franquias } from './application/admin/Franquias.js';
+import { LojaNoAdmin } from './application/admin/LojaNoAdmin.js';
+import { PedidosDeLoja } from './application/admin/PedidosDeLoja.js';
 import { SugestoesDosClientes } from './application/admin/SugestoesDosClientes.js';
+import { CadastroDeLoja } from './application/cadastro/CadastroDeLoja.js';
+import { ImagensDaLoja } from './application/cadastro/ImagensDaLoja.js';
+import { LimiteDeTentativas } from './application/cadastro/LimiteDeTentativas.js';
 import { CatalogoDaLoja } from './application/catalogo/CatalogoDaLoja.js';
 import { ManageCatalogoPadrao } from './application/catalogo/ManageCatalogoPadrao.js';
 import { TravasDeCategoria } from './application/catalogo/TravasDeCategoria.js';
@@ -24,7 +32,11 @@ import { FirestorePlatformAdminRepository } from './infra/firebase/FirestorePlat
 import { FirestoreUsoIaRepository } from './infra/firebase/FirestoreUsoIaRepository.js';
 import { FirestoreWebNotificationTokenRepository } from './infra/firebase/FirestoreWebNotificationTokenRepository.js';
 import { ManagerDataAccessPolicy } from './infra/firebase/ManagerDataAccessPolicy.js';
-import { getFirestoreDb, getStorageBucket } from './infra/firebase/firebaseAdmin.js';
+import {
+  getFirebaseAppCheck, getFirebaseAuth, getFirestoreDb, getStorageBucket,
+} from './infra/firebase/firebaseAdmin.js';
+import { registrarAcaoDoAdmin } from './infra/firebase/registroDoAdmin.js';
+import { BrasilApiCnpj } from './infra/cnpj/BrasilApiCnpj.js';
 import { createAdminAuditMiddleware } from './http/middlewares/adminAudit.js';
 import { createAiGateway } from './infra/ai/createAiGateway.js';
 import { logger } from './infra/logger/logger.js';
@@ -84,7 +96,29 @@ const manageCatalogoPadrao = new ManageCatalogoPadrao({
   bucket: getStorageBucket(env.STORAGE_BUCKET),
 });
 const catalogoDaLoja = new CatalogoDaLoja({ firestore, travas });
+// Cadastro de loja pelo servidor e Admin completo (rodada de 13/10/2026).
+const firebaseAuth = getFirebaseAuth();
+const imagensDaLoja = new ImagensDaLoja({ firestore, bucket: getStorageBucket(env.STORAGE_BUCKET) });
+const cadastroDeLoja = new CadastroDeLoja({
+  firestore,
+  auth: firebaseAuth,
+  consultaCnpj: new BrasilApiCnpj(),
+  limites: new LimiteDeTentativas({ firestore }),
+  imagens: imagensDaLoja,
+});
 const app = createApp({
+  cadastroDeLoja,
+  verificarAppCheck: (token) => getFirebaseAppCheck().verifyToken(token),
+  imagensDaLoja,
+  pedidosDeLoja: new PedidosDeLoja({ firestore, auth: firebaseAuth }),
+  lojaNoAdmin: new LojaNoAdmin({
+    firestore, auth: firebaseAuth, accessRepository, imagens: imagensDaLoja,
+  }),
+  franquias: new Franquias({ firestore }),
+  administradores: new AdministradoresDaPlataforma({ firestore, auth: firebaseAuth }),
+  dadosDoAdmin: new DadosDoAdmin({ firestore }),
+  firestore,
+  registrarAcaoDoAdmin: (registro) => registrarAcaoDoAdmin(firestore, registro),
   manageCatalogoPadrao,
   catalogoDaLoja,
   platformAdminRepository,

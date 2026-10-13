@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { formatarNome } from '../../domain/catalogo/formatarNome.js';
 import { asyncHandler } from '../middlewares/asyncHandler.js';
+import { corpoDeImagem } from '../middlewares/corpoDeImagem.js';
 
 // Rotas do Admin da plataforma. A barreira (requirePlatformAdmin) e o registro de quem agiu
 // (adminAudit) entram em app.js, antes deste roteador. Nao existe rota de excluir: item
@@ -31,6 +32,44 @@ const decisaoSchema = z.object({
   motivo: z.string().max(500).optional(),
 });
 const formatarSchema = z.object({ nome: z.string().max(200) });
+const listaPedidosSchema = z.object({ lista: z.enum(['abertos', 'parados', 'aprovados', 'recusados']).optional() });
+const recusaSchema = z.object({ motivo: z.string().max(500) });
+const emConversaSchema = z.object({ emConversa: z.boolean() });
+const edicaoLojaSchema = z.object({
+  name: z.string().max(200).optional(),
+  phone: z.string().max(40).optional(),
+  cnpj: z.string().max(40).optional(),
+  address: z.object({
+    street: z.string().max(200).nullable().optional(),
+    number: z.string().max(40).nullable().optional(),
+    complement: z.string().max(200).nullable().optional(),
+    neighborhood: z.string().max(120).nullable().optional(),
+    city: z.string().max(120).nullable().optional(),
+    uf: z.string().max(2).nullable().optional(),
+    zipCode: z.string().max(20).nullable().optional(),
+  }).optional(),
+});
+const ativarSchema = z.object({ ativa: z.boolean() });
+const excluirLojaSchema = z.object({ confirmacaoNome: z.string().max(200) });
+const aparenciaSchema = z.object({
+  primaryColor: z.string().max(7).nullable().optional(),
+  secondaryColor: z.string().max(7).nullable().optional(),
+  offerColor: z.string().max(7).nullable().optional(),
+  slogan: z.string().max(200).nullable().optional(),
+});
+const imagemAdminSchema = z.object({ tipo: z.enum(['logo', 'fachada', 'splash', 'loading']) });
+const agendamentoSchema = z.object({ contracted: z.boolean() });
+const franquiaSchema = z.object({
+  nomeFranquia: z.string().max(200).optional(),
+  nomeFranqueado: z.string().max(200).optional(),
+  cidadeValue: z.string().max(200).optional(),
+}).strict();
+const novoAdminSchema = z.object({ nome: z.string().max(200), email: z.string().max(320), senha: z.string().max(200).optional() });
+const experienciaSchema = z.object({
+  dias: z.coerce.number().int().optional(),
+  lojaId: z.string().max(120).optional(),
+});
+const appNasLojasSchema = z.object({ feito: z.boolean() });
 
 const tipoDe = (plural) => (tipoSchema.parse(plural) === 'categorias' ? 'categoria' : 'subcategoria');
 const atorDe = (request) => ({ uid: request.auth?.uid || null, email: request.auth?.email || null });
@@ -41,7 +80,10 @@ const sugestoesClientesSchema = z.object({
   cursor: z.string().min(1).max(400).optional(),
 });
 
-export function createAdminRoutes({ manageCatalogoPadrao, sugestoesDosClientes }) {
+export function createAdminRoutes({
+  manageCatalogoPadrao, sugestoesDosClientes, pedidosDeLoja, lojaNoAdmin, franquias, administradores, dadosDoAdmin,
+  manageImplantationPipelines,
+}) {
   const router = Router();
 
   router.get('/sessao', (request, response) => {
@@ -95,6 +137,183 @@ export function createAdminRoutes({ manageCatalogoPadrao, sugestoesDosClientes }
     response.locals.lojasAlvo = [request.params.lojaId];
     const input = liberacaoSchema.parse(request.params);
     response.json({ data: await manageCatalogoPadrao.revogar(input) });
+  }));
+
+  // ===== Pedidos de loja (cadastro pelo app gerenciador) =====
+  router.get('/pedidos-de-loja', asyncHandler(async (request, response) => {
+    const { lista } = listaPedidosSchema.parse(request.query);
+    response.json({ data: await pedidosDeLoja.listar(lista || 'abertos') });
+  }));
+
+  router.post('/pedidos-de-loja/:lojaId/aprovar', asyncHandler(async (request, response) => {
+    const resultado = await pedidosDeLoja.aprovar(request.params.lojaId, atorDe(request));
+    response.locals.auditoria = {
+      acao: 'aprovar_pedido_de_loja',
+      uidDono: resultado.uidDono,
+      claimsAntigas: resultado.claimsAntigas,
+      claimsNovas: resultado.claimsNovas,
+    };
+    response.json({ data: resultado });
+  }));
+
+  router.post('/pedidos-de-loja/:lojaId/recusar', asyncHandler(async (request, response) => {
+    const { motivo } = recusaSchema.parse(request.body);
+    response.locals.auditoria = { acao: 'recusar_pedido_de_loja', motivo };
+    response.json({ data: await pedidosDeLoja.recusar(request.params.lojaId, motivo, atorDe(request)) });
+  }));
+
+  router.post('/pedidos-de-loja/:lojaId/em-conversa', asyncHandler(async (request, response) => {
+    const { emConversa } = emConversaSchema.parse(request.body);
+    response.locals.auditoria = { acao: emConversa ? 'marcar_em_conversa' : 'desmarcar_em_conversa' };
+    response.json({ data: await pedidosDeLoja.marcarEmConversa(request.params.lojaId, emConversa) });
+  }));
+
+  // ===== Loja aberta no Admin =====
+  router.get('/estabelecimentos/:lojaId/resumo', asyncHandler(async (request, response) => {
+    response.json({ data: await lojaNoAdmin.resumo(request.params.lojaId) });
+  }));
+
+  router.get('/estabelecimentos/:lojaId/contas', asyncHandler(async (request, response) => {
+    response.json({ data: await lojaNoAdmin.contas(request.params.lojaId) });
+  }));
+
+  router.post('/estabelecimentos/:lojaId/contas/:uid/acesso/previa', asyncHandler(async (request, response) => {
+    response.json({ data: await lojaNoAdmin.previaDoAcesso(request.params.lojaId, request.params.uid) });
+  }));
+
+  // Corrigir acesso: a claim antiga fica guardada no adminAuditLogs.
+  router.post('/estabelecimentos/:lojaId/contas/:uid/acesso', asyncHandler(async (request, response) => {
+    const resultado = await lojaNoAdmin.corrigirAcesso(request.params.lojaId, request.params.uid);
+    response.locals.auditoria = {
+      acao: 'corrigir_acesso',
+      uidConta: request.params.uid,
+      claimsAntigas: resultado.claimsAntigas,
+      claimsNovas: resultado.claimsNovas,
+    };
+    response.json({ data: resultado });
+  }));
+
+  router.post('/estabelecimentos/:lojaId/edicao/previa', asyncHandler(async (request, response) => {
+    const entrada = edicaoLojaSchema.parse(request.body);
+    response.json({ data: await lojaNoAdmin.previaDaEdicao(request.params.lojaId, entrada) });
+  }));
+
+  router.patch('/estabelecimentos/:lojaId', asyncHandler(async (request, response) => {
+    const entrada = edicaoLojaSchema.parse(request.body);
+    const resultado = await lojaNoAdmin.editar(request.params.lojaId, entrada);
+    response.locals.auditoria = { acao: 'editar_loja', diferencas: resultado.diferencas };
+    response.json({ data: resultado });
+  }));
+
+  // Ligar no app Mobile Supermercados (isActive): sempre manual, por aqui.
+  router.post('/estabelecimentos/:lojaId/ativar', asyncHandler(async (request, response) => {
+    const { ativa } = ativarSchema.parse(request.body);
+    const resultado = await lojaNoAdmin.ativarNoApp(request.params.lojaId, ativa);
+    response.locals.auditoria = { acao: ativa ? 'ligar_no_app' : 'desligar_no_app', antes: resultado.antes };
+    response.json({ data: resultado });
+  }));
+
+  router.get('/estabelecimentos/:lojaId/exclusao', asyncHandler(async (request, response) => {
+    response.json({ data: await lojaNoAdmin.previaDaExclusao(request.params.lojaId) });
+  }));
+
+  // Excluir so loja sem pedidos e sem produtos, com o nome digitado; o documento como estava vai
+  // para o adminAuditLogs.
+  router.delete('/estabelecimentos/:lojaId', asyncHandler(async (request, response) => {
+    const { confirmacaoNome } = excluirLojaSchema.parse(request.body || {});
+    const { documento, ...resultado } = await lojaNoAdmin.excluir(request.params.lojaId, confirmacaoNome);
+    response.locals.auditoria = { acao: 'excluir_loja', documento, sai: resultado.sai };
+    response.json({ data: resultado });
+  }));
+
+  router.get('/estabelecimentos/:lojaId/aparencia', asyncHandler(async (request, response) => {
+    response.json({ data: await lojaNoAdmin.aparencia(request.params.lojaId) });
+  }));
+
+  router.patch('/estabelecimentos/:lojaId/aparencia', asyncHandler(async (request, response) => {
+    const entrada = aparenciaSchema.parse(request.body);
+    response.locals.auditoria = { acao: 'aparencia', campos: Object.keys(entrada) };
+    response.json({ data: await lojaNoAdmin.salvarAparencia(request.params.lojaId, entrada) });
+  }));
+
+  router.post('/estabelecimentos/:lojaId/imagens/:tipo', corpoDeImagem, asyncHandler(async (request, response) => {
+    const { tipo } = imagemAdminSchema.parse(request.params);
+    response.locals.auditoria = { acao: 'imagem', tipo };
+    response.json({ data: await lojaNoAdmin.trocarImagem(request.params.lojaId, tipo, request.body) });
+  }));
+
+  router.get('/estabelecimentos/:lojaId/agendamento', asyncHandler(async (request, response) => {
+    response.json({ data: await lojaNoAdmin.agendamento(request.params.lojaId) });
+  }));
+
+  router.patch('/estabelecimentos/:lojaId/agendamento', asyncHandler(async (request, response) => {
+    const { contracted } = agendamentoSchema.parse(request.body);
+    response.locals.auditoria = { acao: contracted ? 'agendamento_contratado' : 'agendamento_sem_contrato' };
+    response.json({ data: await lojaNoAdmin.contratarAgendamento(request.params.lojaId, contracted) });
+  }));
+
+  // ===== Implantacao no Admin (Ficha com seletor de loja) =====
+  router.get('/implantacao/:lojaId', asyncHandler(async (request, response) => {
+    const loja = await lojaNoAdmin.resumo(request.params.lojaId);
+    let pipeline = null;
+    try {
+      pipeline = await manageImplantationPipelines.get(request.params.lojaId);
+    } catch (error) {
+      if (error?.code !== 'implantation_pipeline_not_found') throw error;
+    }
+    response.json({ data: { loja, pipeline } });
+  }));
+
+  router.post('/implantacao/:lojaId/app-nas-lojas', asyncHandler(async (request, response) => {
+    const { feito } = appNasLojasSchema.parse(request.body);
+    response.locals.auditoria = { acao: feito ? 'app_nas_lojas' : 'app_nas_lojas_desfeito' };
+    const pipeline = await manageImplantationPipelines.marcarAppNasLojas({
+      establishmentId: request.params.lojaId,
+      feito,
+      uid: request.auth.uid,
+    });
+    response.json({ data: pipeline });
+  }));
+
+  // ===== Franquias =====
+  router.get('/franquias', asyncHandler(async (_request, response) => {
+    response.json({ data: await franquias.listar() });
+  }));
+
+  router.patch('/franquias/:id', asyncHandler(async (request, response) => {
+    const entrada = franquiaSchema.parse(request.body);
+    const resultado = await franquias.editar(request.params.id, entrada);
+    response.locals.auditoria = {
+      acao: 'editar_franquia', franquiaId: request.params.id, antes: resultado.antes, depois: resultado.depois,
+    };
+    response.json({ data: resultado });
+  }));
+
+  // ===== Administradores da plataforma =====
+  router.get('/administradores', asyncHandler(async (request, response) => {
+    response.json({ data: await administradores.listar(atorDe(request)) });
+  }));
+
+  router.post('/administradores', asyncHandler(async (request, response) => {
+    const entrada = novoAdminSchema.parse(request.body);
+    const resultado = await administradores.criar(entrada, atorDe(request));
+    response.locals.auditoria = { acao: 'criar_admin', uidNovo: resultado.uid, contaNova: resultado.contaNova };
+    response.json({ data: resultado });
+  }));
+
+  router.delete('/administradores/:uid', asyncHandler(async (request, response) => {
+    response.locals.auditoria = { acao: 'remover_admin', uidRemovido: request.params.uid };
+    response.json({ data: await administradores.removerAcesso(request.params.uid, atorDe(request)) });
+  }));
+
+  // ===== Dados: Painel de Experiencia pelo Core =====
+  router.get('/dados/experiencia', asyncHandler(async (request, response) => {
+    const { dias, lojaId } = experienciaSchema.parse(request.query);
+    response.json({ data: await dadosDoAdmin.experiencia({ dias, lojaId: lojaId || '' }) });
+  }));
+
+  router.get('/dados/experiencia/carrinho/:uid/:lojaId', asyncHandler(async (request, response) => {
+    response.json({ data: await dadosDoAdmin.carrinho(request.params.uid, request.params.lojaId) });
   }));
 
   // ===== Lista padrao =====
