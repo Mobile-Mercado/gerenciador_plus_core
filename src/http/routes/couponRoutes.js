@@ -21,6 +21,11 @@ const ruleSchema = z.union([
   }),
 ]);
 
+// Cupons completos (D6, 14/10/2026): frete gratis vai so com a regra freight (discount null), cupom
+// sem data de fim vai com endAt null, cupom pessoal leva targetClientId (so esse cliente aplica) e o
+// cupom de campanha leva campaignId.
+const temFrete = (rules = []) => rules.some((rule) => rule.type === 'freight');
+
 const createCouponSchema = z.object({
   code: z.string().min(3).max(30),
   description: z.string().min(1).max(200),
@@ -31,13 +36,18 @@ const createCouponSchema = z.object({
   discount: z.object({
     kind: z.enum(['percentage', 'fixed']),
     value: z.number().positive(),
-  }),
+  }).nullable().default(null),
   startAt: z.string(),
-  endAt: z.string(),
+  endAt: z.string().nullable().default(null),
   perCustomerLimit: z.number().int().positive().default(1),
   totalUsageLimit: z.number().int().positive().nullable().default(null),
   stackable: z.boolean().default(false),
-});
+  targetClientId: z.string().min(1).max(128).nullable().default(null),
+  campaignId: z.string().min(1).max(128).nullable().default(null),
+}).refine(
+  (coupon) => coupon.discount !== null || temFrete(coupon.rules),
+  { message: 'Informe o desconto ou a regra de frete.', path: ['discount'] },
+);
 
 const couponIdParamsSchema = z.object({
   couponId: z.string().min(1),
@@ -53,9 +63,9 @@ const updateCouponSchema = z.object({
   discount: z.object({
     kind: z.enum(['percentage', 'fixed']),
     value: z.number().positive(),
-  }).optional(),
+  }).nullable().optional(),
   startAt: z.string().optional(),
-  endAt: z.string().optional(),
+  endAt: z.string().nullable().optional(),
   perCustomerLimit: z.number().int().positive().optional(),
   totalUsageLimit: z.number().int().positive().nullable().optional(),
   stackable: z.boolean().optional(),

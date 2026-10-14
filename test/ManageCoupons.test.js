@@ -354,3 +354,52 @@ test('C5.2: funcionario com coupons.manage (adminOf) usa a loja da conta da requ
     servidor.close();
   }
 });
+
+test('D6: frete gratis sem desconto, sem data de fim, cupom pessoal e campaignId gravados no Coupons', async () => {
+  const created = [];
+  const manager = createManager({ created });
+  await manager.createCoupon({
+    actorUid: 'uid-lojista', ...validPayload, code: 'FRETE1', rules: [{ type: 'freight', freeShipping: true }],
+    discount: null, endAt: null, targetClientId: 'cliente-9', campaignId: 'camp-1',
+  });
+  const [cupom] = created;
+  assert.equal(cupom.discount, null);
+  assert.equal(cupom.endAt, null);
+  assert.equal(cupom.targetClientId, 'cliente-9');
+  assert.equal(cupom.campaignId, 'camp-1');
+  await manager.createCoupon({ actorUid: 'uid-lojista', ...validPayload, code: 'COMUM1' });
+  assert.equal(created[1].targetClientId, null);
+  assert.equal(created[1].campaignId, null);
+  assert.ok(created[1].endAt instanceof Timestamp);
+});
+
+test('D6: a rota aceita frete gratis sem desconto e sem fim, e recusa cupom sem desconto e sem frete', async () => {
+  const { default: express } = await import('express');
+  const { createCouponRoutes } = await import('../src/http/routes/couponRoutes.js');
+  const { errorHandler } = await import('../src/http/middlewares/errorHandler.js');
+  const created = [];
+  const manageCoupons = createManager({ created });
+  const app = express();
+  app.use(express.json());
+  app.use((request, _response, next) => { request.auth = { uid: 'uid-lojista' }; next(); });
+  app.use('/api/coupons', createCouponRoutes({
+    manageCoupons,
+    requirePermission: () => (_request, _response, next) => next(),
+    accountForRequest: async () => ({ establishmentId: 'loja-1' }),
+  }));
+  app.use(errorHandler);
+  const servidor = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
+  try {
+    const base = `http://127.0.0.1:${servidor.address().port}/api/coupons`;
+    const enviar = (corpo) => fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+    const { discount, endAt, ...semDescontoNemFim } = validPayload;
+    assert.equal((await enviar({ ...semDescontoNemFim, code: 'FRETE2', rules: [{ type: 'freight', freeShipping: true }] })).status, 201);
+    assert.equal(created[0].discount, null);
+    assert.equal(created[0].endAt, null);
+    assert.equal((await enviar({ ...semDescontoNemFim, code: 'NADA22', rules: [] })).status, 400);
+    assert.equal((await enviar({ ...validPayload, code: 'PESSOA', targetClientId: 'cliente-9', campaignId: 'camp-1' })).status, 201);
+    assert.equal(created[1].targetClientId, 'cliente-9');
+  } finally {
+    servidor.close();
+  }
+});

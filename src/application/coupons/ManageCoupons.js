@@ -10,7 +10,7 @@ export class ManageCoupons {
 
   async createCoupon({
     actorUid, establishmentId, code, description, termsText, scopeName, firstPurchaseOnly, rules, discount,
-    startAt, endAt, perCustomerLimit, totalUsageLimit, stackable,
+    startAt, endAt, perCustomerLimit, totalUsageLimit, stackable, targetClientId = null, campaignId = null,
   }) {
     const account = await this.requireEstablishment(actorUid, establishmentId);
 
@@ -25,14 +25,19 @@ export class ManageCoupons {
       firstPurchaseOnly: Boolean(firstPurchaseOnly),
       active: true,
       startAt: Timestamp.fromDate(new Date(startAt)),
-      endAt: Timestamp.fromDate(new Date(endAt)),
+      // Sem data de fim: endAt null (o cupom vale ate ser desativado).
+      endAt: endAt ? Timestamp.fromDate(new Date(endAt)) : null,
       establishmentIds: [account.establishmentId],
       rules: rules || [],
-      discount,
+      // Frete gratis sem desconto nos produtos: discount null.
+      discount: discount ?? null,
       perCustomerLimit: perCustomerLimit ?? 1,
       totalUsageLimit: totalUsageLimit ?? null,
       usageCount: 0,
       stackable: Boolean(stackable),
+      // Cupom pessoal: so este cliente consegue aplicar (aplicarCupom confere).
+      targetClientId: targetClientId || null,
+      campaignId: campaignId || null,
       createdAt: Timestamp.fromDate(this.clock()),
     };
 
