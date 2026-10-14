@@ -387,3 +387,14 @@ test('C8: mudar currentPrice de produto pede products.edit_price', () => {
   assert.equal(permissionKeyForMutation(mutacao('update', caminho, { currentPrice: 9.9 }), 'store-1'), 'products.edit_price');
   assert.equal(permissionKeyForMutation(mutacao('update', caminho, { name: 'Arroz' }), 'store-1'), 'products.edit');
 });
+
+test('D4: edicao de produto sem campo de preco (como a web manda sem mexer no preco) pede so products.edit', () => {
+  const caminho = 'estabelecimentos/store-1/Products/p1';
+  const semPreco = {
+    updatedAt: { __type: 'fieldValue', operation: 'serverTimestamp' },
+    name: 'Arroz', quantityInStock: 3, unityType: 'un', barCode: '789', isActive: true, tags: [], itsFeatured: false,
+    shelves: [], shelvesIds: [], categoriesIds: [], subcategoriesIds: [], searchIndex: ['789'], wordKeys: ['789'],
+  };
+  assert.equal(permissionKeyForMutation(mutacao('update', caminho, semPreco), 'store-1'), 'products.edit');
+  assert.equal(permissionKeyForMutation(mutacao('update', caminho, { ...semPreco, promotionalPrice: 5 }), 'store-1'), 'products.edit_price');
+});
