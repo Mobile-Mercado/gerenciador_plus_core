@@ -19,12 +19,28 @@ const ruleSchema = z.union([
     minQuantity: z.number().int().positive(),
     maxQuantity: z.number().int().positive().nullable(),
   }),
+  // "Leve N pague M" ou "leve N por R$ X" (F3, 14/10/2026): o cupom guarda so a regra; o desconto e
+  // calculado em aplicarCupom com o preco do produto na hora. N inteiro maior que 1, M menor que N,
+  // X maior que zero, e so um dos dois (M ou X). repeat: a cada N.
+  z.object({
+    type: z.literal('bundle'),
+    productId: z.string().min(1).max(200),
+    quantity: z.number().int().min(2),
+    payQuantity: z.number().int().min(0).nullable().default(null),
+    bundlePrice: z.number().positive().nullable().default(null),
+    repeat: z.boolean().default(false),
+  }).refine((rule) => (rule.payQuantity === null) !== (rule.bundlePrice === null), {
+    message: 'Informe "pague M" ou "por R$ X" (um dos dois).',
+  }).refine((rule) => rule.payQuantity === null || rule.payQuantity < rule.quantity, {
+    message: 'M precisa ser menor que N.',
+  }),
 ]);
 
 // Cupons completos (D6, 14/10/2026): frete gratis vai so com a regra freight (discount null), cupom
 // sem data de fim vai com endAt null, cupom pessoal leva targetClientId (so esse cliente aplica) e o
 // cupom de campanha leva campaignId.
 const temFrete = (rules = []) => rules.some((rule) => rule.type === 'freight');
+const temLeveN = (rules = []) => rules.some((rule) => rule.type === 'bundle');
 
 const createCouponSchema = z.object({
   code: z.string().min(3).max(30),
@@ -45,8 +61,8 @@ const createCouponSchema = z.object({
   targetClientId: z.string().min(1).max(128).nullable().default(null),
   campaignId: z.string().min(1).max(128).nullable().default(null),
 }).refine(
-  (coupon) => coupon.discount !== null || temFrete(coupon.rules),
-  { message: 'Informe o desconto ou a regra de frete.', path: ['discount'] },
+  (coupon) => coupon.discount !== null || temFrete(coupon.rules) || temLeveN(coupon.rules),
+  { message: 'Informe o desconto, a regra de frete ou o leve N.', path: ['discount'] },
 );
 
 const couponIdParamsSchema = z.object({

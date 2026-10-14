@@ -403,3 +403,46 @@ test('D6: a rota aceita frete gratis sem desconto e sem fim, e recusa cupom sem 
     servidor.close();
   }
 });
+
+test('F3: leve N pague M e leve N por R$ X: a rota valida N, M e X e grava so a regra', async () => {
+  const { default: express } = await import('express');
+  const { createCouponRoutes } = await import('../src/http/routes/couponRoutes.js');
+  const { errorHandler } = await import('../src/http/middlewares/errorHandler.js');
+  const created = [];
+  const manageCoupons = createManager({ created });
+  const app = express();
+  app.use(express.json());
+  app.use((request, _response, next) => { request.auth = { uid: 'uid-lojista' }; next(); });
+  app.use('/api/coupons', createCouponRoutes({
+    manageCoupons,
+    requirePermission: () => (_request, _response, next) => next(),
+    accountForRequest: async () => ({ establishmentId: 'loja-1' }),
+  }));
+  app.use(errorHandler);
+  const servidor = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
+  try {
+    const base = `http://127.0.0.1:${servidor.address().port}/api/coupons`;
+    const { discount, ...semDesconto } = validPayload;
+    const enviar = (regra, code) => fetch(base, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...semDesconto, code, rules: [{ type: 'bundle', productId: 'suco', ...regra }] }),
+    });
+    assert.equal((await enviar({ quantity: 3, payQuantity: 2, repeat: true }, 'LEVE3P2')).status, 201);
+    assert.equal((await enviar({ quantity: 3, bundlePrice: 12 }, 'LEVE3R12')).status, 201);
+    assert.deepEqual(created[0].rules, [{ type: 'bundle', productId: 'suco', quantity: 3, payQuantity: 2, bundlePrice: null, repeat: true }]);
+    assert.equal(created[0].discount, null);
+    assert.deepEqual(created[1].rules[0], { type: 'bundle', productId: 'suco', quantity: 3, payQuantity: null, bundlePrice: 12, repeat: false });
+    // Recusas: N = 1, N quebrado, M >= N, X <= 0, os dois juntos, nenhum dos dois.
+    for (const [regra, code] of [
+      [{ quantity: 1, payQuantity: 0 }, 'NUM1'], [{ quantity: 2.5, payQuantity: 1 }, 'NQUEBRA'],
+      [{ quantity: 3, payQuantity: 3 }, 'MIGUALN'], [{ quantity: 3, bundlePrice: 0 }, 'XZERO'],
+      [{ quantity: 3, payQuantity: 2, bundlePrice: 12 }, 'OSDOIS'], [{ quantity: 3 }, 'NENHUM'],
+    ]) {
+      assert.equal((await enviar(regra, code)).status, 400, code);
+    }
+    assert.equal(created.length, 2);
+  } finally {
+    servidor.close();
+  }
+});
