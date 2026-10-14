@@ -433,8 +433,9 @@ test('F3: leve N pague M e leve N por R$ X: a rota valida N, M e X e grava so a 
     assert.deepEqual(created[0].rules, [{ type: 'bundle', productId: 'suco', quantity: 3, payQuantity: 2, bundlePrice: null, repeat: true }]);
     assert.equal(created[0].discount, null);
     assert.deepEqual(created[1].rules[0], { type: 'bundle', productId: 'suco', quantity: 3, payQuantity: null, bundlePrice: 12, repeat: false });
-    // Recusas: N = 1, N quebrado, M >= N, X <= 0, os dois juntos, nenhum dos dois.
+    // Recusas: N = 1, N quebrado, M >= N, M = 0 (G3), X <= 0, os dois juntos, nenhum dos dois.
     for (const [regra, code] of [
+      [{ quantity: 3, payQuantity: 0 }, 'MZERO'],
       [{ quantity: 1, payQuantity: 0 }, 'NUM1'], [{ quantity: 2.5, payQuantity: 1 }, 'NQUEBRA'],
       [{ quantity: 3, payQuantity: 3 }, 'MIGUALN'], [{ quantity: 3, bundlePrice: 0 }, 'XZERO'],
       [{ quantity: 3, payQuantity: 2, bundlePrice: 12 }, 'OSDOIS'], [{ quantity: 3 }, 'NENHUM'],

@@ -20,13 +20,13 @@ const ruleSchema = z.union([
     maxQuantity: z.number().int().positive().nullable(),
   }),
   // "Leve N pague M" ou "leve N por R$ X" (F3, 14/10/2026): o cupom guarda so a regra; o desconto e
-  // calculado em aplicarCupom com o preco do produto na hora. N inteiro maior que 1, M menor que N,
-  // X maior que zero, e so um dos dois (M ou X). repeat: a cada N.
+  // calculado em aplicarCupom com o preco do produto na hora. N inteiro maior que 1, M inteiro de 1 a
+  // N - 1, X maior que zero, e so um dos dois (M ou X). repeat: a cada N.
   z.object({
     type: z.literal('bundle'),
     productId: z.string().min(1).max(200),
     quantity: z.number().int().min(2),
-    payQuantity: z.number().int().min(0).nullable().default(null),
+    payQuantity: z.number().int().min(1).nullable().default(null),
     bundlePrice: z.number().positive().nullable().default(null),
     repeat: z.boolean().default(false),
   }).refine((rule) => (rule.payQuantity === null) !== (rule.bundlePrice === null), {
