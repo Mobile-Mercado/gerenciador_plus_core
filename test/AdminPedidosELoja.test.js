@@ -222,3 +222,20 @@ test('painel de experiencia pelo Core: pedido no formato das contas do painel', 
   assert.equal(pedido.agent, true);
   assert.equal(pedido.tAccepted, '2026-10-01T10:05:00.000Z');
 });
+
+test('D2: a lista marca a conta logada e o Core recusa remover o proprio acesso', async () => {
+  const banco = new FirestoreEmMemoria({
+    'usersAdmin/uid-thay': { nome: 'Thay', email: 'thay@x', isAdmin: true },
+    'usersAdmin/uid-outro': { nome: 'Outro', email: 'outro@x', isAdmin: true },
+  });
+  const auth = new AuthEmMemoria([
+    { uid: 'uid-thay', email: 'thay@x', customClaims: { isAdmin: true } },
+    { uid: 'uid-outro', email: 'outro@x', customClaims: { isAdmin: true } },
+  ]);
+  const admins = new AdministradoresDaPlataforma({ firestore: banco, auth, uidsQueCriam: ['uid-thay'] });
+  const { admins: lista } = await admins.listar({ uid: 'uid-thay' });
+  assert.deepEqual(lista.map((item) => [item.uid, item.voce]).sort(), [['uid-outro', false], ['uid-thay', true]]);
+  await assert.rejects(admins.removerAcesso('uid-thay', { uid: 'uid-thay' }), (erro) => erro.code === 'admin_remover_a_si');
+  assert.equal(banco.dados('usersAdmin/uid-thay').isAdmin, true);
+  assert.deepEqual((await auth.getUser('uid-thay')).customClaims, { isAdmin: true });
+});
