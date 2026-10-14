@@ -38,6 +38,8 @@ export class AdministradoresDaPlataforma {
           ativo: data.isAdmin === true,
           criadoEm: quandoIso(data.createdAt),
           ultimoAcesso: quandoIso(data.lastLogin),
+          // Linha da conta logada: o painel nao mostra "Remover acesso" nela (removerAcesso tambem recusa).
+          voce: documento.id === ator.uid,
         };
       }).sort((a, b) => Number(b.ativo) - Number(a.ativo) || String(a.nome).localeCompare(String(b.nome), 'pt-BR')),
     };
