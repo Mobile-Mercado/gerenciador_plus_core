@@ -5,6 +5,8 @@ const {
   onDocumentWritten,
 } = require('firebase-functions/v2/firestore');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { defineSecret, defineString } = require('firebase-functions/params');
+const zlib = require('node:zlib');
 const { getStorage } = require('firebase-admin/storage');
 const {
   DEFAULT_SAMPLE_SIZE,
@@ -46,6 +48,12 @@ const { atualizarResumoDoPedido } = require('./resumoPedidos');
 const { atualizarResumoDeVendas } = require('./resumoVendas');
 const { atualizarSemGiro } = require('./semGiro');
 const { atualizarVisitasPorMes } = require('./visitasPorMes');
+const {
+  appsDaLoja,
+  atualizarInstalacoes,
+  clienteDaApple,
+  doisUltimosMeses,
+} = require('./instalacoesApp');
 const { avisoDeMensagem, avisoDePedidoCancelado, avisoDePedidoNovo } = require('./avisos');
 
 if (!admin.apps.length) {
@@ -1161,6 +1169,97 @@ exports.visitasPorMesNightly = onSchedule(
       return result;
     } catch (error) {
       console.error('[visitasPorMesNightly] Falha na passada', { error });
+      return null;
+    }
+  },
+);
+
+// Instalacoes do app (Stats/instalacoesApp) para o card "Instalacoes do app" da tela Financas:
+// Android pelos CSVs da Google Play no bucket de relatorios, iPhone pelos relatorios de analise do App
+// Store Connect. Recalcula os dois ultimos meses e grava por cima deles. Roda com a conta de servico
+// relatorios-lojas (leitura do bucket da Play) e a chave de leitura da Apple no Secret Manager.
+const APPLE_RELATORIOS_LEITURA_P8 = defineSecret('APPLE_RELATORIOS_LEITURA_P8');
+const APPLE_ISSUER_ID = defineString('APPLE_ISSUER_ID');
+const APPLE_KEY_ID = defineString('APPLE_KEY_ID');
+const PLAY_REPORTS_BUCKET = defineString('PLAY_REPORTS_BUCKET');
+
+exports.instalacoesAppNightly = onSchedule(
+  {
+    schedule: '15 4 * * *',
+    timeZone: 'America/Sao_Paulo',
+    region: 'us-central1',
+    memory: '512MiB',
+    timeoutSeconds: 1800,
+    retryCount: 0,
+    serviceAccount: 'relatorios-lojas@appmobileprod-19505.iam.gserviceaccount.com',
+    secrets: [APPLE_RELATORIOS_LEITURA_P8],
+  },
+  async () => {
+    try {
+      const startedAt = Date.now();
+      const meses = doisUltimosMeses(new Date());
+      const configSnapshot = await db.doc(IMAGE_CHECK_CONFIG_PATH).get();
+      const configuredIds = configuredEstablishmentIds(configSnapshot.data());
+      if (!configuredIds.length) {
+        console.log('[instalacoesAppNightly] Nenhuma loja habilitada em', IMAGE_CHECK_CONFIG_PATH);
+        return null;
+      }
+      const bucket = getStorage().bucket(PLAY_REPORTS_BUCKET.value());
+      const apple = {
+        cliente: clienteDaApple({
+          chaveP8: APPLE_RELATORIOS_LEITURA_P8.value(),
+          issuerId: APPLE_ISSUER_ID.value(),
+          keyId: APPLE_KEY_ID.value(),
+        }),
+        baixar: async (url) => Buffer.from(await (await fetch(url)).arrayBuffer()),
+        gunzip: (conteudo) => zlib.gunzipSync(conteudo),
+      };
+
+      const storeSnapshots = await db.getAll(
+        ...configuredIds.map((id) => db.collection('estabelecimentos').doc(id)),
+      );
+      const report = storeSnapshots
+        .filter((snapshot) => !snapshot.exists)
+        .map((snapshot) => ({ establishmentId: snapshot.id, status: 'inexistente' }));
+
+      for (const snapshot of storeSnapshots.filter((store) => store.exists)) {
+        const establishmentId = snapshot.id;
+        const apps = appsDaLoja(snapshot.get('whitelabelId'));
+        if (!apps) {
+          report.push({ establishmentId, status: 'sem-app' });
+          continue;
+        }
+        try {
+          const resultado = await atualizarInstalacoes({
+            db,
+            FieldValue: admin.firestore.FieldValue,
+            lojaId: establishmentId,
+            apps,
+            bucket,
+            apple,
+            meses,
+          });
+          const { documento } = resultado;
+          report.push({ establishmentId, dadosAte: documento.dadosAte, arquivos: resultado.android?.arquivos || [] });
+          await registrarNoite(snapshot.ref, 'instalacoesAppNightly', {
+            dados: {
+              meses: meses.join(','),
+              androidAte: documento.dadosAte.android || '',
+              iosAte: documento.dadosAte.ios || '',
+              dimensaoAndroid: [...new Set((resultado.android?.arquivos || []).map((arquivo) => arquivo.dimensao))].join(','),
+            },
+          });
+        } catch (error) {
+          console.error('[instalacoesAppNightly] Falha na loja', { establishmentId, error: error.message });
+          report.push({ establishmentId, status: 'falhou' });
+        }
+      }
+
+      const result = { lojas: report, segundos: Math.round((Date.now() - startedAt) / 1000) };
+      console.log('[instalacoesAppNightly] Passada concluida', result);
+      return result;
+    } catch (error) {
+      console.error('[instalacoesAppNightly] Falha na passada', { error: error.message });
       return null;
     }
   },
