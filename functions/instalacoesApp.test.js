@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const {
-  APPS_POR_WHITELABEL, appsDaLoja, arquivoDaPlay, atualizarInstalacoes, decodificarTexto, doisUltimosMeses,
+  APPS_POR_WHITELABEL, appsDaLoja, arquivoDaPlay, atualizarInstalacoes, atualizarTodasAsLojas, decodificarTexto, doisUltimosMeses, lojasComApp,
   lerMesesDaPlay, lerTabela, linhasDaApple, montarDocumento, somarCsvsDaPlay, somarRelatoriosDaApple, tokenDaApple,
 } = require('./instalacoesApp');
 
@@ -183,12 +183,62 @@ test('atualizar uma loja: le, junta com o documento atual e grava; sem gravar, s
   assert.deepEqual(gravados[0].instaladosAgora, { android: 56, ios: 0 });
 });
 
-test('index.js: instalacoesAppNightly as 04:15 com a conta relatorios-lojas, o segredo e os parametros', () => {
+test('montagem compartilhada (rotina e Admin): so lojas com app; inexistente, sem app e falha no relatorio', async () => {
+  const pacote = 'br.com.zero.grau';
+  const bucket = bucketFalso({
+    [arquivoDaPlay(pacote, '2026-10', 'overview')]: utf16(`${CABECALHO.replace(',Country', '')}\n2026-10-02,${pacote},0,0,0,0,2,0,56,0,0,0`),
+    [arquivoDaPlay('br.com.gsatacarejo', '2026-10', 'overview')]: utf16(`${CABECALHO.replace(',Country', '')}\n2026-10-02,br.com.gsatacarejo,0,0,0,0,1,0,6,0,0,0`),
+  });
+  const lojas = {
+    zg: { exists: true, whitelabelId: 'br.com.zero.grau', name: 'Zero Grau' },
+    teste: { exists: true, whitelabelId: 'br.com.zero.grau-teste', name: 'Teste' },
+    gs: { exists: true, whitelabelId: 'br.com.gsatacarejo', name: 'G&S' },
+  };
+  const gravados = {};
+  const db = {
+    getAll: async (...referencias) => referencias.map((referencia) => {
+      const loja = lojas[referencia.id];
+      return { id: referencia.id, exists: Boolean(loja?.exists), get: (campo) => loja?.[campo] };
+    }),
+    collection: () => ({
+      doc: (id) => ({
+        id,
+        collection: () => ({
+          doc: () => ({
+            get: async () => ({ exists: false }),
+            set: async (dados) => { if (id === 'gs') throw new Error('sem permissao'); gravados[id] = dados; },
+          }),
+        }),
+      }),
+    }),
+  };
+  const terminadas = [];
+  const falhas = [];
+  const relatorio = await atualizarTodasAsLojas({
+    db,
+    FieldValue: { serverTimestamp: () => 'agora' },
+    lojaIds: ['zg', 'teste', 'sumida', 'gs'],
+    bucket,
+    apple: null,
+    meses: ['2026-09', '2026-10'],
+    aoTerminarLoja: async (snapshot, resultado) => { terminadas.push([snapshot.id, resultado.documento.dadosAte.android]); },
+    aoFalhar: (lojaId, error) => { falhas.push([lojaId, error.message]); },
+  });
+  assert.deepEqual(Object.keys(gravados), ['zg']);
+  assert.deepEqual(terminadas, [['zg', '2026-10-02']]);
+  assert.deepEqual(falhas, [['gs', 'sem permissao']]);
+  assert.deepEqual(relatorio.map((linha) => [linha.establishmentId, linha.status || 'ok']), [['sumida', 'inexistente'], ['teste', 'sem-app'], ['zg', 'ok'], ['gs', 'falhou']]);
+  const { comApp } = await lojasComApp({ db, lojaIds: ['zg', 'teste', 'gs'] });
+  assert.deepEqual(comApp.map((loja) => [loja.id, loja.nome, loja.apps.android]), [['zg', 'Zero Grau', 'br.com.zero.grau'], ['gs', 'G&S', 'br.com.gsatacarejo']]);
+});
+
+test('index.js: instalacoesAppNightly semanal, segunda as 04:15 (28.2), com a conta relatorios-lojas, o segredo e os parametros', () => {
   const index = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
-  assert.match(index, /exports\.instalacoesAppNightly = onSchedule\(\s+\{\s+schedule: '15 4 \* \* \*',\s+timeZone: 'America\/Sao_Paulo'/);
+  assert.match(index, /exports\.instalacoesAppNightly = onSchedule\(\s+\{\s+schedule: '15 4 \* \* 1',\s+timeZone: 'America\/Sao_Paulo'/);
+  assert.ok(index.includes('const report = await atualizarTodasAsLojas({'));
   assert.ok(index.includes("serviceAccount: 'relatorios-lojas@appmobileprod-19505.iam.gserviceaccount.com',"));
   assert.ok(index.includes("const APPLE_RELATORIOS_LEITURA_P8 = defineSecret('APPLE_RELATORIOS_LEITURA_P8');"));
   ['APPLE_ISSUER_ID', 'APPLE_KEY_ID', 'PLAY_REPORTS_BUCKET'].forEach((nome) => assert.ok(index.includes(`const ${nome} = defineString('${nome}');`)));
   assert.ok(index.includes('secrets: [APPLE_RELATORIOS_LEITURA_P8],'));
-  assert.ok(index.includes("await registrarNoite(snapshot.ref, 'instalacoesAppNightly', {"));
+  assert.ok(index.includes("aoTerminarLoja: (snapshot, resultado) => registrarNoite(snapshot.ref, 'instalacoesAppNightly', {"));
 });

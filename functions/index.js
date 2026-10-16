@@ -6,7 +6,6 @@ const {
 } = require('firebase-functions/v2/firestore');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { defineSecret, defineString } = require('firebase-functions/params');
-const zlib = require('node:zlib');
 const { getStorage } = require('firebase-admin/storage');
 const {
   DEFAULT_SAMPLE_SIZE,
@@ -48,12 +47,7 @@ const { atualizarResumoDoPedido } = require('./resumoPedidos');
 const { atualizarResumoDeVendas } = require('./resumoVendas');
 const { atualizarSemGiro } = require('./semGiro');
 const { atualizarVisitasPorMes } = require('./visitasPorMes');
-const {
-  appsDaLoja,
-  atualizarInstalacoes,
-  clienteDaApple,
-  doisUltimosMeses,
-} = require('./instalacoesApp');
+const { atualizarTodasAsLojas, doisUltimosMeses, leitorDaApple } = require('./instalacoesApp');
 const { avisoDeMensagem, avisoDePedidoCancelado, avisoDePedidoNovo } = require('./avisos');
 
 if (!admin.apps.length) {
@@ -1111,11 +1105,12 @@ exports.semGiroNightly = onSchedule(
 );
 
 // Visitas por mes (Stats/visitasPorMes) para o grafico "Visitas e pedidos" da tela Financas nos
-// periodos Ano e Desde o inicio. Recalcula do zero o mes atual e o anterior (ate 62 dias do
-// DailyStats por loja, pelo id) e grava por cima desses dois meses: rodar de novo nao soma duas vezes.
+// periodos Ano e Desde o inicio. Semanal, segunda as 02:45 (decisao de 16/10/2026): recalcula do zero o mes
+// atual e o anterior (ate 62 dias do DailyStats por loja, pelo id) e grava por cima desses dois meses.
+// O painel pega o mes atual e o anterior dos 60 dias do DailyStats que ja le.
 exports.visitasPorMesNightly = onSchedule(
   {
-    schedule: '45 2 * * *',
+    schedule: '45 2 * * 1',
     timeZone: 'America/Sao_Paulo',
     region: 'us-central1',
     memory: '256MiB',
@@ -1174,10 +1169,11 @@ exports.visitasPorMesNightly = onSchedule(
   },
 );
 
-// Instalacoes do app (Stats/instalacoesApp) para o card "Instalacoes do app" da tela Financas:
-// Android pelos CSVs da Google Play no bucket de relatorios, iPhone pelos relatorios de analise do App
-// Store Connect. Recalcula os dois ultimos meses e grava por cima deles. Roda com a conta de servico
-// relatorios-lojas (leitura do bucket da Play) e a chave de leitura da Apple no Secret Manager.
+// Instalacoes do app (Stats/instalacoesApp) para a tela Instalacoes do Admin: Android pelos CSVs da
+// Google Play no bucket de relatorios, iPhone pelos relatorios de analise do App Store Connect.
+// Semanal, segunda as 04:15 (decisao de 16/10/2026): recalcula os dois ultimos meses e grava por cima
+// deles. Roda com a conta de servico relatorios-lojas (leitura do bucket da Play) e a chave de leitura
+// da Apple no Secret Manager. A mesma montagem (atualizarTodasAsLojas) atende o "Atualizar agora".
 const APPLE_RELATORIOS_LEITURA_P8 = defineSecret('APPLE_RELATORIOS_LEITURA_P8');
 const APPLE_ISSUER_ID = defineString('APPLE_ISSUER_ID');
 const APPLE_KEY_ID = defineString('APPLE_KEY_ID');
@@ -1185,7 +1181,7 @@ const PLAY_REPORTS_BUCKET = defineString('PLAY_REPORTS_BUCKET');
 
 exports.instalacoesAppNightly = onSchedule(
   {
-    schedule: '15 4 * * *',
+    schedule: '15 4 * * 1',
     timeZone: 'America/Sao_Paulo',
     region: 'us-central1',
     memory: '512MiB',
@@ -1204,56 +1200,27 @@ exports.instalacoesAppNightly = onSchedule(
         console.log('[instalacoesAppNightly] Nenhuma loja habilitada em', IMAGE_CHECK_CONFIG_PATH);
         return null;
       }
-      const bucket = getStorage().bucket(PLAY_REPORTS_BUCKET.value());
-      const apple = {
-        cliente: clienteDaApple({
+      const report = await atualizarTodasAsLojas({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        lojaIds: configuredIds,
+        bucket: getStorage().bucket(PLAY_REPORTS_BUCKET.value()),
+        apple: leitorDaApple({
           chaveP8: APPLE_RELATORIOS_LEITURA_P8.value(),
           issuerId: APPLE_ISSUER_ID.value(),
           keyId: APPLE_KEY_ID.value(),
         }),
-        baixar: async (url) => Buffer.from(await (await fetch(url)).arrayBuffer()),
-        gunzip: (conteudo) => zlib.gunzipSync(conteudo),
-      };
-
-      const storeSnapshots = await db.getAll(
-        ...configuredIds.map((id) => db.collection('estabelecimentos').doc(id)),
-      );
-      const report = storeSnapshots
-        .filter((snapshot) => !snapshot.exists)
-        .map((snapshot) => ({ establishmentId: snapshot.id, status: 'inexistente' }));
-
-      for (const snapshot of storeSnapshots.filter((store) => store.exists)) {
-        const establishmentId = snapshot.id;
-        const apps = appsDaLoja(snapshot.get('whitelabelId'));
-        if (!apps) {
-          report.push({ establishmentId, status: 'sem-app' });
-          continue;
-        }
-        try {
-          const resultado = await atualizarInstalacoes({
-            db,
-            FieldValue: admin.firestore.FieldValue,
-            lojaId: establishmentId,
-            apps,
-            bucket,
-            apple,
-            meses,
-          });
-          const { documento } = resultado;
-          report.push({ establishmentId, dadosAte: documento.dadosAte, arquivos: resultado.android?.arquivos || [] });
-          await registrarNoite(snapshot.ref, 'instalacoesAppNightly', {
-            dados: {
-              meses: meses.join(','),
-              androidAte: documento.dadosAte.android || '',
-              iosAte: documento.dadosAte.ios || '',
-              dimensaoAndroid: [...new Set((resultado.android?.arquivos || []).map((arquivo) => arquivo.dimensao))].join(','),
-            },
-          });
-        } catch (error) {
-          console.error('[instalacoesAppNightly] Falha na loja', { establishmentId, error: error.message });
-          report.push({ establishmentId, status: 'falhou' });
-        }
-      }
+        meses,
+        aoTerminarLoja: (snapshot, resultado) => registrarNoite(snapshot.ref, 'instalacoesAppNightly', {
+          dados: {
+            meses: meses.join(','),
+            androidAte: resultado.documento.dadosAte.android || '',
+            iosAte: resultado.documento.dadosAte.ios || '',
+            dimensaoAndroid: [...new Set((resultado.android?.arquivos || []).map((arquivo) => arquivo.dimensao))].join(','),
+          },
+        }),
+        aoFalhar: (establishmentId, error) => console.error('[instalacoesAppNightly] Falha na loja', { establishmentId, error: error.message }),
+      });
 
       const result = { lojas: report, segundos: Math.round((Date.now() - startedAt) / 1000) };
       console.log('[instalacoesAppNightly] Passada concluida', result);

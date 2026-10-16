@@ -25,6 +25,9 @@ import { FirestoreUsoIaRepository } from './infra/firebase/FirestoreUsoIaReposit
 import { FirestoreWebNotificationTokenRepository } from './infra/firebase/FirestoreWebNotificationTokenRepository.js';
 import { ManagerDataAccessPolicy } from './infra/firebase/ManagerDataAccessPolicy.js';
 import { getFirestoreDb, getStorageBucket } from './infra/firebase/firebaseAdmin.js';
+import { FieldValue } from 'firebase-admin/firestore';
+import { InstalacoesDosApps } from './application/admin/InstalacoesDosApps.js';
+import { criarFontesDeInstalacoes } from './infra/relatorios/fontesDeInstalacoes.js';
 import { createAdminAuditMiddleware } from './http/middlewares/adminAudit.js';
 import { createAiGateway } from './infra/ai/createAiGateway.js';
 import { logger } from './infra/logger/logger.js';
@@ -90,6 +93,19 @@ const app = createApp({
   platformAdminRepository,
   adminAuditMiddleware: createAdminAuditMiddleware({ firestore }),
   sugestoesDosClientes: new SugestoesDosClientes({ firestore }),
+  // Tela Instalacoes do Admin: leitura dos Stats/instalacoesApp e o "Atualizar agora".
+  instalacoesDosApps: new InstalacoesDosApps({
+    firestore,
+    FieldValue,
+    fontes: criarFontesDeInstalacoes({
+      projeto: env.INSTALACOES_PROJETO,
+      contaDeServico: env.INSTALACOES_CONTA_DE_SERVICO,
+      bucket: env.PLAY_REPORTS_BUCKET,
+      segredo: env.APPLE_RELATORIOS_SEGREDO,
+      issuerId: env.APPLE_ISSUER_ID,
+      keyId: env.APPLE_KEY_ID,
+    }),
+  }),
   accessRepository,
   generateAiResponseUseCase,
   getDailyHomeOverviewUseCase,

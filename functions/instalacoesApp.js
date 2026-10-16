@@ -23,6 +23,7 @@
 // Funcoes puras e leitores com as dependencias por parametro (bucket, fetch, gunzip): sem
 // firebase-admin nem firebase-functions aqui.
 const crypto = require('node:crypto');
+const zlib = require('node:zlib');
 
 const INSTALACOES_DOCUMENT = 'instalacoesApp';
 
@@ -384,6 +385,60 @@ async function atualizarInstalacoes({
   return { ...relatorio, documento };
 }
 
+// Leitor dos relatorios da Apple (cliente da API, download dos segmentos e gunzip).
+function leitorDaApple({ chaveP8, issuerId, keyId, fetch: buscar = fetch }) {
+  return {
+    cliente: clienteDaApple({ chaveP8, issuerId, keyId, fetch: buscar }),
+    baixar: async (url) => Buffer.from(await (await buscar(url)).arrayBuffer()),
+    gunzip: (conteudo) => zlib.gunzipSync(conteudo),
+  };
+}
+
+// Lojas com app entre as dadas (estabelecimentos/{loja}.whitelabelId no mapa APPS_POR_WHITELABEL).
+async function lojasComApp({ db, lojaIds }) {
+  if (!lojaIds.length) return { comApp: [], semApp: [], inexistentes: [] };
+  const snapshots = await db.getAll(...lojaIds.map((id) => db.collection('estabelecimentos').doc(id)));
+  const saida = { comApp: [], semApp: [], inexistentes: [] };
+  snapshots.forEach((snapshot) => {
+    if (!snapshot.exists) {
+      saida.inexistentes.push(snapshot.id);
+      return;
+    }
+    const apps = appsDaLoja(snapshot.get('whitelabelId'));
+    if (!apps) saida.semApp.push(snapshot.id);
+    else saida.comApp.push({ id: snapshot.id, nome: snapshot.get('name') || apps.nome, apps, snapshot });
+  });
+  return saida;
+}
+
+// A mesma montagem para a rotina semanal e para o botao "Atualizar agora" do Admin: cada loja com app
+// le Android e iPhone nos meses dados e grava o documento. aoTerminarLoja(snapshot, resultado) roda
+// depois de cada loja gravada (a rotina registra em Stats/rotinasNoturnas).
+async function atualizarTodasAsLojas({
+  db, FieldValue, lojaIds, bucket, apple, meses, aoTerminarLoja = async () => {}, aoFalhar = () => {},
+}) {
+  const { comApp, semApp, inexistentes } = await lojasComApp({ db, lojaIds });
+  const relatorio = [
+    ...inexistentes.map((establishmentId) => ({ establishmentId, status: 'inexistente' })),
+    ...semApp.map((establishmentId) => ({ establishmentId, status: 'sem-app' })),
+  ];
+  for (const loja of comApp) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const resultado = await atualizarInstalacoes({
+        db, FieldValue, lojaId: loja.id, apps: loja.apps, bucket, apple, meses,
+      });
+      relatorio.push({ establishmentId: loja.id, dadosAte: resultado.documento.dadosAte, arquivos: resultado.android?.arquivos || [] });
+      // eslint-disable-next-line no-await-in-loop
+      await aoTerminarLoja(loja.snapshot, resultado);
+    } catch (error) {
+      aoFalhar(loja.id, error);
+      relatorio.push({ establishmentId: loja.id, status: 'falhou' });
+    }
+  }
+  return relatorio;
+}
+
 module.exports = {
   APPS_POR_WHITELABEL,
   COLUNAS_DA_APPLE,
@@ -395,13 +450,16 @@ module.exports = {
   appsDaLoja,
   arquivoDaPlay,
   atualizarInstalacoes,
+  atualizarTodasAsLojas,
   clienteDaApple,
   dataDaLinha,
   decodificarTexto,
   doisUltimosMeses,
   lerMesesDaPlay,
+  leitorDaApple,
   lerTabela,
   linhasDaApple,
+  lojasComApp,
   mesesNoBucket,
   montarDocumento,
   somarCsvsDaPlay,

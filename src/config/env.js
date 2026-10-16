@@ -74,6 +74,15 @@ export const env = Object.freeze({
   IMPLANTATION_ADMIN_UIDS: parseList(process.env.IMPLANTATION_ADMIN_UIDS),
   // Bucket dos icones de categoria da lista padrao (Admin).
   STORAGE_BUCKET: process.env.STORAGE_BUCKET || 'appmobileprod-19505.appspot.com',
+  // "Atualizar agora" da tela Instalacoes do Admin: os mesmos parametros da rotina instalacoesAppNightly
+  // (functions/.env.appmobileprod-19505), a conta de servico que le os relatorios e o nome do segredo
+  // da chave da Apple no Secret Manager. A chave nunca fica aqui.
+  INSTALACOES_PROJETO: process.env.INSTALACOES_PROJETO || 'appmobileprod-19505',
+  INSTALACOES_CONTA_DE_SERVICO: process.env.INSTALACOES_CONTA_DE_SERVICO || '',
+  PLAY_REPORTS_BUCKET: process.env.PLAY_REPORTS_BUCKET || '',
+  APPLE_ISSUER_ID: process.env.APPLE_ISSUER_ID || '',
+  APPLE_KEY_ID: process.env.APPLE_KEY_ID || '',
+  APPLE_RELATORIOS_SEGREDO: process.env.APPLE_RELATORIOS_SEGREDO || 'APPLE_RELATORIOS_LEITURA_P8',
 });
 
 export function isProduction() {

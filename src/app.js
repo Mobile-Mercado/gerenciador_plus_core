@@ -39,6 +39,7 @@ export function createApp({
   platformAdminRepository,
   adminAuditMiddleware,
   sugestoesDosClientes,
+  instalacoesDosApps,
 }) {
   const app = express();
   // Barreira de escrita por chave de permissao, com cache por token.
@@ -124,7 +125,7 @@ export function createApp({
     createFirebaseAuthMiddleware({ required: true }),
     requirePlatformAdmin,
     adminAuditMiddleware,
-    createAdminRoutes({ manageCatalogoPadrao, sugestoesDosClientes }),
+    createAdminRoutes({ manageCatalogoPadrao, sugestoesDosClientes, instalacoesDosApps }),
   );
 
   app.use(notFoundHandler);

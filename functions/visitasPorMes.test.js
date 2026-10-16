@@ -101,10 +101,10 @@ test('rotina: recalcula do zero o mes atual e o anterior e grava por cima; rodar
   assert.equal('atualizadoAte' in vazio.stats(), false);
 });
 
-test('index.js: visitasPorMesNightly entre 02:30 e 03:00, sem colidir com as outras rotinas', () => {
+test('index.js: visitasPorMesNightly semanal, segunda as 02:45 (28.3), sem colidir com as outras rotinas', () => {
   const index = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
-  assert.match(index, /exports\.visitasPorMesNightly = onSchedule\(\s+\{\s+schedule: '45 2 \* \* \*',\s+timeZone: 'America\/Sao_Paulo'/);
+  assert.match(index, /exports\.visitasPorMesNightly = onSchedule\(\s+\{\s+schedule: '45 2 \* \* 1',\s+timeZone: 'America\/Sao_Paulo'/);
   const horarios = [...index.matchAll(/schedule: '([^']+)'/g)].map((achado) => achado[1]);
-  assert.equal(horarios.filter((horario) => horario === '45 2 * * *').length, 1);
+  assert.equal(horarios.filter((horario) => horario.startsWith('45 2 ')).length, 1);
   assert.ok(index.includes("await registrarNoite(snapshot.ref, 'visitasPorMesNightly', {"));
 });
