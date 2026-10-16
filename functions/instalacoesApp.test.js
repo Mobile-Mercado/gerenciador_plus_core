@@ -22,7 +22,7 @@ test('mapa de apps num lugar so: pacote Android e bundle iOS pelo whitelabelId d
   assert.equal(arquivoDaPlay('br.com.zero.grau', '2026-10', 'country'), 'stats/installs/installs_br.com.zero.grau_202610_country.csv');
 });
 
-test('CSV da Play em UTF-16: soma os paises do dia; no ultimo dia, instalados agora e total', () => {
+test('CSV da Play em UTF-16: soma os paises do dia; no ultimo dia, instalados agora (Total User Installs fica fora)', () => {
   const csv = [
     CABECALHO,
     linhaDaPlay('2026-10-01', 'BR', { total: 100, baixaram: 3, desinstalaram: 1, ativos: 60 }),
@@ -36,7 +36,7 @@ test('CSV da Play em UTF-16: soma os paises do dia; no ultimo dia, instalados ag
   assert.deepEqual(soma.dias, { '2026-10-01': { baixaram: 4, desinstalaram: 1 }, '2026-10-02': { baixaram: 2, desinstalaram: 1 } });
   assert.equal(soma.dadosAte, '2026-10-02');
   assert.equal(soma.instaladosAgora, 63);
-  assert.equal(soma.totalInstalacoes, 107);
+  assert.equal('totalInstalacoes' in soma, false);
   assert.equal(decodificarTexto(Buffer.from('a,b\n1,2')).codificacao, 'utf-8');
   assert.deepEqual(lerTabela('"a, b",c\n"x ""y""",2\n'), [{ 'a, b': 'x "y"', c: '2' }]);
   // Nome antigo da coluna de instalados agora, se aparecer.
@@ -68,7 +68,6 @@ test('Play: overview quando existe; se nao, country; um arquivo de dimensao so p
   assert.deepEqual(lido.arquivos, [{ mes: '2026-09', dimensao: 'overview' }, { mes: '2026-10', dimensao: 'country' }]);
   assert.deepEqual(lido.dias, { '2026-09-30': { baixaram: 5, desinstalaram: 1 }, '2026-10-02': { baixaram: 2, desinstalaram: 0 } });
   assert.equal(lido.instaladosAgora, 56);
-  assert.equal(lido.totalInstalacoes, 92);
   assert.deepEqual(lido.codificacoes, ['utf-16le']);
   assert.equal(bucket.lidos.length, 2);
 });
@@ -153,7 +152,9 @@ test('documento: troca so os meses recalculados; iPhone soma desde o inicio; dad
     '2026-10-02': { ios: { baixaram: 1, desinstalaram: 0, instalaram: 2 } },
   });
   assert.deepEqual(documento.instaladosAgora, { android: 63, ios: (3 + 2) - (1 + 0) });
-  assert.deepEqual(documento.totalInstalacoes, { android: 107, ios: 3 });
+  // Totais desde o inicio (19.1 e 19.2): soma dos dias guardados, Android e iPhone.
+  assert.deepEqual(documento.totalInstalacoes, { android: 1 + 4, ios: 2 + 1 });
+  assert.deepEqual(documento.totalDesinstalacoes, { android: 0 + 1, ios: 1 + 0 });
   assert.deepEqual(documento.dadosAte, { android: '2026-10-01', ios: '2026-10-02' });
   // Sem leitura nova do iPhone (falhou ou sem chave): os dias do iPhone ficam como estavam.
   const soAndroid = montarDocumento({ atual, android: null, ios: null, mesesRecalculados: ['2026-09', '2026-10'] });

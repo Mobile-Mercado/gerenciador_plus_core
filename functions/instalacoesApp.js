@@ -3,10 +3,12 @@
 //
 // Documento:
 //   dias { "AAAA-MM-DD": { android: { baixaram, desinstalaram }, ios: { baixaram, desinstalaram, instalaram } } }
-//   instaladosAgora { android, ios }   android: "Installs on active devices" do ultimo dia com dado;
+//   instaladosAgora { android, ios }   android: "Active Device Installs" do ultimo dia com dado;
 //                                      ios: soma das instalacoes menos soma das remocoes desde o inicio
-//   totalInstalacoes { android, ios }  android: "Total User Installs" do ultimo dia com dado;
-//                                      ios: soma dos primeiros downloads desde o inicio
+//   totalInstalacoes { android, ios }  soma de baixaram desde o inicio (android: "Daily User Installs";
+//                                      ios: primeiros downloads). "Total User Installs" vem sempre 0.
+//   totalDesinstalacoes { android, ios } soma de desinstalaram desde o inicio (android: "Daily User
+//                                      Uninstalls"; ios: Delete)
 //   dadosAte { android, ios }          ultimo dia com dado de cada loja de apps
 //   atualizadoEm
 // `ios.instalaram` (instalacoes do dia) existe so para refazer o instaladosAgora do iPhone quando a
@@ -48,7 +50,6 @@ const COLUNAS_DA_PLAY = Object.freeze({
   // de outubro da Zero Grau); "Installs on active devices" fica como nome alternativo.
   instaladosAgora: 'Active Device Installs',
   instaladosAgoraAlternativo: 'Installs on active devices',
-  total: 'Total User Installs',
 });
 
 function arquivoDaPlay(pacote, mes, dimensao) {
@@ -110,10 +111,10 @@ function dataDaLinha(valor) {
 }
 
 // Soma por dia as linhas de um ou mais CSVs da Play (country: todos os paises do dia). No ultimo dia
-// com dado, "Installs on active devices" = instalados agora e "Total User Installs" = total.
+// com dado, "Active Device Installs" = instalados agora.
 function somarCsvsDaPlay(tabelas) {
   const dias = {};
-  const ultimos = {};
+  const ativos = {};
   tabelas.flat().forEach((linha) => {
     const dia = dataDaLinha(linha[COLUNAS_DA_PLAY.data]);
     if (!dia) return;
@@ -121,18 +122,11 @@ function somarCsvsDaPlay(tabelas) {
     atual.baixaram += numero(linha[COLUNAS_DA_PLAY.baixaram]);
     atual.desinstalaram += numero(linha[COLUNAS_DA_PLAY.desinstalaram]);
     dias[dia] = atual;
-    const fechamento = ultimos[dia] || { instaladosAgora: 0, total: 0 };
-    fechamento.instaladosAgora += numero(linha[COLUNAS_DA_PLAY.instaladosAgora] ?? linha[COLUNAS_DA_PLAY.instaladosAgoraAlternativo]);
-    fechamento.total += numero(linha[COLUNAS_DA_PLAY.total]);
-    ultimos[dia] = fechamento;
+    ativos[dia] = (ativos[dia] || 0)
+      + numero(linha[COLUNAS_DA_PLAY.instaladosAgora] ?? linha[COLUNAS_DA_PLAY.instaladosAgoraAlternativo]);
   });
   const dadosAte = Object.keys(dias).sort().pop() || null;
-  return {
-    dias,
-    dadosAte,
-    instaladosAgora: dadosAte ? ultimos[dadosAte].instaladosAgora : null,
-    totalInstalacoes: dadosAte ? ultimos[dadosAte].total : null,
-  };
+  return { dias, dadosAte, instaladosAgora: dadosAte ? ativos[dadosAte] : null };
 }
 
 // Le os CSVs de um pacote nos meses dados ("AAAA-MM"): overview se existir; se nao, country.
@@ -317,20 +311,18 @@ function montarDocumento({ atual = null, android = null, ios = null, mesesRecalc
   Object.entries(ios?.dias || {}).forEach(([dia, valores]) => {
     dias[dia] = { ...(dias[dia] || {}), ios: { baixaram: valores.baixaram, desinstalaram: valores.desinstalaram, instalaram: valores.instalaram } };
   });
-  const diasDoIos = Object.values(dias).map((entrada) => entrada.ios).filter(Boolean);
-  const somaIos = (campo) => diasDoIos.reduce((soma, valores) => soma + numero(valores[campo]), 0);
+  // Totais desde o inicio: soma dos dias guardados de cada loja de apps.
+  const soma = (plataforma, campo) => Object.values(dias)
+    .reduce((total, entrada) => total + numero(entrada[plataforma]?.[campo]), 0);
   const ultimoDia = (plataforma) => Object.keys(dias).filter((dia) => dias[dia][plataforma]).sort().pop() || null;
-  const temIos = diasDoIos.length > 0;
   return {
     dias,
     instaladosAgora: {
       android: android?.dadosAte ? android.instaladosAgora : numero(atual?.instaladosAgora?.android),
-      ios: temIos ? somaIos('instalaram') - somaIos('desinstalaram') : 0,
+      ios: soma('ios', 'instalaram') - soma('ios', 'desinstalaram'),
     },
-    totalInstalacoes: {
-      android: android?.dadosAte ? android.totalInstalacoes : numero(atual?.totalInstalacoes?.android),
-      ios: temIos ? somaIos('baixaram') : 0,
-    },
+    totalInstalacoes: { android: soma('android', 'baixaram'), ios: soma('ios', 'baixaram') },
+    totalDesinstalacoes: { android: soma('android', 'desinstalaram'), ios: soma('ios', 'desinstalaram') },
     dadosAte: { android: ultimoDia('android'), ios: ultimoDia('ios') },
   };
 }

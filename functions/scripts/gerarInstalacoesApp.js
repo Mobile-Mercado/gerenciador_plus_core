@@ -99,11 +99,11 @@ async function main() {
       if (resultado.android) {
         const dimensoes = [...new Set(resultado.android.arquivos.map((arquivo) => arquivo.dimensao))].join(', ') || '-';
         console.log(`  Android: ${resultado.android.meses.length} meses lidos | dimensao ${dimensoes} | codificacao ${resultado.android.codificacoes.join(', ') || '-'}`);
-        console.log(`    baixaram ${somaDe(documento.dias, 'android', 'baixaram')} | desinstalaram ${somaDe(documento.dias, 'android', 'desinstalaram')} | instalados agora ${documento.instaladosAgora.android} | total ${documento.totalInstalacoes.android} | dadosAte ${documento.dadosAte.android || '-'}`);
+        console.log(`    baixaram ${somaDe(documento.dias, 'android', 'baixaram')} | desinstalaram ${somaDe(documento.dias, 'android', 'desinstalaram')} | instalados agora ${documento.instaladosAgora.android} | instalacoes ${documento.totalInstalacoes.android} | desinstalacoes ${documento.totalDesinstalacoes.android} | dadosAte ${documento.dadosAte.android || '-'}`);
       }
       if (resultado.ios) {
         console.log(`  iPhone: app ${resultado.ios.appId || 'nao achado pelo bundle'} | ${resultado.ios.instancias || 0} instancias diarias`);
-        console.log(`    baixaram ${somaDe(documento.dias, 'ios', 'baixaram')} | desinstalaram ${somaDe(documento.dias, 'ios', 'desinstalaram')} | instalados agora ${documento.instaladosAgora.ios} | total ${documento.totalInstalacoes.ios} | dadosAte ${documento.dadosAte.ios || '-'}`);
+        console.log(`    baixaram ${somaDe(documento.dias, 'ios', 'baixaram')} | desinstalaram ${somaDe(documento.dias, 'ios', 'desinstalaram')} | instalados agora ${documento.instaladosAgora.ios} | instalacoes ${documento.totalInstalacoes.ios} | desinstalacoes ${documento.totalDesinstalacoes.ios} | dadosAte ${documento.dadosAte.ios || '-'}`);
       }
       if (gravar) console.log(`  gravado estabelecimentos/${lojaId}/Stats/${INSTALACOES_DOCUMENT}`);
     } catch (error) {
