@@ -3,8 +3,8 @@
 // Financas lerem um documento so, em vez de todo o DailyStats.
 //
 // Documento: { meses: { "AAAA-MM": { app, agente } }, atualizadoAte: "AAAA-MM-DD" (ultimo dia
-// somado), atualizadoEm }. app = appViewsCount e agente = agentAppViewsCount do DailyStats (o
-// viewsCount antigo fica fora, como na tela).
+// somado), atualizadoEm }. app = viewsCount (o app do cliente grava a visita ali; appViewsCount da
+// loja e sempre 0) e agente = agentAppViewsCount do DailyStats, como na tela.
 //
 // A rotina visitasPorMesNightly recalcula do zero so o mes atual e o anterior (no maximo 62
 // documentos do DailyStats por loja, lidos pelo id "DD-MM-AAAA") e grava por cima desses dois meses:
@@ -48,7 +48,7 @@ function somarVisitasPorMes(documentos) {
     }
     const mes = dia.slice(0, 7);
     const atual = meses[mes] || { app: 0, agente: 0 };
-    atual.app += numero(dados?.appViewsCount);
+    atual.app += numero(dados?.viewsCount);
     atual.agente += numero(dados?.agentAppViewsCount);
     meses[mes] = atual;
     if (!ultimoDia || dia > ultimoDia) ultimoDia = dia;

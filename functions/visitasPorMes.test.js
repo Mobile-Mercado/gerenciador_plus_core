@@ -8,12 +8,12 @@ const {
 
 const FieldValue = { serverTimestamp: () => ({ serverTimestamp: true }) };
 
-test('soma por mes: app = appViewsCount, agente = agentAppViewsCount; viewsCount fica fora', () => {
+test('soma por mes: app = viewsCount, agente = agentAppViewsCount; appViewsCount (sempre 0 na loja) fica fora', () => {
   const soma = somarVisitasPorMes([
-    { id: '01-10-2026', dados: { appViewsCount: 3, agentAppViewsCount: 1, viewsCount: 50, createdAt: {} } },
-    { id: '15-10-2026', dados: { appViewsCount: 2, createdAt: {} } },
-    { id: '30-09-2026', dados: { appViewsCount: 4, agentAppViewsCount: 2 } },
-    { id: 'resumo', dados: { appViewsCount: 9 } },
+    { id: '01-10-2026', dados: { viewsCount: 3, agentAppViewsCount: 1, appViewsCount: 50, createdAt: {} } },
+    { id: '15-10-2026', dados: { viewsCount: 2, createdAt: {} } },
+    { id: '30-09-2026', dados: { viewsCount: 4, agentAppViewsCount: 2 } },
+    { id: 'resumo', dados: { viewsCount: 9 } },
   ]);
   assert.deepEqual(soma.meses, { '2026-10': { app: 5, agente: 1 }, '2026-09': { app: 4, agente: 2 } });
   assert.equal(soma.ultimoDia, '2026-10-15');
@@ -70,9 +70,9 @@ function bancoFalso(diarios, statsInicial = null) {
 
 test('rotina: recalcula do zero o mes atual e o anterior e grava por cima; rodar duas vezes nao soma duas vezes', async () => {
   const diarios = {
-    '02-09-2026': { appViewsCount: 4, agentAppViewsCount: 1 },
-    '10-10-2026': { appViewsCount: 3 },
-    '15-10-2026': { appViewsCount: 1, agentAppViewsCount: 2 },
+    '02-09-2026': { viewsCount: 4, agentAppViewsCount: 1 },
+    '10-10-2026': { viewsCount: 3 },
+    '15-10-2026': { viewsCount: 1, agentAppViewsCount: 2 },
   };
   const { db, registro, stats } = bancoFalso(diarios, { meses: { '2025-12': { app: 7, agente: 0 }, '2026-10': { app: 999, agente: 999 } } });
   const agora = new Date('2026-10-16T05:45:00Z');
