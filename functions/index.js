@@ -7,7 +7,6 @@ const {
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { defineSecret, defineString } = require('firebase-functions/params');
 const { getStorage } = require('firebase-admin/storage');
-const { applicationDefault } = require('firebase-admin/app');
 const {
   DEFAULT_SAMPLE_SIZE,
   SALES_WINDOW_DAYS,
@@ -48,15 +47,7 @@ const { atualizarResumoDoPedido } = require('./resumoPedidos');
 const { atualizarResumoDeVendas } = require('./resumoVendas');
 const { atualizarSemGiro } = require('./semGiro');
 const { atualizarVisitasPorMes } = require('./visitasPorMes');
-const {
-  atualizarTodasAsLojas,
-  appsDaLoja,
-  clienteDePedidos,
-  doisUltimosMeses,
-  leitorDaApple,
-  lerSegredoOpcional,
-  pedirRelatoriosQueFaltam,
-} = require('./instalacoesApp');
+const { atualizarTodasAsLojas, doisUltimosMeses, leitorDaApple } = require('./instalacoesApp');
 const { avisoDeMensagem, avisoDePedidoCancelado, avisoDePedidoNovo } = require('./avisos');
 
 if (!admin.apps.length) {
@@ -1187,42 +1178,6 @@ const APPLE_RELATORIOS_LEITURA_P8 = defineSecret('APPLE_RELATORIOS_LEITURA_P8');
 const APPLE_ISSUER_ID = defineString('APPLE_ISSUER_ID');
 const APPLE_KEY_ID = defineString('APPLE_KEY_ID');
 const PLAY_REPORTS_BUCKET = defineString('PLAY_REPORTS_BUCKET');
-// Pedido automatico dos relatorios da Apple para app novo (Parte 32.3), preparado e desligado: liga quando
-// existirem a chave Admin no segredo APPLE_RELATORIOS_PEDIDO_P8 (lido em memoria pela conta da funcao,
-// so ela com acesso) e o Key ID dela aqui. Sem os dois, a rotina so registra app sem pedido.
-const APPLE_PEDIDO_KEY_ID = defineString('APPLE_PEDIDO_KEY_ID', { default: '' });
-const SEGREDO_DE_PEDIDO = 'APPLE_RELATORIOS_PEDIDO_P8';
-
-// Le um segredo opcional com a credencial da funcao (sem prende-lo ao deploy, como os de defineSecret).
-async function pedirAoGoogle({ url }) {
-  const { access_token: token } = await applicationDefault().getAccessToken();
-  const resposta = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!resposta.ok) throw new Error(`Secret Manager respondeu ${resposta.status}`);
-  return { data: await resposta.json() };
-}
-
-// Antes de ler os relatorios: os apps da conta Apple sem pedido ONGOING ganham ONGOING e ONE_TIME_SNAPSHOT
-// (com a chave de pedido) ou ficam apontados como sem pedido (sem ela). Falha aqui nao para a rotina.
-async function pedidosDaAppleDaSemana({ issuerId, chaveDeLeitura, keyIdDeLeitura }) {
-  try {
-    const keyIdDePedido = APPLE_PEDIDO_KEY_ID.value();
-    const chaveDePedido = keyIdDePedido
-      ? await lerSegredoOpcional({ pedirAoGoogle, projeto: process.env.GCLOUD_PROJECT || 'appmobileprod-19505', nome: SEGREDO_DE_PEDIDO })
-      : null;
-    const resultado = await pedirRelatoriosQueFaltam({
-      leitura: clienteDePedidos({ chaveP8: chaveDeLeitura, issuerId, keyId: keyIdDeLeitura }),
-      pedido: chaveDePedido ? clienteDePedidos({ chaveP8: chaveDePedido, issuerId, keyId: keyIdDePedido }) : null,
-    });
-    console.log('[instalacoesAppNightly] Pedidos da Apple', {
-      chaveDePedido: Boolean(chaveDePedido),
-      apps: resultado.map(({ appId, bundle, situacao, pedidos }) => ({ appId, bundle, situacao, pedidos })),
-    });
-    return resultado;
-  } catch (error) {
-    console.error('[instalacoesAppNightly] Falha ao conferir os pedidos da Apple', { error: error.message });
-    return [];
-  }
-}
 
 exports.instalacoesAppNightly = onSchedule(
   {
@@ -1245,16 +1200,6 @@ exports.instalacoesAppNightly = onSchedule(
         console.log('[instalacoesAppNightly] Nenhuma loja habilitada em', IMAGE_CHECK_CONFIG_PATH);
         return null;
       }
-      const pedidosDaApple = await pedidosDaAppleDaSemana({
-        issuerId: APPLE_ISSUER_ID.value(),
-        chaveDeLeitura: APPLE_RELATORIOS_LEITURA_P8.value(),
-        keyIdDeLeitura: APPLE_KEY_ID.value(),
-      });
-      const situacaoDoPedido = (snapshot) => {
-        const bundle = appsDaLoja(snapshot.get('whitelabelId'))?.ios;
-        const app = pedidosDaApple.find((item) => item.bundle === bundle);
-        return app ? `${app.situacao}${app.pedidos.length ? `:${app.pedidos.map((item) => item.tipo).join('+')}` : ''}` : '';
-      };
       const report = await atualizarTodasAsLojas({
         db,
         FieldValue: admin.firestore.FieldValue,
@@ -1272,8 +1217,6 @@ exports.instalacoesAppNightly = onSchedule(
             androidAte: resultado.documento.dadosAte.android || '',
             iosAte: resultado.documento.dadosAte.ios || '',
             dimensaoAndroid: [...new Set((resultado.android?.arquivos || []).map((arquivo) => arquivo.dimensao))].join(','),
-            // Pedido da Apple do app desta loja: ja-tinha, pedido-criado:ONGOING+ONE_TIME_SNAPSHOT, sem-pedido ou falhou.
-            pedidoApple: situacaoDoPedido(snapshot),
           },
         }),
         aoFalhar: (establishmentId, error) => console.error('[instalacoesAppNightly] Falha na loja', { establishmentId, error: error.message }),
