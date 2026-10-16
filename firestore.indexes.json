@@ -33,6 +33,20 @@
       ]
     },
     {
+      "collectionGroup": "Banners",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        {
+          "fieldPath": "aguardandoInicio",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "startAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "conversas",
       "queryScope": "COLLECTION_GROUP",
       "fields": [

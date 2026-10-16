@@ -8,6 +8,8 @@ import { corpoDeImagem } from '../middlewares/corpoDeImagem.js';
 // app gerenciador grava, com image.size em decimal.
 const periodoSchema = z.object({ inicio: z.string().min(1).max(40), fim: z.string().min(1).max(40) });
 const idSchema = z.object({ bannerId: z.string().min(1).max(120).regex(/^[^/]+$/) });
+// Pausar ou Retomar um banner da loja da sessao (15/10/2026), com a mesma permissao de editar banner.
+const situacaoSchema = z.object({ acao: z.enum(['pausar', 'retomar']) });
 
 export function createBannersDaLojaRoutes({ bannersDaLoja, requirePermission, accountForRequest }) {
   const router = Router();
@@ -23,6 +25,13 @@ export function createBannersDaLojaRoutes({ bannersDaLoja, requirePermission, ac
     const { bannerId } = idSchema.parse(request.params);
     const { establishmentId } = await accountForRequest(request);
     response.json({ data: await bannersDaLoja.editar(establishmentId, bannerId, request.body, periodo) });
+  }));
+
+  router.patch('/:bannerId/situacao', requirePermission('settings.edit'), asyncHandler(async (request, response) => {
+    const { bannerId } = idSchema.parse(request.params);
+    const { acao } = situacaoSchema.parse(request.body || {});
+    const { establishmentId } = await accountForRequest(request);
+    response.json({ data: await bannersDaLoja.mudarSituacao(establishmentId, bannerId, acao) });
   }));
 
   return router;

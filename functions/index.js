@@ -35,6 +35,7 @@ const {
 } = require('./provedoresDeLogin');
 const { gerarListaDeClientes } = require('./clientesDaLoja');
 const { lojaDaConversaDoAgente, lojasDaConversa, marcarMudanca } = require('./marcador');
+const { ligarBannersAgendados, tratarBannerGravado } = require('./situacaoDoBanner');
 const {
   RESUMO_COLLECTION,
   TOTAL_DE_BLOCOS,
@@ -179,6 +180,67 @@ exports.marcarConversaDoAgenteNoMarcador = onDocumentWritten(
         conversationId: event.params.conversationId,
         error,
       });
+    }
+  },
+);
+
+// Banners da loja (estabelecimentos/{loja}/Banners/{id}), de qualquer origem: criado ou atualizado com
+// status true e inicio no futuro passa a aguardar o inicio (o app do cliente nao olha startAt); toda
+// gravacao, inclusive a remocao, marca 'banners' para a tela Loja reler. A normalizacao grava status
+// false, entao a passada seguinte nao grava de novo (sem laco). Registra e nunca lanca.
+exports.ajustarBannerGravado = onDocumentWritten(
+  'estabelecimentos/{lojaId}/Banners/{bannerId}',
+  async (event) => {
+    const { lojaId, bannerId } = event.params;
+    try {
+      const depois = event.data?.after?.exists ? event.data.after.data() : null;
+      await tratarBannerGravado({
+        lojaId,
+        referencia: event.data?.after?.ref,
+        depois,
+        marcar: (loja) => marcarMudanca({
+          db,
+          FieldValue: admin.firestore.FieldValue,
+          lojaId: loja,
+          tipo: 'banners',
+        }),
+        aoFalhar: (etapa, error) => console.error('[ajustarBannerGravado] Falha ao normalizar', { lojaId, bannerId, etapa, error }),
+      });
+    } catch (error) {
+      console.error('[ajustarBannerGravado] Falha ao marcar banner', { lojaId, bannerId, error });
+    }
+  },
+);
+
+// A cada 5 minutos liga os banners que aguardavam o inicio (aguardandoInicio true e startAt ja
+// passado). A gravacao passa pelo ajustarBannerGravado, que marca 'banners' na loja. Indice:
+// Banners (collection group) aguardandoInicio + startAt, em firestore.indexes.json.
+exports.ligarBannersAgendados = onSchedule(
+  {
+    schedule: 'every 5 minutes',
+    timeZone: 'America/Sao_Paulo',
+    region: 'us-central1',
+    memory: '256MiB',
+    timeoutSeconds: 120,
+    retryCount: 0,
+  },
+  async () => {
+    try {
+      const resultado = await ligarBannersAgendados({
+        db,
+        agora: new Date(),
+        aoFalhar: (caminho, error) => console.error('[ligarBannersAgendados] Falha ao ligar', { caminho, error }),
+      });
+      const lojas = [];
+      for (const [establishmentId, { storeRef, ligados }] of resultado.porLoja) {
+        lojas.push({ establishmentId, ligados });
+        await registrarNoite(storeRef, 'ligarBannersAgendados', { dados: { bannersLigados: ligados } });
+      }
+      if (lojas.length) console.log('[ligarBannersAgendados] Banners ligados', { lidos: resultado.lidos, lojas });
+      return { lidos: resultado.lidos, lojas };
+    } catch (error) {
+      console.error('[ligarBannersAgendados] Falha na passada', { error });
+      return null;
     }
   },
 );

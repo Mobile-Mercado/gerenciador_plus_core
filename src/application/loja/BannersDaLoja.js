@@ -2,6 +2,15 @@ import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { AppError } from '../../domain/errors/AppError.js';
 import { erroDeImagem, LIMITE_ENTRADA_BYTES, LIMITE_PIXELS, MENSAGEM_ACIMA_DO_LIMITE, umaPorVez } from '../cadastro/ImagensDaLoja.js';
+import situacaoDoBannerModulo from '../../../functions/situacaoDoBanner.js';
+
+// A situacao do banner (No app, Agendado, Pausado, Encerrado) mora em functions/situacaoDoBanner.js,
+// num arquivo puro que os dois lados importam: este servico e o gatilho e a rotina das functions.
+const { camposDaAcao, situacaoDoBanner } = situacaoDoBannerModulo;
+
+// Banner com inicio no futuro: fora do app ate a data (o app do cliente nao olha startAt).
+const AGUARDANDO_INICIO = Object.freeze({ status: false, started: false, aguardandoInicio: true });
+const LIGADO = Object.freeze({ status: true, started: true, aguardandoInicio: false });
 
 // Banners da loja gravados como o app Móbile Gerenciador grava (rodada de 13/10/2026). O app do cliente
 // le image.size.width e height como decimal (mobile_core banner_image_adapter.dart:16): numero
@@ -25,8 +34,9 @@ function valorFirestore(valor) {
 
 export const decimal = (numero) => ({ __double: numero });
 
-// status e started so na criacao (novo: true); a edicao deixa os dois como estao.
-export function camposDoBanner({ id, path, storageRef, largura, altura, inicio, fim, tipo, products, novo = false }) {
+// status e started so na criacao (novo: true); a edicao deixa os dois como estao. `ligacao` (status,
+// started e aguardandoInicio) troca os dois quando o agendamento pede (7.1 e 7.2).
+export function camposDoBanner({ id, path, storageRef, largura, altura, inicio, fim, tipo, products, novo = false, ligacao = null }) {
   return {
     id,
     image: { path, storageRef, size: { width: decimal(largura), height: decimal(altura) } },
@@ -34,6 +44,7 @@ export function camposDoBanner({ id, path, storageRef, largura, altura, inicio, 
     startAt: inicio,
     endAt: fim,
     ...(novo ? { started: true, status: true } : {}),
+    ...(ligacao || {}),
     type: tipo,
   };
 }
@@ -110,25 +121,35 @@ export class BannersDaLoja {
     return `estabelecimentos/${lojaId}/Banners/${bannerId}`;
   }
 
-  // Criar: documento novo com todos os campos do app gerenciador (BannerAdapter).
+  // Criar: documento novo com todos os campos do app gerenciador (BannerAdapter). Inicio no futuro grava
+  // status false, started false e aguardandoInicio true; inicio ja passado grava como hoje (status e started true).
   async criar(lojaId, conteudo, { inicio, fim }) {
     const datas = this.periodo({ inicio, fim });
     const imagem = await this.enviarImagem(lojaId, conteudo);
     const id = this.novoId();
-    const campos = camposDoBanner({ id, ...imagem, ...datas, tipo: 'principal', products: [], novo: true });
+    const ligacao = datas.inicio.getTime() > this.agora() ? AGUARDANDO_INICIO : null;
+    const campos = camposDoBanner({ id, ...imagem, ...datas, tipo: 'principal', products: [], novo: true, ligacao });
     await this.rest.gravar(this.caminho(lojaId, id), documentoRest(campos), { criar: true });
     return this.conferir(lojaId, id);
   }
 
-  // Editar: troca a imagem e o periodo; produtos, tipo, status e started ficam como estao. O arquivo antigo sai.
+  // Editar: troca a imagem e o periodo; produtos e tipo ficam como estao. O arquivo antigo sai. Status e
+  // started ficam como estao, menos no agendamento: estava no app ou aguardando e o novo inicio ficou no
+  // futuro, passa a aguardar; estava aguardando e o novo inicio ja passou, liga. Pausado continua pausado.
   async editar(lojaId, bannerId, conteudo, { inicio, fim }) {
     const atual = await this.firestore.doc(this.caminho(lojaId, bannerId)).get();
     if (!atual.exists) throw new AppError('Banner não encontrado.', { statusCode: 404, code: 'banner_nao_encontrado' });
     const datas = this.periodo({ inicio, fim });
     const imagem = await this.enviarImagem(lojaId, conteudo);
     const dados = atual.data() || {};
+    const agora = this.agora();
+    const antes = situacaoDoBanner(dados, agora);
+    const inicioNoFuturo = datas.inicio.getTime() > agora;
+    let ligacao = null;
+    if (inicioNoFuturo && (antes === 'noApp' || antes === 'agendado')) ligacao = AGUARDANDO_INICIO;
+    else if (!inicioNoFuturo && dados.aguardandoInicio === true) ligacao = LIGADO;
     const campos = camposDoBanner({
-      id: bannerId, ...imagem, ...datas, tipo: dados.type || 'principal', products: Array.isArray(dados.products) ? undefined : [],
+      id: bannerId, ...imagem, ...datas, tipo: dados.type || 'principal', products: Array.isArray(dados.products) ? undefined : [], ligacao,
     });
     await this.rest.gravar(this.caminho(lojaId, bannerId), documentoRest(campos), { mascara: Object.keys(campos) });
     const antigo = dados.image?.storageRef;
@@ -136,6 +157,21 @@ export class BannersDaLoja {
       this.bucket.file(antigo).delete().catch(() => {});
     }
     return this.conferir(lojaId, bannerId);
+  }
+
+  // Pausar e Retomar (7.6): so status, started e aguardandoInicio, pela regra de camposDaAcao. Banner
+  // encerrado nao tem Pausar nem Retomar.
+  async mudarSituacao(lojaId, bannerId, acao) {
+    const atual = await this.firestore.doc(this.caminho(lojaId, bannerId)).get();
+    if (!atual.exists) throw new AppError('Banner não encontrado.', { statusCode: 404, code: 'banner_nao_encontrado' });
+    const dados = atual.data() || {};
+    const agora = this.agora();
+    const campos = camposDaAcao(dados, acao, agora);
+    if (!campos) {
+      throw new AppError('Banner encerrado não tem Pausar nem Retomar.', { statusCode: 409, code: 'banner_encerrado' });
+    }
+    await this.rest.gravar(this.caminho(lojaId, bannerId), documentoRest(campos), { mascara: Object.keys(campos) });
+    return { id: bannerId, situacao: situacaoDoBanner({ ...dados, ...campos }, agora) };
   }
 
   // Le de volta pelo REST: largura e altura precisam vir como doubleValue.
