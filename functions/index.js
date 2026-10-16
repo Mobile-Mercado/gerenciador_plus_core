@@ -45,6 +45,7 @@ const {
 const { atualizarResumoDoPedido } = require('./resumoPedidos');
 const { atualizarResumoDeVendas } = require('./resumoVendas');
 const { atualizarSemGiro } = require('./semGiro');
+const { atualizarVisitasPorMes } = require('./visitasPorMes');
 const { avisoDeMensagem, avisoDePedidoCancelado, avisoDePedidoNovo } = require('./avisos');
 
 if (!admin.apps.length) {
@@ -1096,6 +1097,70 @@ exports.semGiroNightly = onSchedule(
       return result;
     } catch (error) {
       console.error('[semGiroNightly] Falha na passada', { error });
+      return null;
+    }
+  },
+);
+
+// Visitas por mes (Stats/visitasPorMes) para o grafico "Visitas e pedidos" da tela Financas nos
+// periodos Ano e Desde o inicio. Recalcula do zero o mes atual e o anterior (ate 62 dias do
+// DailyStats por loja, pelo id) e grava por cima desses dois meses: rodar de novo nao soma duas vezes.
+exports.visitasPorMesNightly = onSchedule(
+  {
+    schedule: '45 2 * * *',
+    timeZone: 'America/Sao_Paulo',
+    region: 'us-central1',
+    memory: '256MiB',
+    timeoutSeconds: 540,
+    retryCount: 0,
+  },
+  async () => {
+    try {
+      const startedAt = Date.now();
+      const agora = new Date();
+      const configSnapshot = await db.doc(IMAGE_CHECK_CONFIG_PATH).get();
+      const configuredIds = configuredEstablishmentIds(configSnapshot.data());
+      if (!configuredIds.length) {
+        console.log('[visitasPorMesNightly] Nenhuma loja habilitada em', IMAGE_CHECK_CONFIG_PATH);
+        return null;
+      }
+
+      const storeSnapshots = await db.getAll(
+        ...configuredIds.map((id) => db.collection('estabelecimentos').doc(id)),
+      );
+      const report = storeSnapshots
+        .filter((snapshot) => !snapshot.exists)
+        .map((snapshot) => ({ establishmentId: snapshot.id, status: 'inexistente' }));
+
+      for (const snapshot of storeSnapshots.filter((store) => store.exists)) {
+        const establishmentId = snapshot.id;
+        try {
+          const resultado = await atualizarVisitasPorMes({
+            db,
+            FieldValue: admin.firestore.FieldValue,
+            lojaId: establishmentId,
+            agora,
+          });
+          const meses = Object.keys(resultado.meses);
+          report.push({ establishmentId, meses, encontrados: resultado.encontrados, atualizadoAte: resultado.atualizadoAte });
+          await registrarNoite(snapshot.ref, 'visitasPorMesNightly', {
+            dados: {
+              meses: meses.join(','),
+              diasEncontrados: resultado.encontrados,
+              visitas: meses.reduce((soma, mes) => soma + resultado.meses[mes].app + resultado.meses[mes].agente, 0),
+            },
+          });
+        } catch (error) {
+          console.error('[visitasPorMesNightly] Falha na loja', { establishmentId, error });
+          report.push({ establishmentId, status: 'falhou' });
+        }
+      }
+
+      const result = { lojas: report, segundos: Math.round((Date.now() - startedAt) / 1000) };
+      console.log('[visitasPorMesNightly] Passada concluida', result);
+      return result;
+    } catch (error) {
+      console.error('[visitasPorMesNightly] Falha na passada', { error });
       return null;
     }
   },
