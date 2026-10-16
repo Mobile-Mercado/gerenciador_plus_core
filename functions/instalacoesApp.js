@@ -233,6 +233,101 @@ function clienteDaApple({ chaveP8, issuerId, keyId, fetch: buscar = fetch }) {
   return { pedir, todos };
 }
 
+// ---- Pedido automatico dos relatorios da Apple para app novo (Parte 32, preparado e desligado) ----
+//
+// A chave de leitura (relatorios-leitura) nao pode criar pedido de relatorio: a Apple responde 403
+// FORBIDDEN_ERROR (teste de 16/10/2026). Criar pedido exige uma chave Admin, guardada num segredo proprio
+// (APPLE_RELATORIOS_PEDIDO_P8) que so a rotina semanal le. O cliente abaixo so chama a lista de apps e os
+// pedidos de relatorio (analyticsReportRequests); qualquer outro endereco e recusado antes de sair.
+const CHAMADAS_DE_PEDIDO = [
+  { metodo: 'GET', caminho: /^\/v1\/apps$/ },
+  { metodo: 'GET', caminho: /^\/v1\/apps\/\d+\/analyticsReportRequests$/ },
+  { metodo: 'POST', caminho: /^\/v1\/analyticsReportRequests$/ },
+];
+
+function chamadaDePedidoPermitida(url, metodo = 'GET') {
+  let caminho;
+  try {
+    const endereco = new URL(url, API_DA_APPLE);
+    if (endereco.origin !== API_DA_APPLE) return false;
+    caminho = endereco.pathname;
+  } catch {
+    return false;
+  }
+  return CHAMADAS_DE_PEDIDO.some((chamada) => chamada.metodo === String(metodo).toUpperCase() && chamada.caminho.test(caminho));
+}
+
+// Cliente restrito: listar apps, ver os pedidos de um app e criar pedido. Mais nada.
+function clienteDePedidos({ chaveP8, issuerId, keyId, fetch: buscar = fetch }) {
+  const guardado = async (url, opcoes = {}) => {
+    if (!chamadaDePedidoPermitida(url, opcoes.method)) {
+      throw new Error(`Chamada fora dos pedidos de relatorio recusada: ${String(opcoes.method || 'GET')} ${String(url).split('?')[0]}`);
+    }
+    return buscar(url, opcoes);
+  };
+  const cliente = clienteDaApple({ chaveP8, issuerId, keyId, fetch: guardado });
+  return {
+    listarApps: () => cliente.todos('/v1/apps?fields[apps]=name,bundleId&limit=200'),
+    pedidosDoApp: (appId) => cliente.todos(`/v1/apps/${appId}/analyticsReportRequests`),
+    criarPedido: (appId, tipo) => cliente.pedir('/v1/analyticsReportRequests', {
+      method: 'POST',
+      corpo: {
+        data: {
+          type: 'analyticsReportRequests',
+          attributes: { accessType: tipo },
+          relationships: { app: { data: { type: 'apps', id: appId } } },
+        },
+      },
+    }),
+  };
+}
+
+// Para cada app da conta: tem pedido ONGOING ativo? Sem ele e com o cliente de pedido (chave Admin),
+// cria o ONGOING e um ONE_TIME_SNAPSHOT (o historico). Sem o cliente de pedido, so aponta o app sem
+// pedido. Devolve { appId, nome, bundle, situacao: 'ja-tinha' | 'pedido-criado' | 'sem-pedido' |
+// 'falhou', pedidos } por app. Listar apps e pedidos funciona com qualquer uma das duas chaves.
+async function pedirRelatoriosQueFaltam({ leitura, pedido = null }) {
+  const cliente = pedido || leitura;
+  const apps = await cliente.listarApps();
+  const resultado = [];
+  for (const app of apps) {
+    const base = { appId: app.id, nome: app.attributes?.name || '', bundle: app.attributes?.bundleId || '' };
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const pedidos = await cliente.pedidosDoApp(app.id);
+      const temOngoing = pedidos.some((item) => item.attributes?.accessType === 'ONGOING' && !item.attributes?.stoppedDueToInactivity);
+      if (temOngoing) {
+        resultado.push({ ...base, situacao: 'ja-tinha', pedidos: [] });
+      } else if (!pedido) {
+        resultado.push({ ...base, situacao: 'sem-pedido', pedidos: [] });
+      } else {
+        const criados = [];
+        for (const tipo of ['ONGOING', 'ONE_TIME_SNAPSHOT']) {
+          // eslint-disable-next-line no-await-in-loop
+          const criado = await pedido.criarPedido(app.id, tipo);
+          criados.push({ tipo, id: criado?.data?.id || '' });
+        }
+        resultado.push({ ...base, situacao: 'pedido-criado', pedidos: criados });
+      }
+    } catch (error) {
+      resultado.push({ ...base, situacao: 'falhou', pedidos: [], erro: error.message });
+    }
+  }
+  return resultado;
+}
+
+// Segredo opcional do Secret Manager, lido em memoria com a conta da funcao. Sem o segredo (ou sem
+// acesso), null: a rotina segue normal. pedirAoGoogle: request de um cliente do google-auth-library.
+async function lerSegredoOpcional({ pedirAoGoogle, projeto, nome }) {
+  try {
+    const { data } = await pedirAoGoogle({ url: `https://secretmanager.googleapis.com/v1/projects/${projeto}/secrets/${nome}/versions/latest:access` });
+    const texto = Buffer.from(data?.payload?.data || '', 'base64').toString('utf8');
+    return texto.trim() ? texto : null;
+  } catch {
+    return null;
+  }
+}
+
 // Linhas do relatorio de um app ("App Downloads Standard" ou o de instalacoes), de todos os pedidos
 // (ONGOING e ONE_TIME_SNAPSHOT), por instancia diaria. desde: "AAAA-MM-DD" (processingDate), opcional.
 // O mesmo dia em mais de uma instancia conta uma vez: fica a instancia processada por ultimo.
@@ -451,17 +546,21 @@ module.exports = {
   arquivoDaPlay,
   atualizarInstalacoes,
   atualizarTodasAsLojas,
+  chamadaDePedidoPermitida,
+  clienteDePedidos,
   clienteDaApple,
   dataDaLinha,
   decodificarTexto,
   doisUltimosMeses,
   lerMesesDaPlay,
   leitorDaApple,
+  lerSegredoOpcional,
   lerTabela,
   linhasDaApple,
   lojasComApp,
   mesesNoBucket,
   montarDocumento,
+  pedirRelatoriosQueFaltam,
   somarCsvsDaPlay,
   somarRelatoriosDaApple,
   tokenDaApple,
