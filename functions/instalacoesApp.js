@@ -44,7 +44,10 @@ const COLUNAS_DA_PLAY = Object.freeze({
   data: 'Date',
   baixaram: 'Daily User Installs',
   desinstalaram: 'Daily User Uninstalls',
-  instaladosAgora: 'Installs on active devices',
+  // Nos arquivos de 2026 a coluna se chama "Active Device Installs" (conferido em 16/10/2026 no overview
+  // de outubro da Zero Grau); "Installs on active devices" fica como nome alternativo.
+  instaladosAgora: 'Active Device Installs',
+  instaladosAgoraAlternativo: 'Installs on active devices',
   total: 'Total User Installs',
 });
 
@@ -119,7 +122,7 @@ function somarCsvsDaPlay(tabelas) {
     atual.desinstalaram += numero(linha[COLUNAS_DA_PLAY.desinstalaram]);
     dias[dia] = atual;
     const fechamento = ultimos[dia] || { instaladosAgora: 0, total: 0 };
-    fechamento.instaladosAgora += numero(linha[COLUNAS_DA_PLAY.instaladosAgora]);
+    fechamento.instaladosAgora += numero(linha[COLUNAS_DA_PLAY.instaladosAgora] ?? linha[COLUNAS_DA_PLAY.instaladosAgoraAlternativo]);
     fechamento.total += numero(linha[COLUNAS_DA_PLAY.total]);
     ultimos[dia] = fechamento;
   });

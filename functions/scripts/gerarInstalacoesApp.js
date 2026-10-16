@@ -13,7 +13,9 @@ const {
 // Variaveis de ambiente (nenhum valor vai para o repositorio nem e impresso):
 //   PLAY_REPORTS_BUCKET   bucket de relatorios da Google Play (pubsite_prod_...), lido com a credencial
 //                         padrao (gcloud auth application-default login com acesso ao bucket)
-//   APPLE_ISSUER_ID, APPLE_KEY_ID, APPLE_P8_PATH   chave de leitura dos relatorios da Apple (caminho do .p8)
+//   APPLE_ISSUER_ID, APPLE_KEY_ID   chave de leitura dos relatorios da Apple
+//   APPLE_P8_SECRET       nome do segredo no Secret Manager com o .p8 (ex.: APPLE_RELATORIOS_LEITURA_P8),
+//                         lido em memoria com a credencial padrao; ou APPLE_P8_PATH, caminho do .p8
 // Sem as variaveis de uma loja de apps, aquela plataforma fica de fora e o script avisa.
 const IMAGE_CHECK_CONFIG_PATH = 'CoreJobs/verifyProductImageFiles';
 
@@ -37,6 +39,18 @@ function somaDe(dias, plataforma, campo) {
   return Object.values(dias).reduce((soma, entrada) => soma + Number(entrada[plataforma]?.[campo] || 0), 0);
 }
 
+// Chave .p8 da Apple: do Secret Manager (em memoria, nunca em disco) ou de um arquivo local.
+async function chaveDaApple(projectId) {
+  if (process.env.APPLE_P8_SECRET) {
+    const { GoogleAuth } = require('google-auth-library');
+    const cliente = await new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] }).getClient();
+    const nome = `projects/${projectId}/secrets/${process.env.APPLE_P8_SECRET}/versions/latest`;
+    const { data } = await cliente.request({ url: `https://secretmanager.googleapis.com/v1/${nome}:access` });
+    return Buffer.from(data.payload.data, 'base64').toString('utf8');
+  }
+  return process.env.APPLE_P8_PATH ? fs.readFileSync(process.env.APPLE_P8_PATH, 'utf8') : null;
+}
+
 async function main() {
   if (process.argv.includes('--ajuda')) {
     console.log(usage());
@@ -55,15 +69,16 @@ async function main() {
   const bucketName = process.env.PLAY_REPORTS_BUCKET;
   const bucket = bucketName ? getStorage().bucket(bucketName) : null;
   if (!bucket) console.log('\nSem PLAY_REPORTS_BUCKET: Android fica de fora.');
-  const { APPLE_ISSUER_ID: issuerId, APPLE_KEY_ID: keyId, APPLE_P8_PATH: caminhoDaChave } = process.env;
-  const apple = issuerId && keyId && caminhoDaChave
+  const { APPLE_ISSUER_ID: issuerId, APPLE_KEY_ID: keyId } = process.env;
+  const chaveP8 = await chaveDaApple(projectId);
+  const apple = issuerId && keyId && chaveP8
     ? {
-      cliente: clienteDaApple({ chaveP8: fs.readFileSync(caminhoDaChave, 'utf8'), issuerId, keyId }),
+      cliente: clienteDaApple({ chaveP8, issuerId, keyId }),
       baixar: async (url) => Buffer.from(await (await fetch(url)).arrayBuffer()),
       gunzip: (conteudo) => zlib.gunzipSync(conteudo),
     }
     : null;
-  if (!apple) console.log('Sem APPLE_ISSUER_ID, APPLE_KEY_ID e APPLE_P8_PATH: iPhone fica de fora.');
+  if (!apple) console.log('Sem APPLE_ISSUER_ID, APPLE_KEY_ID e a chave (APPLE_P8_SECRET ou APPLE_P8_PATH): iPhone fica de fora.');
 
   const lojas = argument('loja') ? [argument('loja')] : configuredEstablishmentIds((await db.doc(IMAGE_CHECK_CONFIG_PATH).get()).data());
   for (const lojaId of lojas) {

@@ -10,8 +10,9 @@ const {
 } = require('./instalacoesApp');
 
 const utf16 = (texto) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(texto, 'utf16le')]);
-const CABECALHO = 'Date,Package Name,Country,Daily Device Installs,Daily Device Uninstalls,Daily Device Upgrades,Total User Installs,Daily User Installs,Daily User Uninstalls,Active Device Installs,Install events,Update events,Uninstall events,Installs on active devices';
-const linhaDaPlay = (data, pais, { total, baixaram, desinstalaram, ativos }) => `${data},br.com.zero.grau,${pais},0,0,0,${total},${baixaram},${desinstalaram},0,0,0,0,${ativos}`;
+// Cabecalho real (overview de 2026-10 da Zero Grau, conferido em 16/10/2026), com Country como no arquivo country.
+const CABECALHO = 'Date,Package name,Country,Daily Device Installs,Daily Device Uninstalls,Daily Device Upgrades,Total User Installs,Daily User Installs,Daily User Uninstalls,Active Device Installs,Install events,Update events,Uninstall events';
+const linhaDaPlay = (data, pais, { total, baixaram, desinstalaram, ativos }) => `${data},br.com.zero.grau,${pais},0,0,0,${total},${baixaram},${desinstalaram},${ativos},0,0,0`;
 
 test('mapa de apps num lugar so: pacote Android e bundle iOS pelo whitelabelId da loja', () => {
   assert.deepEqual(Object.keys(APPS_POR_WHITELABEL), ['br.com.zero.grau', 'br.com.uaumart', 'br.com.gsatacarejo']);
@@ -38,6 +39,8 @@ test('CSV da Play em UTF-16: soma os paises do dia; no ultimo dia, instalados ag
   assert.equal(soma.totalInstalacoes, 107);
   assert.equal(decodificarTexto(Buffer.from('a,b\n1,2')).codificacao, 'utf-8');
   assert.deepEqual(lerTabela('"a, b",c\n"x ""y""",2\n'), [{ 'a, b': 'x "y"', c: '2' }]);
+  // Nome antigo da coluna de instalados agora, se aparecer.
+  assert.equal(somarCsvsDaPlay([[{ Date: '2026-01-02', 'Installs on active devices': '7', 'Total User Installs': '9' }]]).instaladosAgora, 7);
 });
 
 function bucketFalso(arquivos) {
@@ -57,7 +60,7 @@ function bucketFalso(arquivos) {
 test('Play: overview quando existe; se nao, country; um arquivo de dimensao so por mes', async () => {
   const pacote = 'br.com.zero.grau';
   const bucket = bucketFalso({
-    [arquivoDaPlay(pacote, '2026-09', 'overview')]: utf16(`${CABECALHO.replace(',Country', '')}\n2026-09-30,${pacote},0,0,0,90,5,1,0,0,0,0,55`),
+    [arquivoDaPlay(pacote, '2026-09', 'overview')]: utf16(`${CABECALHO.replace(',Country', '')}\n2026-09-30,${pacote},0,0,0,90,5,1,55,0,0,0`),
     [arquivoDaPlay(pacote, '2026-09', 'country')]: utf16(`${CABECALHO}\n${linhaDaPlay('2026-09-30', 'BR', { total: 1, baixaram: 99, desinstalaram: 0, ativos: 1 })}`),
     [arquivoDaPlay(pacote, '2026-10', 'country')]: utf16(`${CABECALHO}\n${linhaDaPlay('2026-10-02', 'BR', { total: 92, baixaram: 2, desinstalaram: 0, ativos: 56 })}`),
   });
