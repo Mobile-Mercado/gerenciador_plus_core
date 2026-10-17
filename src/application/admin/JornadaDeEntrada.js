@@ -191,6 +191,9 @@ export class JornadaDeEntrada {
           nome: jornada.dados?.passo1?.nome || null,
           celular: jornada.dados?.passo1?.celular || null,
           email: jornada.dados?.passo1?.email || null,
+          // Os mesmos da lista pedidos-de-loja?lista=incompletos (linhaDoIncompleto).
+          erp: jornada.dados?.passo1?.erp || null,
+          cidadeAcesso: jornada.cidadeAcesso ?? null,
           cnpj: jornada.dados?.passo2?.cnpj || null,
           razaoSocial: jornada.dados?.passo2?.receita?.razaoSocial || null,
           cidadeReceita: jornada.cidadeReceita || null,

@@ -228,6 +228,31 @@ test('POST /api/cadastro/evento com token: a abertura marca lojistaCliente; sem 
   }
 });
 
+test('leads que nao concluiram trazem erp e cidadeAcesso, os mesmos da lista pedidos-de-loja?lista=incompletos', async () => {
+  const banco = new FirestoreEmMemoria();
+  const jornada = new JornadaDoCadastro({ firestore: banco, clock: () => T0, paraData: (ms) => new Date(ms) });
+  await jornada.registrarEvento({ instalacaoId: 'inst-erp-0001', tipo: 'abertura', cidadeAcesso: { cidade: 'vila velha', uf: 'es' } });
+  await jornada.gravarRascunho({ instalacaoId: 'inst-erp-0001', passo: 1, dados: { ...PASSO1('Davi Rocha'), erp: { escolhido: 'outro', texto: 'Meu ERP' } } });
+  await jornada.gravarRascunho({ instalacaoId: 'inst-erp-0001', passo: 2, dados: { cnpj: '11222333000181', receita: receita('VILA VELHA', 'ES') } });
+  // Sem cidade do acesso: null nos dois lugares.
+  await jornada.registrarEvento({ instalacaoId: 'inst-erp-0002', tipo: 'abertura' });
+  await jornada.gravarRascunho({ instalacaoId: 'inst-erp-0002', passo: 1, dados: PASSO1('Eva Souza') });
+  await jornada.gravarRascunho({ instalacaoId: 'inst-erp-0002', passo: 2, dados: { cnpj: '11222333000181', receita: receita('SERRA', 'ES') } });
+
+  const { leadsNaoConcluidos } = await new JornadaDeEntrada({ firestore: banco, clock: () => T0 }).ler({ periodo: 7 });
+  const incompletos = await jornada.listarIncompletos('incompletos');
+  assert.equal(leadsNaoConcluidos.length, 2);
+  for (const lead of leadsNaoConcluidos) {
+    const linha = incompletos.find((item) => item.instalacaoId === lead.instalacaoId);
+    assert.deepEqual(lead.erp, linha.dados.erp);
+    assert.deepEqual(lead.cidadeAcesso, linha.cidadeAcesso);
+  }
+  const davi = leadsNaoConcluidos.find((lead) => lead.instalacaoId === 'inst-erp-0001');
+  assert.deepEqual(davi.erp, { escolhido: 'outro', texto: 'Meu ERP' });
+  assert.equal(davi.cidadeAcesso.cidade, 'vila velha');
+  assert.equal(leadsNaoConcluidos.find((lead) => lead.instalacaoId === 'inst-erp-0002').cidadeAcesso, null);
+});
+
 test('cidade do acesso: agrupa sem acento e sem maiuscula; nome da Receita quando ha par, senao iniciais maiusculas', async () => {
   const { chaveDoMunicipio, iniciaisMaiusculas } = await import('../src/domain/cadastro/municipio.js');
   assert.equal(chaveDoMunicipio('Vila Velha', 'ES'), 'vila velha - es');
