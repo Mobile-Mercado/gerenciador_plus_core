@@ -398,3 +398,14 @@ test('D4: edicao de produto sem campo de preco (como a web manda sem mexer no pr
   assert.equal(permissionKeyForMutation(mutacao('update', caminho, semPreco), 'store-1'), 'products.edit');
   assert.equal(permissionKeyForMutation(mutacao('update', caminho, { ...semPreco, promotionalPrice: 5 }), 'store-1'), 'products.edit_price');
 });
+
+test('entregadores: o dono grava deliveryMenList com o celular (phone) de cada um, como hoje', async () => {
+  const firestore = new FirestoreEmMemoria({ 'estabelecimentos/store-1': { name: 'Loja', deliveryMenList: [] } });
+  const policy = new ManagerDataAccessPolicy({ firestore });
+  const deliveryMenList = [{ id: 'e1', name: 'Carlos', phone: '27998765432' }, { id: 'e2', name: 'Bia' }];
+  await policy.assertMutation({
+    actor,
+    mutation: { operation: 'update', target: { kind: 'document', path: 'estabelecimentos/store-1' }, data: { deliveryMenList } },
+  });
+  assert.equal(permissionKeyForMutation({ operation: 'update', target: { path: 'estabelecimentos/store-1' }, data: { deliveryMenList } }, 'store-1'), 'settings.edit');
+});
