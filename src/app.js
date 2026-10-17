@@ -5,6 +5,7 @@ import { env } from './config/env.js';
 import { createAdminRoutes } from './http/routes/adminRoutes.js';
 import { createAiRoutes } from './http/routes/aiRoutes.js';
 import { createBannersDaLojaRoutes } from './http/routes/bannersDaLojaRoutes.js';
+import { createEntregadoresDaLojaRoutes } from './http/routes/entregadoresDaLojaRoutes.js';
 import { createCadastroRoutes } from './http/routes/cadastroRoutes.js';
 import { createCatalogoRoutes } from './http/routes/catalogoRoutes.js';
 import { createCouponRoutes } from './http/routes/couponRoutes.js';
@@ -48,6 +49,7 @@ export function createApp({
   clienteDaPlataforma = null,
   jornadaDeEntrada = null,
   entregaDaLoja = null,
+  entregadoresDaLoja = null,
   verificarAppCheck,
   imagensDaLoja,
   pedidosDeLoja,
@@ -165,6 +167,12 @@ export function createApp({
     '/api/loja/banners',
     createFirebaseAuthMiddleware({ required: true }),
     createBannersDaLojaRoutes({ bannersDaLoja, requirePermission, accountForRequest }),
+  );
+  // Entregadores com o celular, que so o Core le e grava (entregadoresPrivado).
+  app.use(
+    '/api/loja/entregadores',
+    createFirebaseAuthMiddleware({ required: true }),
+    createEntregadoresDaLojaRoutes({ entregadoresDaLoja, requirePermission, accountForRequest }),
   );
   // Logo e capa da loja pelo painel: foto como sai do celular, convertida pelo Core.
   app.use(

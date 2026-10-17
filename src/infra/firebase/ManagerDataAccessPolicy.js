@@ -170,6 +170,7 @@ export class ManagerDataAccessPolicy {
 
     const path = sourcePath(target);
     if (!path) throw invalidTarget();
+    if (isSoDoCore(path)) throw forbidden();
     if (isOwnEstablishmentPath(path, actor.establishmentId)) return;
     if (isAllowedAutomation(path)) return;
     if (isSearchTermsPath(path, actor.establishmentId)) return;
@@ -199,6 +200,7 @@ export class ManagerDataAccessPolicy {
     this.assertActor(actor);
     const path = mutation?.target?.path;
     if (!path) throw invalidTarget();
+    if (isSoDoCore(path)) throw forbidden();
 
     // Barreira por chave. Ator sem `permissions` e o dono, que passa em tudo.
     assertPermission(
@@ -612,6 +614,15 @@ function caminhosTocados(data, ehUpdate) {
   };
   visitar(data && typeof data === 'object' ? data : {}, '');
   return caminhos;
+}
+
+// Subcolecoes da loja que so as rotas proprias do Core leem e gravam (validacao e permissao
+// delas): o celular dos entregadores (entregadoresPrivado, 17/10/2026). O BFF nunca passa.
+const SUBCOLECOES_SO_DO_CORE = new Set(['entregadoresPrivado']);
+
+function isSoDoCore(path) {
+  const parts = pathParts(path);
+  return parts[0] === 'estabelecimentos' && SUBCOLECOES_SO_DO_CORE.has(parts[2]);
 }
 
 function isOwnEstablishmentPath(path, establishmentId) {
