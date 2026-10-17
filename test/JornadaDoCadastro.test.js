@@ -271,9 +271,9 @@ test('cidade do acesso na abertura e contagens do dia por cidade (acesso e Recei
   await jornada.concluir('inst-0002-abcd', 'pedido-2');
 
   const funil = banco.dados(`funilCadastro/${HOJE}`);
-  assert.deepEqual(funil.aberturasPorCidade, { 'Vila Velha - ES': 2, 'Não identificada': 1 });
-  assert.deepEqual(funil.cnpjsPorCidade, { 'SERRA - ES': 1 }, 'uma vez por instalacao');
-  assert.deepEqual(funil.contasPorCidade, { 'SERRA - ES': 1, 'Não identificada': 1 });
+  assert.deepEqual(funil.aberturasPorCidade, { 'vila velha - es': 2, 'Não identificada': 1 });
+  assert.deepEqual(funil.cnpjsPorCidade, { 'serra - es': 1 }, 'uma vez por instalacao');
+  assert.deepEqual(funil.contasPorCidade, { 'serra - es': 1, 'Não identificada': 1 });
 
   await recusa(jornada.registrarEvento({ instalacaoId: INSTALACAO, tipo: 'abertura', cidadeAcesso: { cidade: '<b>x</b>' } }), 'cadastro_cidade_invalido');
   // UF fora da lista fica null; cidade vazia vale como sem cidade.

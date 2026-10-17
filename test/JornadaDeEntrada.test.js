@@ -227,3 +227,30 @@ test('POST /api/cadastro/evento com token: a abertura marca lojistaCliente; sem 
     servidor.close();
   }
 });
+
+test('cidade do acesso: agrupa sem acento e sem maiuscula; nome da Receita quando ha par, senao iniciais maiusculas', async () => {
+  const { chaveDoMunicipio, iniciaisMaiusculas } = await import('../src/domain/cadastro/municipio.js');
+  assert.equal(chaveDoMunicipio('Vila Velha', 'ES'), 'vila velha - es');
+  assert.equal(chaveDoMunicipio('VITÓRIA', 'es'), chaveDoMunicipio('vitoria', 'ES'));
+  assert.equal(iniciaisMaiusculas('cachoeiro de itapemirim'), 'Cachoeiro de Itapemirim');
+
+  const banco = new FirestoreEmMemoria();
+  const jornada = new JornadaDoCadastro({ firestore: banco, clock: () => T0, paraData: (ms) => new Date(ms) });
+  const abrir = (instalacaoId, cidade, uf) => jornada.registrarEvento({ instalacaoId, tipo: 'abertura', cidadeAcesso: { cidade, uf } });
+  await abrir('inst-acesso-01', 'vila velha', 'es');
+  await abrir('inst-acesso-02', 'Vila Velha', 'ES');
+  await abrir('inst-acesso-03', 'sao mateus', 'es');
+  await abrir('inst-acesso-04', 'São Mateus', 'ES');
+  await abrir('inst-acesso-05', 'linhares', 'es');
+  // Lead com a Receita em Vila Velha: da o nome do municipio.
+  await jornada.gravarRascunho({ instalacaoId: 'inst-acesso-01', passo: 1, dados: PASSO1('Ana Paula') });
+  await jornada.gravarRascunho({ instalacaoId: 'inst-acesso-01', passo: 2, dados: { cnpj: '11222333000181', receita: receita('VILA VELHA', 'ES') } });
+
+  const { porLocal } = await new JornadaDeEntrada({ firestore: banco, clock: () => T0 }).ler({ periodo: 7 });
+  assert.deepEqual(porLocal.acessos, [
+    { cidade: 'São Mateus', uf: 'ES', quantidade: 2 },
+    { cidade: 'VILA VELHA', uf: 'ES', quantidade: 2 },
+    { cidade: 'Linhares', uf: 'ES', quantidade: 1 },
+  ]);
+  assert.deepEqual(banco.dados('funilCadastro/2026-10-17').aberturasPorCidade, { 'vila velha - es': 2, 'sao mateus - es': 2, 'linhares - es': 1 });
+});

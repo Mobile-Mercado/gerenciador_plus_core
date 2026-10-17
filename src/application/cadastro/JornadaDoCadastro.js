@@ -3,6 +3,7 @@ import { AppError } from '../../domain/errors/AppError.js';
 import {
   validarCidadeAcesso, validarHoraDoAparelho, validarInstalacaoId, validarRascunho,
 } from '../../domain/cadastro/validacoes.js';
+import { NAO_IDENTIFICADA, chaveDoMunicipio } from '../../domain/cadastro/municipio.js';
 
 // Jornada do cadastro de loja pelo app gerenciador (ordem nova de 16/10/2026): funil do Admin.
 //
@@ -36,15 +37,10 @@ const DIA_MS = 24 * 60 * 60 * 1000;
 const TIME_ZONE = 'America/Sao_Paulo';
 const formatadorDoDia = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' });
 
-export const NAO_IDENTIFICADA = 'Não identificada';
-
-// Chave da cidade nos contadores do dia ("Vitória - ES"), sem os caracteres que o Firestore nao
-// aceita em nome de campo. Sem cidade: "Não identificada".
-export function chaveDaCidade(cidade, uf) {
-  const nome = String(cidade || '').replace(/[./[\]*~`]/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!nome) return NAO_IDENTIFICADA;
-  return uf ? `${nome} - ${uf}` : nome;
-}
+// Chave da cidade nos contadores do dia: a do municipio, sem acento e sem maiuscula ("vila velha - es"),
+// para a cidade do acesso e a da Receita se juntarem. Sem cidade: "Não identificada".
+export { NAO_IDENTIFICADA };
+const chaveDaCidade = chaveDoMunicipio;
 
 export function diaDoFunil(data) {
   return formatadorDoDia.format(data);

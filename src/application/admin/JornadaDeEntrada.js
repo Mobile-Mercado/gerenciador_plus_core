@@ -1,6 +1,7 @@
 import { AppError } from '../../domain/errors/AppError.js';
 import { COLECAO_PEDIDOS } from '../cadastro/CadastroDeLoja.js';
-import { COLECAO_JORNADAS, NAO_IDENTIFICADA, SITUACAO } from '../cadastro/JornadaDoCadastro.js';
+import { COLECAO_JORNADAS, SITUACAO } from '../cadastro/JornadaDoCadastro.js';
+import { NAO_IDENTIFICADA, chaveDoMunicipio, iniciaisMaiusculas } from '../../domain/cadastro/municipio.js';
 
 // Tela "Jornada de entrada (App Gerenciador)" do Admin (cola 23.1, 17/10/2026). So leitura do que
 // a jornada do cadastro ja grava: nenhuma gravacao ao abrir a tela.
@@ -45,22 +46,24 @@ function media(lista) {
   return Math.round(validos.reduce((soma, valor) => soma + valor, 0) / validos.length / 1000);
 }
 
-// Cidade do acesso (aproximada). Hoje e null em toda abertura: a fonte esta em teste.
+// Cidade do acesso (aproximada), mandada pelo app; vem em minusculas e as vezes sem acento.
 function localDoAcesso(jornada) {
   const acesso = jornada.cidadeAcesso;
   if (acesso && typeof acesso === 'object') return { cidade: acesso.cidade || null, uf: acesso.uf || jornada.ufAcesso || null };
   return { cidade: typeof acesso === 'string' ? acesso : null, uf: jornada.ufAcesso || null };
 }
 
-function chaveDoLocal({ cidade, uf }) {
-  return cidade ? `${cidade}${uf ? ` - ${uf}` : ''}` : NAO_IDENTIFICADA;
-}
-
-function contarPorLocal(itens) {
+// Agrupa pela chave do municipio (sem acento e sem maiuscula). Nome na tela: o da Receita quando
+// ha o mesmo municipio; sem par, iniciais maiusculas.
+function contarPorLocal(itens, nomesDaReceita = new Map()) {
   const contagem = new Map();
   itens.forEach((local) => {
-    const chave = chaveDoLocal(local);
-    const atual = contagem.get(chave) || { cidade: local.cidade || NAO_IDENTIFICADA, uf: local.cidade ? local.uf || null : null, quantidade: 0 };
+    const chave = chaveDoMunicipio(local.cidade, local.uf);
+    const nome = local.cidade ? nomesDaReceita.get(chave) || iniciaisMaiusculas(local.cidade) : NAO_IDENTIFICADA;
+    const atual = contagem.get(chave) || { cidade: nome, uf: local.cidade ? String(local.uf || '').toUpperCase() || null : null, quantidade: 0 };
+    // Sem par na Receita, fica a grafia com acento quando alguma abertura a trouxe.
+    const acentos = (texto) => (String(texto).normalize('NFD').match(/[̀-ͯ]/g) || []).length;
+    if (local.cidade && !nomesDaReceita.has(chave) && acentos(nome) > acentos(atual.cidade)) atual.cidade = nome;
     atual.quantidade += 1;
     contagem.set(chave, atual);
   });
@@ -157,6 +160,11 @@ export class JornadaDeEntrada {
       };
     };
 
+    // Nome da Receita de cada municipio da turma, para a cidade do acesso aparecer igual.
+    const nomesDaReceita = new Map();
+    linhas.map(localDaReceita).filter((local) => local.cidade)
+      .forEach((local) => nomesDaReceita.set(chaveDoMunicipio(local.cidade, local.uf), local.cidade));
+
     return {
       periodo: { dias, desde: new Date(desde).toISOString(), ate: new Date(ate).toISOString() },
       estado,
@@ -170,9 +178,9 @@ export class JornadaDeEntrada {
       },
       funil,
       porLocal: {
-        acessos: contarPorLocal(linhas.map(({ jornada }) => localDoAcesso(jornada))),
-        leads: contarPorLocal(leads.map(localDaReceita)),
-        aprovados: contarPorLocal(linhas.filter((linha) => linha.chegou.aprovado).map(localDaReceita)),
+        acessos: contarPorLocal(linhas.map(({ jornada }) => localDoAcesso(jornada)), nomesDaReceita),
+        leads: contarPorLocal(leads.map(localDaReceita), nomesDaReceita),
+        aprovados: contarPorLocal(linhas.filter((linha) => linha.chegou.aprovado).map(localDaReceita), nomesDaReceita),
       },
       leadsNaoConcluidos: leads
         .filter(({ jornada }) => jornada.situacao !== SITUACAO.CONCLUIDO)
