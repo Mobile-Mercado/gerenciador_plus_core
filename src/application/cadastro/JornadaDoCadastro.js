@@ -1,6 +1,8 @@
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
-import { validarHoraDoAparelho, validarInstalacaoId, validarRascunho } from '../../domain/cadastro/validacoes.js';
+import {
+  validarCidadeAcesso, validarHoraDoAparelho, validarInstalacaoId, validarRascunho,
+} from '../../domain/cadastro/validacoes.js';
 
 // Jornada do cadastro de loja pelo app gerenciador (ordem nova de 16/10/2026): funil do Admin.
 //
@@ -33,6 +35,16 @@ const DIAS_DOS_EVENTOS = 180;
 const DIA_MS = 24 * 60 * 60 * 1000;
 const TIME_ZONE = 'America/Sao_Paulo';
 const formatadorDoDia = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' });
+
+export const NAO_IDENTIFICADA = 'Não identificada';
+
+// Chave da cidade nos contadores do dia ("Vitória - ES"), sem os caracteres que o Firestore nao
+// aceita em nome de campo. Sem cidade: "Não identificada".
+export function chaveDaCidade(cidade, uf) {
+  const nome = String(cidade || '').replace(/[./[\]*~`]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!nome) return NAO_IDENTIFICADA;
+  return uf ? `${nome} - ${uf}` : nome;
+}
 
 export function diaDoFunil(data) {
   return formatadorDoDia.format(data);
@@ -90,11 +102,15 @@ export class JornadaDoCadastro {
 
   // `cliente`: { lojaId } quando a abertura veio de lojista logado que ja e cliente da plataforma
   // (ClienteDaPlataforma). Marca a instalacao para o corte dos acessos da tela do Admin.
-  async registrarEvento({ instalacaoId: entradaId, tipo, passo, horaDoAparelho } = {}, { ip = null, cliente = null } = {}) {
+  async registrarEvento({
+    instalacaoId: entradaId, tipo, passo, horaDoAparelho, cidadeAcesso: cidadeEnviada,
+  } = {}, { ip = null, cliente = null } = {}) {
     const instalacaoId = validarInstalacaoId(entradaId);
     if (!TIPOS_DE_EVENTO.includes(tipo)) throw recusa('Evento do cadastro inválido.', 'cadastro_evento_invalido');
     const numero = passoDoEvento(tipo, passo);
     const horaAparelho = validarHoraDoAparelho(horaDoAparelho);
+    // Cidade do acesso (aproximada), mandada pelo app na abertura. Sem ela, null.
+    const cidadeAcesso = tipo === 'abertura' ? validarCidadeAcesso(cidadeEnviada) : null;
     await this.limites?.registrar([{ tipo: 'jornada', valor: ip }]);
 
     const agoraMs = this.clock();
@@ -112,10 +128,13 @@ export class JornadaDoCadastro {
         contadores.instalacoesNovas = um;
       }
       if (tipo === 'abertura') {
-        // A fonte da cidade do acesso ainda esta em teste: por enquanto null, nunca o IP.
-        Object.assign(mudancas, { aberturas: this.incremento(1), ultimaAbertura: agora, ultimaAberturaDia: hoje, cidadeAcesso: null });
+        // Cidade do acesso como o app mandou ({ cidade, uf }) ou null; nunca o IP.
+        Object.assign(mudancas, {
+          aberturas: this.incremento(1), ultimaAbertura: agora, ultimaAberturaDia: hoje, cidadeAcesso, ufAcesso: cidadeAcesso?.uf || null,
+        });
         if (!jornada?.primeiraAbertura) mudancas.primeiraAbertura = agora;
         contadores.aberturas = um;
+        contadores.aberturasPorCidade = { [chaveDaCidade(cidadeAcesso?.cidade, cidadeAcesso?.uf)]: this.incremento(1) };
         if (jornada?.ultimaAberturaDia !== hoje) contadores.instalacoesAbertas = this.incremento(1);
         if (cliente?.lojaId) Object.assign(mudancas, { lojistaCliente: true, lojistaLojaId: cliente.lojaId, lojistaVistoEm: agora });
       }
@@ -150,7 +169,7 @@ export class JornadaDoCadastro {
         passo: numero,
         horaDoAparelho: horaAparelho,
         em: agora,
-        ...(tipo === 'abertura' ? { cidadeAcesso: null } : {}),
+        ...(tipo === 'abertura' ? { cidadeAcesso } : {}),
         expiraEm: this.paraData(agoraMs + DIAS_DOS_EVENTOS * DIA_MS),
       });
       this.contadoresDoDia(transacao, contadores);
@@ -194,7 +213,12 @@ export class JornadaDoCadastro {
       }
       transacao.set(ref, mudancas, { merge: true });
       const primeiraVez = !jornada?.dados?.[`passo${numero}`];
-      this.contadoresDoDia(transacao, primeiraVez ? { rascunhoPasso: { [String(numero)]: this.incremento(1) } } : {});
+      const contadores = primeiraVez ? { rascunhoPasso: { [String(numero)]: this.incremento(1) } } : {};
+      // Quem chega ao passo 2: CNPJs por cidade da Receita, uma vez por instalacao.
+      if (numero === 2 && primeiraVez) {
+        contadores.cnpjsPorCidade = { [chaveDaCidade(validos.receita.endereco.city, validos.receita.endereco.uf)]: this.incremento(1) };
+      }
+      this.contadoresDoDia(transacao, contadores);
     });
     return { instalacaoId, passo: numero };
   }
@@ -216,7 +240,12 @@ export class JornadaDoCadastro {
         atualizadoEm: agora,
         ...(atual.exists ? {} : { criadoEm: agora, aberturas: 0, retomadas: 0 }),
       }, { merge: true });
-      this.contadoresDoDia(transacao, { concluidos: this.incremento(1) });
+      // Contas criadas por cidade da Receita (a do passo 2; sem ela, "Não identificada").
+      const jornada = atual.exists ? atual.data() : {};
+      this.contadoresDoDia(transacao, {
+        concluidos: this.incremento(1),
+        contasPorCidade: { [chaveDaCidade(jornada.cidadeReceita, jornada.ufReceita)]: this.incremento(1) },
+      });
     });
     return true;
   }

@@ -180,6 +180,17 @@ export function validarEndereco(valor = {}, { completo = true } = {}) {
   };
 }
 
+// Cidade do acesso que o app manda na abertura (aproximada). Sem cidade, volta null; UF fora da
+// lista vira null. Nunca e endereco de rede.
+export function validarCidadeAcesso(valor) {
+  if (!valor || typeof valor !== 'object') return null;
+  const cidade = textoLimpo(valor.cidade);
+  if (!cidade) return null;
+  if (cidade.length > 80 || EMOJI.test(cidade) || HTML.test(cidade)) throw recusa('cidade', 'Cidade do acesso inválida.');
+  const uf = textoLimpo(valor.uf).toUpperCase();
+  return { cidade, uf: UFS.has(uf) ? uf : null };
+}
+
 // Id aleatorio que o app gera na primeira abertura e guarda no aparelho. Liga eventos,
 // rascunhos e o pedido da mesma instalacao.
 const INSTALACAO = /^[A-Za-z0-9_-]{8,100}$/;

@@ -114,7 +114,7 @@ test('funil por tela: pessoas, perda em relacao a anterior e tempo medio na tela
 test('por cidade: acessos pela cidade do acesso (hoje nao identificada), leads e aprovados pela Receita', async () => {
   const { leitura } = await cenario();
   const { porLocal } = await leitura.ler({ periodo: 30 });
-  assert.deepEqual(porLocal.acessos, [{ cidade: 'não identificada', uf: null, quantidade: 4 }]);
+  assert.deepEqual(porLocal.acessos, [{ cidade: 'Não identificada', uf: null, quantidade: 4 }]);
   assert.deepEqual(porLocal.leads, [
     { cidade: 'SAO PAULO', uf: 'SP', quantidade: 1 },
     { cidade: 'SERRA', uf: 'ES', quantidade: 1 },

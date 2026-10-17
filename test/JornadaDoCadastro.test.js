@@ -247,3 +247,38 @@ test('rotas: POST /evento e /rascunho sem login, com App Check quando ligado', a
     comAppCheck.close();
   }
 });
+
+test('cidade do acesso na abertura e contagens do dia por cidade (acesso e Receita)', async () => {
+  const { banco, jornada } = montar();
+  await jornada.registrarEvento({ instalacaoId: INSTALACAO, tipo: 'abertura', cidadeAcesso: { cidade: ' Vila  Velha ', uf: 'es' } }, { ip: IP });
+  await jornada.registrarEvento({ instalacaoId: 'inst-0002-abcd', tipo: 'abertura' }, { ip: IP });
+  await jornada.registrarEvento({ instalacaoId: 'inst-0003-abcd', tipo: 'abertura', cidadeAcesso: { cidade: 'Vila Velha', uf: 'ES' } }, { ip: IP });
+  // Fora da abertura, o campo e ignorado.
+  await jornada.registrarEvento({ instalacaoId: INSTALACAO, tipo: 'comecar', cidadeAcesso: { cidade: 'Outra', uf: 'SP' } });
+
+  const doc = banco.dados(`jornadasCadastro/${INSTALACAO}`);
+  assert.deepEqual(doc.cidadeAcesso, { cidade: 'Vila Velha', uf: 'ES' });
+  assert.equal(doc.ufAcesso, 'ES');
+  assert.equal(banco.dados('jornadasCadastro/inst-0002-abcd').cidadeAcesso, null);
+  assert.deepEqual(eventos(banco).find((evento) => evento.tipo === 'abertura').cidadeAcesso, { cidade: 'Vila Velha', uf: 'ES' });
+
+  // Passo 2 (Receita em Serra) e conta criada.
+  await jornada.gravarRascunho({ instalacaoId: INSTALACAO, passo: 1, dados: PASSO1 });
+  await jornada.gravarRascunho({ instalacaoId: INSTALACAO, passo: 2, dados: { cnpj: '11222333000181', receita: { ...RECEITA, endereco: { city: 'SERRA', uf: 'ES' } } } });
+  await jornada.gravarRascunho({ instalacaoId: INSTALACAO, passo: 2, dados: { cnpj: '11222333000181', receita: { ...RECEITA, endereco: { city: 'SERRA', uf: 'ES' } } } });
+  await jornada.concluir(INSTALACAO, 'pedido-1');
+  // Conta sem passo 2 gravado: cidade da Receita nao identificada.
+  await jornada.concluir('inst-0002-abcd', 'pedido-2');
+
+  const funil = banco.dados(`funilCadastro/${HOJE}`);
+  assert.deepEqual(funil.aberturasPorCidade, { 'Vila Velha - ES': 2, 'Não identificada': 1 });
+  assert.deepEqual(funil.cnpjsPorCidade, { 'SERRA - ES': 1 }, 'uma vez por instalacao');
+  assert.deepEqual(funil.contasPorCidade, { 'SERRA - ES': 1, 'Não identificada': 1 });
+
+  await recusa(jornada.registrarEvento({ instalacaoId: INSTALACAO, tipo: 'abertura', cidadeAcesso: { cidade: '<b>x</b>' } }), 'cadastro_cidade_invalido');
+  // UF fora da lista fica null; cidade vazia vale como sem cidade.
+  await jornada.registrarEvento({ instalacaoId: 'inst-0004-abcd', tipo: 'abertura', cidadeAcesso: { cidade: 'Vitória', uf: 'XX' } });
+  assert.deepEqual(banco.dados('jornadasCadastro/inst-0004-abcd').cidadeAcesso, { cidade: 'Vitória', uf: null });
+  await jornada.registrarEvento({ instalacaoId: 'inst-0005-abcd', tipo: 'abertura', cidadeAcesso: { cidade: '  ', uf: 'ES' } });
+  assert.equal(banco.dados('jornadasCadastro/inst-0005-abcd').cidadeAcesso, null);
+});

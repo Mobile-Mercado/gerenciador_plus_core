@@ -48,6 +48,8 @@ const eventoSchema = z.object({
   tipo: z.string().max(40),
   passo: z.number().int().nullish(),
   horaDoAparelho: horaSchema,
+  // So na abertura: cidade aproximada do acesso, mandada pelo app. Sem ela, grava null.
+  cidadeAcesso: z.object({ cidade: z.string().max(200).nullish(), uf: z.string().max(4).nullish() }).nullish(),
 });
 const rascunhoSchema = z.object({
   instalacaoId: z.string().max(120),

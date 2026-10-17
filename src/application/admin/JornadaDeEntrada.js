@@ -1,6 +1,6 @@
 import { AppError } from '../../domain/errors/AppError.js';
 import { COLECAO_PEDIDOS } from '../cadastro/CadastroDeLoja.js';
-import { COLECAO_JORNADAS, SITUACAO } from '../cadastro/JornadaDoCadastro.js';
+import { COLECAO_JORNADAS, NAO_IDENTIFICADA, SITUACAO } from '../cadastro/JornadaDoCadastro.js';
 
 // Tela "Jornada de entrada (App Gerenciador)" do Admin (cola 23.1, 17/10/2026). So leitura do que
 // a jornada do cadastro ja grava: nenhuma gravacao ao abrir a tela.
@@ -14,7 +14,6 @@ import { COLECAO_JORNADAS, SITUACAO } from '../cadastro/JornadaDoCadastro.js';
 // proprio cadastro pelo app conta sempre, mesmo que depois vire cliente.
 export const PERIODOS = Object.freeze([7, 30, 90]);
 const DIA_MS = 24 * 60 * 60 * 1000;
-const NAO_IDENTIFICADA = 'não identificada';
 const EMAIL_CONFIRMADO = new Set(['em_analise', 'em_conversa', 'aprovada', 'recusada']);
 
 const TELAS = Object.freeze([
