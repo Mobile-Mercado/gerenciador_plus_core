@@ -149,7 +149,7 @@ test('rascunho: dados pessoais so a partir do passo 1 com aceite; nunca senha', 
   assert.equal(banco.dados(`funilCadastro/${HOJE}`).rascunhoPasso['1'], 1);
 });
 
-test('pedido completo (POST /loja) conclui a instalacao com o id da loja', async () => {
+test('pedido completo (POST /loja) conclui a instalacao com o id do pedido; a aprovacao grava o da loja', async () => {
   const { banco, jornada } = montar();
   await jornada.gravarRascunho({ instalacaoId: INSTALACAO, passo: 1, dados: PASSO1 });
   const cadastro = new CadastroDeLoja({
@@ -171,7 +171,11 @@ test('pedido completo (POST /loja) conclui a instalacao com o id da loja', async
   });
   const doc = banco.dados(`jornadasCadastro/${INSTALACAO}`);
   assert.equal(doc.situacao, 'concluido');
-  assert.equal(doc.lojaId, criado.lojaId);
+  assert.equal(doc.pedidoId, criado.pedidoId);
+  assert.ok(criado.pedidoId);
+  assert.equal(doc.lojaId, undefined, 'sem loja ate o Aprovar');
+  await jornada.aprovada(INSTALACAO, 'loja-nova');
+  assert.equal(banco.dados(`jornadasCadastro/${INSTALACAO}`).lojaId, 'loja-nova');
   assert.ok(doc.concluidoEm);
   assert.equal(banco.dados(`funilCadastro/${HOJE}`).concluidos, 1);
   await recusa(jornada.gravarRascunho({ instalacaoId: INSTALACAO, passo: 1, dados: PASSO1 }), 'cadastro_rascunho_concluido');

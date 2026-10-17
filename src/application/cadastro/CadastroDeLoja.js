@@ -3,12 +3,13 @@ import { AppError } from '../../domain/errors/AppError.js';
 import { formatarCnpj, validarCnpj, validarPedidoDeCadastro } from '../../domain/cadastro/validacoes.js';
 import { logger } from '../../infra/logger/logger.js';
 
-// Cadastro de loja feito pelo servidor (rodada de 13/10/2026). O app gerenciador manda o pedido
-// e o Core cria, numa operacao so, a conta no Auth, Users/{uid} e estabelecimentos/{novoId}. Se
-// a gravacao no Firestore falhar, a conta criada e apagada: nao fica conta solta. Nada recebe
-// claim aqui; a claim vem na aprovacao, pelo Admin.
+// Cadastro de loja feito pelo servidor. O app gerenciador manda o pedido e o Core cria, numa
+// operacao so, a conta no Auth, Users/{uid} (com o id do pedido) e pedidosDeLoja/{id}. Desde
+// 17/10/2026 (decisao do Thay) o pedido nao cria loja: estabelecimentos/{id} so nasce no
+// "Aprovar" do Admin (PedidosDeLoja). Se a gravacao no Firestore falhar, a conta criada e apagada:
+// nao fica conta solta. Nada recebe claim aqui; a claim vem na aprovacao.
 //
-// Situacoes do pedido (campo status da loja):
+// Situacoes do pedido (campo status do pedido):
 //   aguardando_email -> em_analise -> em_conversa (marcada pela equipe) -> aprovada | recusada
 export const STATUS = Object.freeze({
   AGUARDANDO_EMAIL: 'aguardando_email',
@@ -20,6 +21,7 @@ export const STATUS = Object.freeze({
 export const STATUS_DO_CADASTRO = Object.freeze([STATUS.AGUARDANDO_EMAIL, STATUS.EM_ANALISE]);
 export const WHITELABEL_GERENCIADOR = 'br.com.mobile.gerenciador';
 export const ORIGEM_APP_GERENCIADOR = 'app_gerenciador';
+export const COLECAO_PEDIDOS = 'pedidosDeLoja';
 
 // O app mostra a tela E5: "Este e-mail já tem cadastro. Entrar".
 function emailJaUsado() {
@@ -71,6 +73,12 @@ export class CadastroDeLoja {
     ];
     const resultados = await Promise.all(consultas.map((consulta) => consulta.limit(5).get()));
     return [...new Set(resultados.flatMap((resultado) => resultado.docs.map((documento) => documento.id)))].slice(0, 5);
+  }
+
+  // Pedidos de loja (que ainda nao viraram loja) com o mesmo CNPJ.
+  async pedidosComOCnpj(cnpj) {
+    const resultado = await this.firestore.collection(COLECAO_PEDIDOS).where('cnpj', '==', cnpj).limit(5).get();
+    return resultado.docs.map((documento) => documento.id);
   }
 
   async assertEmailLivre(email) {
@@ -125,11 +133,13 @@ export class CadastroDeLoja {
       { tipo: 'email', valor: pedido.responsavel.email },
     ]);
     await this.assertEmailLivre(pedido.responsavel.email);
-    const [lojasRepetidas, receita] = await Promise.all([
+    const [lojasRepetidas, pedidosRepetidos, receita] = await Promise.all([
       this.lojasComOCnpj(pedido.cnpj),
+      this.pedidosComOCnpj(pedido.cnpj),
       this.conferirCnpj(pedido.cnpj),
     ]);
     const { cnpjConferido, razaoSocial } = receita;
+    const cnpjRepetido = lojasRepetidas.length > 0 || pedidosRepetidos.length > 0;
 
     let conta;
     try {
@@ -147,7 +157,7 @@ export class CadastroDeLoja {
 
     const uid = conta.uid;
     const usuarioRef = this.firestore.collection('Users').doc(uid);
-    const lojaRef = this.firestore.collection('estabelecimentos').doc();
+    const pedidoRef = this.firestore.collection(COLECAO_PEDIDOS).doc();
     const agora = this.serverTimestamp();
     // Endereco confirmado no mapa, no formato das lojas que ja existem (address.position e o
     // GeoPoint do pino). O endereco da Receita fica a parte, para o Admin comparar.
@@ -180,6 +190,8 @@ export class CadastroDeLoja {
       phone: pedido.responsavel.celular,
       profileImage: null,
       verified: false,
+      // Id do pedido de loja: a loja so existe depois do "Aprovar" do Admin.
+      pedidoDeLojaId: pedidoRef.id,
       createdAt: agora,
     };
     try {
@@ -187,8 +199,12 @@ export class CadastroDeLoja {
       // Users/{uid}: o id do documento e o uid. O campo id repete o id do documento, como o app
       // gerenciador espera (ele acha a loja por userReference = Users/{id}).
       lote.create(usuarioRef, usuario);
-      lote.create(lojaRef, {
-        id: lojaRef.id,
+      // O pedido leva os mesmos dados que o cadastro gravava na loja; o Admin os copia para
+      // estabelecimentos no "Aprovar" (PedidosDeLoja.lojaDoPedido).
+      lote.create(pedidoRef, {
+        id: pedidoRef.id,
+        uid,
+        lojaId: null,
         name: pedido.nome,
         razaoSocial: razaoSocial || null,
         corporateName: razaoSocial || null,
@@ -198,8 +214,9 @@ export class CadastroDeLoja {
         cnpjConferido,
         cnpjAtivo: receita.ativa,
         cnpjSituacao: receita.situacao,
-        cnpjRepetido: lojasRepetidas.length > 0,
+        cnpjRepetido,
         lojasComOMesmoCnpj: lojasRepetidas,
+        pedidosComOMesmoCnpj: pedidosRepetidos,
         enderecoReceita: receita.endereco,
         address,
         erp: pedido.erp,
@@ -207,8 +224,6 @@ export class CadastroDeLoja {
         phone: pedido.responsavel.celular,
         email: pedido.responsavel.email,
         responsibleName: pedido.responsavel.nome,
-        isActive: false,
-        userType: 'UserType.noneEmpresa',
         status: STATUS.AGUARDANDO_EMAIL,
         origemCadastro: ORIGEM_APP_GERENCIADOR,
         userReference: usuarioRef,
@@ -225,18 +240,39 @@ export class CadastroDeLoja {
       throw error;
     }
 
-    // A instalacao do app vira "concluido" com o id da loja. Falha aqui nao desfaz o pedido: o
-    // funil perde uma marca, a loja e a conta ficam.
+    // A instalacao do app vira "concluido" com o id do pedido (o da loja entra na aprovacao).
+    // Falha aqui nao desfaz o pedido: o funil perde uma marca, o pedido e a conta ficam.
     try {
-      await this.jornada?.concluir(pedido.instalacaoId, lojaRef.id);
+      await this.jornada?.concluir(pedido.instalacaoId, pedidoRef.id);
     } catch (error) {
-      logger.error('cadastro_jornada_nao_concluida', { lojaId: lojaRef.id, originalMessage: error?.message });
+      logger.error('cadastro_jornada_nao_concluida', { pedidoId: pedidoRef.id, originalMessage: error?.message });
     }
 
-    return { uid, lojaId: lojaRef.id, status: STATUS.AGUARDANDO_EMAIL, cnpjConferido, cnpjRepetido: lojasRepetidas.length > 0 };
+    return { uid, pedidoId: pedidoRef.id, status: STATUS.AGUARDANDO_EMAIL, cnpjConferido, cnpjRepetido };
   }
 
-  // Loja do dono que esta logado: a que tem userReference = Users/{uid}.
+  // Pedido de loja do dono que esta logado: o id gravado em Users/{uid}.pedidoDeLojaId ou, sem
+  // ele, o pedido com userReference = Users/{uid}.
+  async pedidoDoDono(uid) {
+    if (!uid) {
+      throw new AppError('Login obrigatório.', { statusCode: 401, code: 'auth_token_required' });
+    }
+    const usuarioRef = this.firestore.collection('Users').doc(uid);
+    const usuario = await usuarioRef.get();
+    const pedidoId = usuario.exists ? usuario.data()?.pedidoDeLojaId : null;
+    if (pedidoId) {
+      const pedido = await this.firestore.collection(COLECAO_PEDIDOS).doc(pedidoId).get();
+      if (pedido.exists) return pedido;
+    }
+    const snapshot = await this.firestore.collection(COLECAO_PEDIDOS).where('userReference', '==', usuarioRef).limit(1).get();
+    if (snapshot.empty) {
+      throw new AppError('Não achamos o pedido de loja desta conta.', { statusCode: 404, code: 'cadastro_pedido_nao_encontrado' });
+    }
+    return snapshot.docs[0];
+  }
+
+  // Loja do dono que esta logado: a que tem userReference = Users/{uid}. So a troca de logo e
+  // fachada do cadastro (/loja/imagens/:tipo) ainda usa; logo e fachada sairam do cadastro.
   async lojaDoDono(uid) {
     if (!uid) {
       throw new AppError('Login obrigatório.', { statusCode: 401, code: 'auth_token_required' });
@@ -258,29 +294,31 @@ export class CadastroDeLoja {
         code: 'cadastro_email_nao_confirmado',
       });
     }
-    const loja = await this.lojaDoDono(uid);
-    const status = loja.data()?.status;
+    const pedido = await this.pedidoDoDono(uid);
+    const status = pedido.data()?.status;
     if (status !== STATUS.AGUARDANDO_EMAIL) {
       if (status === STATUS.EM_ANALISE || status === STATUS.EM_CONVERSA) return this.situacao(uid);
       throw new AppError('Este pedido já foi decidido.', { statusCode: 409, code: 'cadastro_pedido_decidido' });
     }
-    await loja.ref.update({ status: STATUS.EM_ANALISE, enviadoEm: this.serverTimestamp(), updatedAt: this.serverTimestamp() });
+    await pedido.ref.update({ status: STATUS.EM_ANALISE, enviadoEm: this.serverTimestamp(), updatedAt: this.serverTimestamp() });
     return this.situacao(uid);
   }
 
+  // O que o app mostra nas telas 6, E6, E7 e "aprovado". lojaId so existe depois do "Aprovar".
   async situacao(uid) {
-    const [loja, usuario] = await Promise.all([this.lojaDoDono(uid), this.auth.getUser(uid)]);
-    const dados = loja.data() || {};
+    const [pedido, usuario] = await Promise.all([this.pedidoDoDono(uid), this.auth.getUser(uid)]);
+    const dados = pedido.data() || {};
+    const aprovado = dados.status === STATUS.APROVADA;
     return {
-      lojaId: loja.id,
+      pedidoId: pedido.id,
       status: dados.status || null,
       situacao: situacaoParaOApp(dados.status),
-      motivoRecusa: dados.status === STATUS.RECUSADA ? dados.motivoRecusa || null : null,
+      motivo: dados.status === STATUS.RECUSADA ? dados.motivoRecusa || null : null,
+      lojaId: aprovado ? dados.lojaId || null : null,
+      nomeDaLoja: dados.name || null,
       emailConfirmado: Boolean(usuario?.emailVerified),
       enviadoEm: paraIso(dados.enviadoEm),
       aprovadoEm: paraIso(dados.aprovadoEm),
-      temLogo: Boolean(dados.chatProfileImageUrl),
-      temFachada: Boolean(dados.coverImageUrl),
     };
   }
 

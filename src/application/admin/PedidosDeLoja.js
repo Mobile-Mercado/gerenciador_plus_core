@@ -1,12 +1,14 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
-import { STATUS } from '../cadastro/CadastroDeLoja.js';
+import { COLECAO_PEDIDOS, STATUS } from '../cadastro/CadastroDeLoja.js';
 
-// Estabelecimentos > Pedidos de loja (Admin, rodada de 13/10/2026). Lista os pedidos do cadastro
-// pelo app gerenciador e decide: aprovar (status aprovada + claim adminOf do dono), recusar com
-// motivo ou marcar "Em conversa". Aprovar nao liga a loja no app (isActive e manual, pelo botao
-// do Admin). Os cadastros que pararam antes do e-mail confirmado ficam numa lista separada.
-// Os cadastros incompletos do app (rascunhos da jornada, que nao viraram pedido) vem nas
+// Estabelecimentos > Pedidos de loja (Admin). Lista os pedidos do cadastro pelo app gerenciador,
+// em pedidosDeLoja/{id}, e decide: aprovar, recusar com motivo ou marcar "Em conversa".
+// Desde 17/10/2026 (decisao do Thay) o pedido nao cria loja: a loja nasce aqui, no "Aprovar",
+// com os dados do pedido, no mesmo formato que o cadastro gravava, ligada ao dono por
+// userReference e desligada (isActive e manual, pelo botao do Admin). "Recusar" grava o motivo
+// no pedido e nao cria loja. Os cadastros que pararam antes do e-mail confirmado ficam numa lista
+// separada. Os cadastros incompletos do app (rascunhos da jornada, que nao viraram pedido) vem nas
 // listas "incompletos" (em andamento e em conversa) e "descartados", com as marcas do Admin.
 const ABERTOS = [STATUS.EM_ANALISE, STATUS.EM_CONVERSA];
 const LISTAS = Object.freeze({
@@ -16,6 +18,13 @@ const LISTAS = Object.freeze({
   recusados: [STATUS.RECUSADA],
 });
 export const LISTAS_DA_JORNADA = Object.freeze(['incompletos', 'descartados']);
+
+// Campos do pedido que viram a loja no "Aprovar" (o que o cadastro gravava em estabelecimentos).
+const CAMPOS_DA_LOJA = Object.freeze([
+  'name', 'razaoSocial', 'corporateName', 'nomeFantasia', 'cnpj', 'cpfOrCnpj', 'cnpjConferido', 'cnpjAtivo',
+  'cnpjSituacao', 'cnpjRepetido', 'lojasComOMesmoCnpj', 'enderecoReceita', 'address', 'erp', 'instalacaoId', 'phone',
+  'email', 'responsibleName', 'origemCadastro', 'userReference', 'enviadoEm',
+]);
 
 export function quandoIso(valor) {
   if (!valor) return null;
@@ -29,6 +38,8 @@ function linhaDoPedido(documento) {
   return {
     tipo: 'pedido',
     id: documento.id,
+    pedidoId: documento.id,
+    lojaId: data.lojaId || null,
     nome: data.name || documento.id,
     cidade: data.address?.city || null,
     uf: data.address?.uf || data.address?.state || null,
@@ -47,8 +58,6 @@ function linhaDoPedido(documento) {
     aprovadoEm: quandoIso(data.aprovadoEm),
     recusadoEm: quandoIso(data.recusadoEm),
     motivoRecusa: data.motivoRecusa || null,
-    temLogo: Boolean(data.chatProfileImageUrl),
-    temFachada: Boolean(data.coverImageUrl),
   };
 }
 
@@ -68,22 +77,22 @@ export class PedidosDeLoja {
     const status = LISTAS[lista];
     if (!status) throw new AppError('Lista inválida.', { statusCode: 400, code: 'pedidos_lista_invalida' });
     const resultados = await Promise.all(status.map((valor) => this.firestore
-      .collection('estabelecimentos').where('status', '==', valor).get()));
+      .collection(COLECAO_PEDIDOS).where('status', '==', valor).get()));
     return resultados.flatMap((resultado) => resultado.docs.map(linhaDoPedido))
       .sort((a, b) => String(b.enviadoEm || b.criadoEm || '').localeCompare(String(a.enviadoEm || a.criadoEm || '')));
   }
 
-  async pedido(lojaId) {
-    const loja = await this.firestore.collection('estabelecimentos').doc(String(lojaId || '')).get();
-    if (!loja.exists || !loja.data()?.status) {
+  async pedido(pedidoId) {
+    const pedido = await this.firestore.collection(COLECAO_PEDIDOS).doc(String(pedidoId || '')).get();
+    if (!pedido.exists) {
       throw new AppError('Pedido de loja não encontrado.', { statusCode: 404, code: 'pedido_nao_encontrado' });
     }
-    return loja;
+    return pedido;
   }
 
   // Dono do pedido: a conta do Users apontado em userReference.
-  async donoDoPedido(loja) {
-    const referencia = loja.data()?.userReference;
+  async donoDoPedido(pedido) {
+    const referencia = pedido.data()?.userReference;
     const usuario = referencia ? await referencia.get() : null;
     const uid = usuario?.exists ? usuario.data()?.userAuthId : null;
     if (!uid) {
@@ -92,51 +101,86 @@ export class PedidosDeLoja {
     return uid;
   }
 
-  assertAberto(loja) {
-    if (!ABERTOS.includes(loja.data()?.status)) {
+  assertAberto(pedido) {
+    if (!ABERTOS.includes(pedido.data()?.status)) {
       throw new AppError('Só pedido em análise ou em conversa pode ser decidido.', {
         statusCode: 409,
         code: 'pedido_nao_esta_aberto',
-        details: { status: loja.data()?.status || null },
+        details: { status: pedido.data()?.status || null },
       });
     }
   }
 
-  // Aprovar: status aprovada, quem e quando, e a claim adminOf do dono com o id da loja (as
-  // outras claims da conta ficam). O Core acha a loja pela claim e por userReference.
-  async aprovar(lojaId, ator = {}) {
-    const loja = await this.pedido(lojaId);
-    this.assertAberto(loja);
-    const uid = await this.donoDoPedido(loja);
-    const conta = await this.auth.getUser(uid);
-    const claimsAntigas = { ...(conta.customClaims || {}) };
-    const claimsNovas = { ...claimsAntigas, adminOf: loja.id };
-    delete claimsNovas.groupId;
-    await this.auth.setCustomUserClaims(uid, claimsNovas);
-    await loja.ref.update({
+  // Loja nascida do pedido: os dados do pedido no formato que o cadastro gravava, desligada.
+  lojaDoPedido(pedido, lojaId, ator, agora) {
+    const data = pedido.data() || {};
+    const loja = Object.fromEntries(CAMPOS_DA_LOJA.filter((campo) => data[campo] !== undefined).map((campo) => [campo, data[campo]]));
+    return {
+      ...loja,
+      id: lojaId,
+      isActive: false,
+      userType: 'UserType.noneEmpresa',
       status: STATUS.APROVADA,
+      pedidoDeLojaId: pedido.id,
       aprovadoPor: ator.uid || null,
-      aprovadoEm: this.serverTimestamp(),
-      updatedAt: this.serverTimestamp(),
-    });
-    return { ...linhaDoPedido(await loja.ref.get()), uidDono: uid, claimsAntigas, claimsNovas };
+      aprovadoEm: agora,
+      createdAt: agora,
+      updatedAt: agora,
+    };
   }
 
-  async recusar(lojaId, motivo, ator = {}) {
+  // Aprovar: cria estabelecimentos/{novo} com os dados do pedido, grava o lojaId no pedido e da
+  // ao dono a claim adminOf da loja nova (as outras claims da conta ficam). Se a gravacao falhar,
+  // a claim antiga volta.
+  async aprovar(pedidoId, ator = {}) {
+    const pedido = await this.pedido(pedidoId);
+    this.assertAberto(pedido);
+    const uid = await this.donoDoPedido(pedido);
+    const lojaRef = this.firestore.collection('estabelecimentos').doc();
+    const conta = await this.auth.getUser(uid);
+    const claimsAntigas = { ...(conta.customClaims || {}) };
+    const claimsNovas = { ...claimsAntigas, adminOf: lojaRef.id };
+    delete claimsNovas.groupId;
+    await this.auth.setCustomUserClaims(uid, claimsNovas);
+    const agora = this.serverTimestamp();
+    try {
+      const lote = this.firestore.batch();
+      lote.create(lojaRef, this.lojaDoPedido(pedido, lojaRef.id, ator, agora));
+      lote.update(pedido.ref, {
+        status: STATUS.APROVADA,
+        lojaId: lojaRef.id,
+        aprovadoPor: ator.uid || null,
+        aprovadoEm: agora,
+        updatedAt: agora,
+      });
+      await lote.commit();
+    } catch (error) {
+      await this.auth.setCustomUserClaims(uid, claimsAntigas);
+      throw error;
+    }
+    try {
+      await this.jornada?.aprovada(pedido.data()?.instalacaoId, lojaRef.id);
+    } catch {
+      // O funil perde a marca da aprovacao; a loja e o pedido ficam.
+    }
+    return { ...linhaDoPedido(await pedido.ref.get()), uidDono: uid, claimsAntigas, claimsNovas };
+  }
+
+  async recusar(pedidoId, motivo, ator = {}) {
     const texto = String(motivo || '').trim();
     if (texto.length < 3) {
       throw new AppError('Escreva o motivo da recusa.', { statusCode: 400, code: 'pedido_motivo_obrigatorio' });
     }
-    const loja = await this.pedido(lojaId);
-    this.assertAberto(loja);
-    await loja.ref.update({
+    const pedido = await this.pedido(pedidoId);
+    this.assertAberto(pedido);
+    await pedido.ref.update({
       status: STATUS.RECUSADA,
       motivoRecusa: texto.slice(0, 500),
       recusadoPor: ator.uid || null,
       recusadoEm: this.serverTimestamp(),
       updatedAt: this.serverTimestamp(),
     });
-    return linhaDoPedido(await loja.ref.get());
+    return linhaDoPedido(await pedido.ref.get());
   }
 
   // Cadastro incompleto (rascunho da jornada): "Em conversa", "Descartar" ou voltar para em
@@ -147,13 +191,13 @@ export class PedidosDeLoja {
   }
 
   // "Em conversa": marcada e desmarcada pela equipe; desmarcar volta para em analise.
-  async marcarEmConversa(lojaId, emConversa) {
-    const loja = await this.pedido(lojaId);
-    this.assertAberto(loja);
-    await loja.ref.update({
+  async marcarEmConversa(pedidoId, emConversa) {
+    const pedido = await this.pedido(pedidoId);
+    this.assertAberto(pedido);
+    await pedido.ref.update({
       status: emConversa ? STATUS.EM_CONVERSA : STATUS.EM_ANALISE,
       updatedAt: this.serverTimestamp(),
     });
-    return linhaDoPedido(await loja.ref.get());
+    return linhaDoPedido(await pedido.ref.get());
   }
 }

@@ -199,24 +199,36 @@ export class JornadaDoCadastro {
     return { instalacaoId, passo: numero };
   }
 
-  // Pedido completo criado (POST /loja): a instalacao vira concluido e guarda o id da loja.
-  async concluir(instalacaoId, lojaId) {
+  // Pedido completo criado (POST /loja): a instalacao vira concluido e guarda o id do pedido.
+  // A loja so nasce no "Aprovar" do Admin, que grava o id dela (aprovada).
+  async concluir(instalacaoId, pedidoId) {
     if (!instalacaoId) return false;
     const agora = this.serverTimestamp();
     const ref = this.jornadaRef(instalacaoId);
     await this.firestore.runTransaction(async (transacao) => {
       const atual = await transacao.get(ref);
-      if (atual.exists && atual.data()?.situacao === SITUACAO.CONCLUIDO && atual.data()?.lojaId === lojaId) return;
+      if (atual.exists && atual.data()?.situacao === SITUACAO.CONCLUIDO && atual.data()?.pedidoId === pedidoId) return;
       transacao.set(ref, {
         instalacaoId,
         situacao: SITUACAO.CONCLUIDO,
-        lojaId,
+        pedidoId,
         concluidoEm: agora,
         atualizadoEm: agora,
         ...(atual.exists ? {} : { criadoEm: agora, aberturas: 0, retomadas: 0 }),
       }, { merge: true });
       this.contadoresDoDia(transacao, { concluidos: this.incremento(1) });
     });
+    return true;
+  }
+
+  // "Aprovar" do Admin: a instalacao guarda o id da loja criada.
+  async aprovada(instalacaoId, lojaId) {
+    if (!instalacaoId) return false;
+    const ref = this.jornadaRef(instalacaoId);
+    const atual = await ref.get();
+    if (!atual.exists) return false;
+    const agora = this.serverTimestamp();
+    await ref.set({ lojaId, aprovadaEm: agora, atualizadoEm: agora }, { merge: true });
     return true;
   }
 

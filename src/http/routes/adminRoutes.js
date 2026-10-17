@@ -198,10 +198,14 @@ export function createAdminRoutes({
     response.json({ data: await pedidosDeLoja.marcarIncompleto(instalacaoId, situacao, atorDe(request)) });
   }));
 
-  router.post('/pedidos-de-loja/:lojaId/aprovar', asyncHandler(async (request, response) => {
-    const resultado = await pedidosDeLoja.aprovar(request.params.lojaId, atorDe(request));
+  // O parametro e o id do pedido (pedidosDeLoja): a loja so nasce no "Aprovar", e o registro do
+  // Admin vai para a loja criada.
+  router.post('/pedidos-de-loja/:pedidoId/aprovar', asyncHandler(async (request, response) => {
+    const resultado = await pedidosDeLoja.aprovar(request.params.pedidoId, atorDe(request));
+    response.locals.lojasAlvo = [resultado.lojaId].filter(Boolean);
     response.locals.auditoria = {
       acao: 'aprovar_pedido_de_loja',
+      pedidoId: request.params.pedidoId,
       uidDono: resultado.uidDono,
       claimsAntigas: resultado.claimsAntigas,
       claimsNovas: resultado.claimsNovas,
@@ -209,16 +213,16 @@ export function createAdminRoutes({
     response.json({ data: resultado });
   }));
 
-  router.post('/pedidos-de-loja/:lojaId/recusar', asyncHandler(async (request, response) => {
+  router.post('/pedidos-de-loja/:pedidoId/recusar', asyncHandler(async (request, response) => {
     const { motivo } = recusaSchema.parse(request.body);
-    response.locals.auditoria = { acao: 'recusar_pedido_de_loja', motivo };
-    response.json({ data: await pedidosDeLoja.recusar(request.params.lojaId, motivo, atorDe(request)) });
+    response.locals.auditoria = { acao: 'recusar_pedido_de_loja', pedidoId: request.params.pedidoId, motivo };
+    response.json({ data: await pedidosDeLoja.recusar(request.params.pedidoId, motivo, atorDe(request)) });
   }));
 
-  router.post('/pedidos-de-loja/:lojaId/em-conversa', asyncHandler(async (request, response) => {
+  router.post('/pedidos-de-loja/:pedidoId/em-conversa', asyncHandler(async (request, response) => {
     const { emConversa } = emConversaSchema.parse(request.body);
-    response.locals.auditoria = { acao: emConversa ? 'marcar_em_conversa' : 'desmarcar_em_conversa' };
-    response.json({ data: await pedidosDeLoja.marcarEmConversa(request.params.lojaId, emConversa) });
+    response.locals.auditoria = { acao: emConversa ? 'marcar_em_conversa' : 'desmarcar_em_conversa', pedidoId: request.params.pedidoId };
+    response.json({ data: await pedidosDeLoja.marcarEmConversa(request.params.pedidoId, emConversa) });
   }));
 
   // ===== Loja aberta no Admin =====

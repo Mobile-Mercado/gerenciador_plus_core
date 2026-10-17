@@ -1,4 +1,5 @@
 import { AppError } from '../../domain/errors/AppError.js';
+import { COLECAO_PEDIDOS } from '../cadastro/CadastroDeLoja.js';
 import { COLECAO_JORNADAS, SITUACAO } from '../cadastro/JornadaDoCadastro.js';
 
 // Tela "Jornada de entrada (App Gerenciador)" do Admin (cola 23.1, 17/10/2026). So leitura do que
@@ -90,18 +91,20 @@ export class JornadaDeEntrada {
     const cortada = (jornada) => jornada.lojistaCliente === true && !jornada.comecouEm;
     const turma = doEstado.filter((jornada) => !cortada(jornada));
 
-    const lojaIds = [...new Set(turma.map((jornada) => jornada.lojaId).filter(Boolean))];
-    const lojas = new Map();
-    if (lojaIds.length) {
-      const leituras = await this.firestore.getAll(...lojaIds.map((id) => this.firestore.collection('estabelecimentos').doc(id)));
-      leituras.filter((loja) => loja.exists).forEach((loja) => lojas.set(loja.id, loja.data() || {}));
+    // Pedido de loja de quem criou a conta (pedidosDeLoja): e-mail confirmado (enviadoEm) e
+    // aprovado (status e aprovadoEm) saem dele. A loja so existe depois do "Aprovar".
+    const pedidoIds = [...new Set(turma.map((jornada) => jornada.pedidoId).filter(Boolean))];
+    const pedidos = new Map();
+    if (pedidoIds.length) {
+      const leituras = await this.firestore.getAll(...pedidoIds.map((id) => this.firestore.collection(COLECAO_PEDIDOS).doc(id)));
+      leituras.filter((pedido) => pedido.exists).forEach((pedido) => pedidos.set(pedido.id, pedido.data() || {}));
     }
 
     const chegou = (jornada) => {
       const passos = jornada.passos || {};
       const dados = jornada.dados || {};
-      const concluido = jornada.situacao === SITUACAO.CONCLUIDO && Boolean(jornada.lojaId);
-      const loja = jornada.lojaId ? lojas.get(jornada.lojaId) : null;
+      const concluido = jornada.situacao === SITUACAO.CONCLUIDO && Boolean(jornada.pedidoId);
+      const loja = jornada.pedidoId ? pedidos.get(jornada.pedidoId) : null;
       return {
         abertura: true,
         dados: concluido || Boolean(passos['1'] || dados.passo1),
@@ -114,7 +117,7 @@ export class JornadaDeEntrada {
     };
     // Tempo na tela: da primeira entrada nela ate a primeira entrada na tela seguinte.
     const marcos = (jornada) => {
-      const loja = jornada.lojaId ? lojas.get(jornada.lojaId) : null;
+      const loja = jornada.pedidoId ? pedidos.get(jornada.pedidoId) : null;
       const entrada = (passo) => emMs(jornada.passos?.[passo]?.primeiraEntrada);
       return {
         abertura: emMs(jornada.primeiraAbertura) ?? emMs(jornada.criadoEm),
@@ -148,7 +151,7 @@ export class JornadaDeEntrada {
     const contas = linhas.filter((linha) => linha.chegou.pedido);
     const leads = linhas.filter((linha) => linha.chegou.cnpj);
     const localDaReceita = ({ jornada }) => {
-      const loja = jornada.lojaId ? lojas.get(jornada.lojaId) : null;
+      const loja = jornada.pedidoId ? pedidos.get(jornada.pedidoId) : null;
       return {
         cidade: jornada.cidadeReceita || loja?.enderecoReceita?.city || null,
         uf: jornada.ufReceita || loja?.enderecoReceita?.uf || null,

@@ -13,65 +13,97 @@ const HORA = () => new Date('2026-10-13T12:00:00Z');
 
 function bancoComPedido(status = 'em_analise') {
   const banco = new FirestoreEmMemoria({
-    'Users/uid-dono': { id: 'uid-dono', userAuthId: 'uid-dono', userType: 'UserType.empresa' },
+    'Users/uid-dono': { id: 'uid-dono', userAuthId: 'uid-dono', userType: 'UserType.empresa', pedidoDeLojaId: 'pedido-novo' },
   });
-  banco.docs.set('estabelecimentos/loja-nova', {
-    name: 'Bom Preço', cnpj: '11222333000181', cnpjConferido: true, phone: '27998765432', responsibleName: 'Ana Paula',
-    address: { city: 'Vitória', uf: 'ES' }, isActive: false, status, userReference: banco.doc('Users/uid-dono'),
+  // Pedido do cadastro (sem loja): os mesmos dados que o cadastro gravava em estabelecimentos.
+  banco.docs.set('pedidosDeLoja/pedido-novo', {
+    id: 'pedido-novo', uid: 'uid-dono', lojaId: null,
+    name: 'Bom Preço', cnpj: '11222333000181', cpfOrCnpj: '11.222.333/0001-81', cnpjConferido: true, cnpjRepetido: false,
+    phone: '27998765432', email: 'ana@bp.com.br', responsibleName: 'Ana Paula', erp: { escolhido: 'Linear', texto: null },
+    address: { city: 'Vitória', uf: 'ES', number: '410' }, enderecoReceita: { city: 'VITORIA', uf: 'ES' },
+    instalacaoId: 'inst-pedido-novo', origemCadastro: 'app_gerenciador', status, userReference: banco.doc('Users/uid-dono'),
   });
   const auth = new AuthEmMemoria([{ uid: 'uid-dono', email: 'ana@bp.com.br', customClaims: { groupId: 'antigo', outra: 1 } }]);
   return { banco, auth };
 }
 
-test('pedidos: lista abertos e separa os parados antes do e-mail', async () => {
+test('pedidos: lista abertos e separa os parados antes do e-mail, lendo pedidosDeLoja', async () => {
   const { banco, auth } = bancoComPedido();
-  banco.docs.set('estabelecimentos/parado', { name: 'Parado', status: 'aguardando_email' });
-  banco.docs.set('estabelecimentos/antiga', { name: 'Antiga' });
+  banco.docs.set('pedidosDeLoja/parado', { name: 'Parado', status: 'aguardando_email' });
+  banco.docs.set('estabelecimentos/antiga', { name: 'Antiga', status: 'em_analise' });
   const pedidos = new PedidosDeLoja({ firestore: banco, auth, serverTimestamp: HORA });
-  assert.deepEqual((await pedidos.listar('abertos')).map((item) => item.id), ['loja-nova']);
+  assert.deepEqual((await pedidos.listar('abertos')).map((item) => item.id), ['pedido-novo']);
   assert.deepEqual((await pedidos.listar('parados')).map((item) => item.id), ['parado']);
   const [linha] = await pedidos.listar('abertos');
+  assert.equal(linha.pedidoId, 'pedido-novo');
+  assert.equal(linha.lojaId, null);
   assert.equal(linha.cidade, 'Vitória');
+  assert.equal(linha.cidadeReceita, 'VITORIA');
   assert.equal(linha.cnpjConferido, true);
   assert.equal(linha.responsavel.celular, '27998765432');
 });
 
-test('aprovar: status, quem e quando, claim adminOf da loja; nao liga a loja no app', async () => {
+test('aprovar: cria a loja com os dados do pedido, desligada, e grava o lojaId no pedido; claim adminOf da loja nova', async () => {
   const { banco, auth } = bancoComPedido();
-  const pedidos = new PedidosDeLoja({ firestore: banco, auth, serverTimestamp: HORA });
-  const resultado = await pedidos.aprovar('loja-nova', { uid: 'uid-admin' });
-  const loja = banco.dados('estabelecimentos/loja-nova');
+  const aprovadas = [];
+  const jornada = { aprovada: async (instalacaoId, lojaId) => { aprovadas.push([instalacaoId, lojaId]); } };
+  const pedidos = new PedidosDeLoja({ firestore: banco, auth, jornada, serverTimestamp: HORA });
+  const resultado = await pedidos.aprovar('pedido-novo', { uid: 'uid-admin' });
+  const pedido = banco.dados('pedidosDeLoja/pedido-novo');
+  assert.equal(pedido.status, 'aprovada');
+  assert.ok(pedido.lojaId);
+  assert.equal(resultado.lojaId, pedido.lojaId);
+  const loja = banco.dados(`estabelecimentos/${pedido.lojaId}`);
+  assert.equal(loja.id, pedido.lojaId);
+  assert.equal(loja.name, 'Bom Preço');
+  assert.equal(loja.cnpj, '11222333000181');
+  assert.deepEqual(loja.erp, { escolhido: 'Linear', texto: null });
+  assert.equal(loja.address.number, '410');
   assert.equal(loja.status, 'aprovada');
-  assert.equal(loja.aprovadoPor, 'uid-admin');
-  assert.ok(loja.aprovadoEm);
   assert.equal(loja.isActive, false);
-  assert.deepEqual((await auth.getUser('uid-dono')).customClaims, { outra: 1, adminOf: 'loja-nova' });
+  assert.equal(loja.userType, 'UserType.noneEmpresa');
+  assert.equal(loja.pedidoDeLojaId, 'pedido-novo');
+  assert.equal(loja.aprovadoPor, 'uid-admin');
+  assert.equal(loja.userReference.path, 'Users/uid-dono');
+  assert.equal('uid' in loja || 'lojaId' in loja, false, 'campos so do pedido nao vao para a loja');
+  assert.deepEqual((await auth.getUser('uid-dono')).customClaims, { outra: 1, adminOf: pedido.lojaId });
   assert.deepEqual(resultado.claimsAntigas, { groupId: 'antigo', outra: 1 });
-  await assert.rejects(pedidos.aprovar('loja-nova', {}), (erro) => erro.code === 'pedido_nao_esta_aberto');
-});
+  assert.deepEqual(aprovadas, [['inst-pedido-novo', pedido.lojaId]]);
+  await assert.rejects(pedidos.aprovar('pedido-novo', {}), (erro) => erro.code === 'pedido_nao_esta_aberto');
 
-test('recusar exige motivo; em conversa vai e volta', async () => {
-  const { banco, auth } = bancoComPedido();
-  const pedidos = new PedidosDeLoja({ firestore: banco, auth, serverTimestamp: HORA });
-  await assert.rejects(pedidos.recusar('loja-nova', '  ', {}), (erro) => erro.code === 'pedido_motivo_obrigatorio');
-  assert.equal((await pedidos.marcarEmConversa('loja-nova', true)).status, 'em_conversa');
-  assert.equal((await pedidos.marcarEmConversa('loja-nova', false)).status, 'em_analise');
-  const recusado = await pedidos.recusar('loja-nova', 'CNPJ de outra atividade', { uid: 'uid-admin' });
-  assert.equal(recusado.status, 'recusada');
-  assert.equal(recusado.motivoRecusa, 'CNPJ de outra atividade');
-});
-
-test('loja aprovada do cadastro novo: o painel acha pela claim e por userReference', async () => {
-  const { banco, auth } = bancoComPedido('aprovada');
+  // O painel acha a loja nova pela claim e por userReference.
   const acesso = new FirestoreEstablishmentAccessRepository({ firestore: banco });
-  const conta = await acesso.findAccountByClaims({ uid: 'uid-dono', adminOf: 'loja-nova' });
-  assert.equal(conta.establishmentId, 'loja-nova');
+  const conta = await acesso.findAccountByClaims({ uid: 'uid-dono', adminOf: pedido.lojaId });
+  assert.equal(conta.establishmentId, pedido.lojaId);
   assert.equal(conta.hasEstablishment, true);
   assert.equal(conta.establishmentDocument.status, 'aprovada');
   const admin = new LojaNoAdmin({ firestore: banco, auth, accessRepository: acesso });
-  const [dono] = await admin.contas('loja-nova');
+  const [dono] = await admin.contas(pedido.lojaId);
   assert.equal(dono.papel, 'dono');
   assert.equal(dono.entra, true);
+});
+
+test('aprovar que falha ao gravar devolve a claim antiga e nao deixa loja', async () => {
+  const { banco, auth } = bancoComPedido();
+  const batchOriginal = banco.batch.bind(banco);
+  banco.batch = () => { const lote = batchOriginal(); lote.commit = async () => { throw new Error('falha de rede'); }; return lote; };
+  const pedidos = new PedidosDeLoja({ firestore: banco, auth, serverTimestamp: HORA });
+  await assert.rejects(pedidos.aprovar('pedido-novo', {}), /falha de rede/);
+  assert.deepEqual((await auth.getUser('uid-dono')).customClaims, { groupId: 'antigo', outra: 1 });
+  assert.equal([...banco.docs.keys()].some((caminho) => caminho.startsWith('estabelecimentos/')), false);
+});
+
+test('recusar exige motivo, grava no pedido e nao cria loja; em conversa vai e volta', async () => {
+  const { banco, auth } = bancoComPedido();
+  const pedidos = new PedidosDeLoja({ firestore: banco, auth, serverTimestamp: HORA });
+  await assert.rejects(pedidos.recusar('pedido-novo', '  ', {}), (erro) => erro.code === 'pedido_motivo_obrigatorio');
+  assert.equal((await pedidos.marcarEmConversa('pedido-novo', true)).status, 'em_conversa');
+  assert.equal((await pedidos.marcarEmConversa('pedido-novo', false)).status, 'em_analise');
+  const recusado = await pedidos.recusar('pedido-novo', 'CNPJ de outra atividade', { uid: 'uid-admin' });
+  assert.equal(recusado.status, 'recusada');
+  assert.equal(recusado.motivoRecusa, 'CNPJ de outra atividade');
+  assert.equal(banco.dados('pedidosDeLoja/pedido-novo').motivoRecusa, 'CNPJ de outra atividade');
+  assert.equal([...banco.docs.keys()].some((caminho) => caminho.startsWith('estabelecimentos/')), false);
 });
 
 test('contas da loja: dono com claim para loja inexistente nao entra; Corrigir acesso com previa', async () => {

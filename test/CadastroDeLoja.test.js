@@ -65,7 +65,7 @@ async function recusa(promessa, codigo) {
   await assert.rejects(promessa, (erro) => erro.code === codigo);
 }
 
-test('caminho completo: conta, Users/{uid} e loja aguardando o e-mail, sem claim', async () => {
+test('caminho completo: conta, Users/{uid} e pedido aguardando o e-mail, sem loja e sem claim', async () => {
   const { banco, auth, cadastro } = montar();
   const criado = await cadastro.criar(pedido(), { ip: '200.1.1.1' });
   assert.equal(criado.status, 'aguardando_email');
@@ -80,7 +80,14 @@ test('caminho completo: conta, Users/{uid} e loja aguardando o e-mail, sem claim
   // Sem CPF: o campo nao nasce.
   assert.equal('cpfDocument' in usuario, false);
 
-  const loja = banco.dados(`estabelecimentos/${criado.lojaId}`);
+  // O pedido nao cria loja: so pedidosDeLoja/{id}, e Users guarda o id do pedido.
+  assert.equal(criado.lojaId, undefined);
+  assert.equal([...banco.docs.keys()].some((caminho) => caminho.startsWith('estabelecimentos/')), false);
+  assert.equal(usuario.pedidoDeLojaId, criado.pedidoId);
+  const loja = banco.dados(`pedidosDeLoja/${criado.pedidoId}`);
+  assert.equal(loja.id, criado.pedidoId);
+  assert.equal(loja.uid, criado.uid);
+  assert.equal(loja.lojaId, null);
   assert.equal(loja.name, 'Bom Preço');
   assert.equal(loja.razaoSocial, 'MERCADO BOM PRECO LTDA');
   assert.equal(loja.cnpj, CNPJ);
@@ -98,7 +105,6 @@ test('caminho completo: conta, Users/{uid} e loja aguardando o e-mail, sem claim
   assert.equal(loja.cnpjRepetido, false);
   assert.equal(loja.cnpjAtivo, true);
   assert.equal(loja.phone, '27998765432');
-  assert.equal(loja.isActive, false);
   assert.equal(loja.status, 'aguardando_email');
   assert.equal(loja.origemCadastro, 'app_gerenciador');
   assert.equal(loja.userReference.path, `Users/${criado.uid}`);
@@ -110,8 +116,8 @@ test('caminho completo: conta, Users/{uid} e loja aguardando o e-mail, sem claim
   const enviado = await cadastro.enviarPedido(criado.uid);
   assert.equal(enviado.status, 'em_analise');
   assert.equal(enviado.situacao, 'em_analise');
-  assert.equal(banco.dados(`estabelecimentos/${criado.lojaId}`).status, 'em_analise');
-  assert.ok(banco.dados(`estabelecimentos/${criado.lojaId}`).enviadoEm);
+  assert.equal(banco.dados(`pedidosDeLoja/${criado.pedidoId}`).status, 'em_analise');
+  assert.ok(banco.dados(`pedidosDeLoja/${criado.pedidoId}`).enviadoEm);
   // Mandar de novo nao muda nada.
   assert.equal((await cadastro.enviarPedido(criado.uid)).status, 'em_analise');
 });
@@ -120,20 +126,20 @@ test('consulta da Receita que falhou segue com cnpjConferido false', async () =>
   const { banco, cadastro } = montar({ receita: null });
   const criado = await cadastro.criar(pedido());
   assert.equal(criado.cnpjConferido, false);
-  assert.equal(banco.dados(`estabelecimentos/${criado.lojaId}`).razaoSocial, null);
+  assert.equal(banco.dados(`pedidosDeLoja/${criado.pedidoId}`).razaoSocial, null);
 });
 
 test('CNPJ inativo ou desconhecido na Receita nao bloqueia: o pedido guarda a situacao', async () => {
   const inativo = montar({ receita: { encontrado: true, ativa: false, situacao: 'BAIXADA', razaoSocial: 'X LTDA', endereco: null } });
   const criadoInativo = await inativo.cadastro.criar(pedido());
-  const lojaInativa = inativo.banco.dados(`estabelecimentos/${criadoInativo.lojaId}`);
+  const lojaInativa = inativo.banco.dados(`pedidosDeLoja/${criadoInativo.pedidoId}`);
   assert.equal(lojaInativa.cnpjConferido, true);
   assert.equal(lojaInativa.cnpjAtivo, false);
   assert.equal(lojaInativa.cnpjSituacao, 'BAIXADA');
 
   const desconhecido = montar({ receita: { encontrado: false } });
   const criadoDesconhecido = await desconhecido.cadastro.criar(pedido());
-  assert.equal(desconhecido.banco.dados(`estabelecimentos/${criadoDesconhecido.lojaId}`).cnpjAtivo, false);
+  assert.equal(desconhecido.banco.dados(`pedidosDeLoja/${criadoDesconhecido.pedidoId}`).cnpjAtivo, false);
 
   const consulta = await inativo.cadastro.consultarCnpj('11.222.333/0001-81');
   assert.equal(consulta.encontrado, true);
@@ -144,12 +150,13 @@ test('CNPJ inativo ou desconhecido na Receita nao bloqueia: o pedido guarda a si
 test('CNPJ repetido nao bloqueia e marca cnpjRepetido; e-mail repetido continua bloqueando', async () => {
   const antiga = montar({ dados: { 'estabelecimentos/antiga': { cpfOrCnpj: '11.222.333/0001-81' } } });
   const criado = await antiga.cadastro.criar(pedido());
-  const loja = antiga.banco.dados(`estabelecimentos/${criado.lojaId}`);
+  const loja = antiga.banco.dados(`pedidosDeLoja/${criado.pedidoId}`);
   assert.equal(criado.cnpjRepetido, true);
   assert.equal(loja.cnpjRepetido, true);
   assert.deepEqual(loja.lojasComOMesmoCnpj, ['antiga']);
 
-  const emAnalise = montar({ dados: { 'estabelecimentos/pedido': { cnpj: CNPJ, status: 'em_analise' } } });
+  // Outro pedido (ainda sem loja) com o mesmo CNPJ tambem marca.
+  const emAnalise = montar({ dados: { 'pedidosDeLoja/pedido': { cnpj: CNPJ, status: 'em_analise' } } });
   assert.equal((await emAnalise.cadastro.criar(pedido())).cnpjRepetido, true);
   const recusado = montar({ dados: { 'estabelecimentos/velho': { cnpj: CNPJ, status: 'recusada' } } });
   assert.equal((await recusado.cadastro.criar(pedido())).cnpjRepetido, true);
@@ -164,7 +171,7 @@ test('CPF fora do cadastro: no corpo e ignorado; ERP, endereco e instalacao vali
   const { banco, cadastro } = montar();
   const comCpf = await cadastro.criar(pedido({ responsavel: { ...pedido().responsavel, cpf: '111.111.111-11' } }));
   assert.equal('cpfDocument' in banco.dados(`Users/${comCpf.uid}`), false);
-  const { userReference, ...loja } = banco.dados(`estabelecimentos/${comCpf.lojaId}`);
+  const { userReference, ...loja } = banco.dados(`pedidosDeLoja/${comCpf.pedidoId}`);
   assert.equal(JSON.stringify(loja).includes('11111111111'), false);
   await recusa(montar().cadastro.criar(pedido({ erp: { escolhido: 'Sistema X' } })), 'cadastro_erp_invalido');
   await recusa(montar().cadastro.criar(pedido({ endereco: { ...ENDERECO, numero: '' } })), 'cadastro_numero_invalido');
@@ -207,21 +214,35 @@ test('falha ao gravar no Firestore apaga a conta criada: nada fica solto', async
 
 test('situacao para o app: em analise, aprovado e recusado com motivo', async () => {
   const { banco, auth, cadastro } = montar();
-  const { uid, lojaId } = await cadastro.criar(pedido());
+  const { uid, pedidoId } = await cadastro.criar(pedido());
   auth.confirmarEmail(uid);
-  await cadastro.enviarPedido(uid);
-  await banco.doc(`estabelecimentos/${lojaId}`).update({ status: 'recusada', motivoRecusa: 'CNPJ de outra atividade' });
+  const enviado = await cadastro.enviarPedido(uid);
+  assert.deepEqual({ status: enviado.status, motivo: enviado.motivo, lojaId: enviado.lojaId, nomeDaLoja: enviado.nomeDaLoja }, {
+    status: 'em_analise', motivo: null, lojaId: null, nomeDaLoja: 'Bom Preço',
+  });
+  await banco.doc(`pedidosDeLoja/${pedidoId}`).update({ status: 'recusada', motivoRecusa: 'CNPJ de outra atividade' });
   const situacao = await cadastro.situacao(uid);
   assert.equal(situacao.situacao, 'recusado');
-  assert.equal(situacao.motivoRecusa, 'CNPJ de outra atividade');
+  assert.equal(situacao.motivo, 'CNPJ de outra atividade');
+  assert.equal(situacao.lojaId, null);
   assert.equal(situacao.emailConfirmado, true);
+  // Aprovado: o lojaId aparece.
+  await banco.doc(`pedidosDeLoja/${pedidoId}`).update({ status: 'aprovada', lojaId: 'loja-nova' });
+  const aprovado = await cadastro.situacao(uid);
+  assert.equal(aprovado.situacao, 'aprovado');
+  assert.equal(aprovado.lojaId, 'loja-nova');
+  assert.equal(aprovado.motivo, null);
 });
 
 test('imagens do cadastro: so o dono, so antes da decisao, e acima de 20 MB a mensagem diz o limite', async () => {
   const salvas = [];
   const imagens = { trocar: async (lojaId, tipo) => { salvas.push([lojaId, tipo]); return { campo: 'chatProfileImageUrl', url: 'u' }; } };
+  // Rota sem uso desde 17/10/2026 (logo e fachada sairam do cadastro): continua lendo a loja
+  // do dono em estabelecimentos.
   const { banco, cadastro } = montar({ imagens });
-  const { uid, lojaId } = await cadastro.criar(pedido());
+  const uid = 'uid-dono';
+  const lojaId = 'loja-dono';
+  banco.docs.set(`estabelecimentos/${lojaId}`, { name: 'Loja', status: 'em_analise', userReference: banco.doc(`Users/${uid}`) });
   await cadastro.trocarImagem(uid, 'logo', Buffer.from('x'));
   assert.deepEqual(salvas, [[lojaId, 'logo']]);
   await recusa(cadastro.trocarImagem(uid, 'splash', Buffer.from('x')), 'imagem_tipo_invalido');

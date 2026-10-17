@@ -37,11 +37,12 @@ async function cenario() {
   em(200); await rascunho('inst-completa', 2, { cnpj: '11222333000181', receita: receita('VITORIA', 'ES') });
   em(300); await evento('inst-completa', 'entrou_passo', 3);
   em(400);
-  banco.docs.set('estabelecimentos/loja-a', {
-    name: 'A', status: 'aprovada', enviadoEm: new Date(T0 + 1000 * SEG), aprovadoEm: new Date(T0 + 5000 * SEG),
+  // Pedido de loja (pedidosDeLoja), ja aprovado.
+  banco.docs.set('pedidosDeLoja/pedido-a', {
+    name: 'A', status: 'aprovada', lojaId: 'loja-a', enviadoEm: new Date(T0 + 1000 * SEG), aprovadoEm: new Date(T0 + 5000 * SEG),
     enderecoReceita: { city: 'VITORIA', uf: 'ES' },
   });
-  await jornada.concluir('inst-completa', 'loja-a');
+  await jornada.concluir('inst-completa', 'pedido-a');
 
   // B: parou no CNPJ (Serra - ES).
   em(10); await evento('inst-parou-cnpj', 'abertura');
