@@ -10,8 +10,16 @@ import { horarioDoValor, millisDoHorario, minutosDoHorario } from '../../domain/
 // assim que a G&S perdeu o frete, dossie item 23). openingHours segue o saveOpeningHours do
 // painel: cada dia guarda o que ja tinha e troca so isOpen, os horarios e open/close.
 //
-// A regra "Pedido perto de fechar" (entregar mesmo depois de fechar, so ate fechar ou passar
-// para o dia seguinte) nao tem campo hoje e fica de fora ate a decisao do Thay.
+// "Pedido perto de fechar" e deliveryInfo.afterClosingDelivery, o campo que o getAutoSchedule
+// publicado em 13/10/2026 le (mobile_old_web_platform, branch agendamento-horarios,
+// functions/src/api/schedules/auto-schedule.ts): "allow" (entregar mesmo depois de fechar),
+// "cut" (entregar so ate fechar) e "nextDay" (passar para o dia seguinte). Sem o campo, ou com
+// valor desconhecido, vale "allow".
+export const PEDIDO_PERTO_DE_FECHAR = Object.freeze({
+  allow: 'Entregar mesmo depois de fechar',
+  cut: 'Entregar só até fechar',
+  nextDay: 'Passar para o dia seguinte',
+});
 export const DIAS_DA_SEMANA = Object.freeze([1, 2, 3, 4, 5, 6, 7]);
 
 function recusa(mensagem, code, statusCode = 400) {
@@ -158,8 +166,9 @@ function paraATela(lojaId, data) {
       };
     }),
     scheduling: { contracted: data.scheduling?.contracted === true, enabled: data.scheduling?.enabled === true },
-    // Sem campo hoje: a regra efetiva e a do getAutoSchedule (so oferece hoje se a entrega cabe
-    // antes do fechamento; senao, o proximo dia aberto).
-    pedidoPertoDeFechar: null,
+    // Como o getAutoSchedule le: ausente ou desconhecido vale "allow".
+    pedidoPertoDeFechar: Object.hasOwn(PEDIDO_PERTO_DE_FECHAR, data.deliveryInfo?.afterClosingDelivery)
+      ? data.deliveryInfo.afterClosingDelivery
+      : 'allow',
   };
 }

@@ -58,6 +58,8 @@ const entregaSchema = z.object({
     scheduleIntervalType: z.enum(['hours', 'days']).optional(),
     intervalTimeBetweenSchedules: inteiro.optional(),
     maxSchedulesPerTime: inteiro.optional(),
+    // "Pedido perto de fechar": allow, cut ou nextDay (lido pelo getAutoSchedule).
+    afterClosingDelivery: z.enum(['allow', 'cut', 'nextDay']).optional(),
   }).strict().optional(),
   minimumPriceCart: numero.optional(),
   openingHours: z.array(z.object({

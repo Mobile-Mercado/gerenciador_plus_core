@@ -84,13 +84,23 @@ test('horarios: os 7 dias; dia sem mudanca fica com o mesmo instante e o que o a
 
   const lida = await entrega.ler('loja-gs');
   assert.deepEqual(lida.openingHours[5], { weekday: 6, isOpen: true, openingHours: '07:00', closeHours: '14:30' });
-  assert.equal(lida.pedidoPertoDeFechar, null);
+  assert.equal(lida.pedidoPertoDeFechar, 'allow', 'sem o campo vale allow, como o getAutoSchedule');
 
   await assert.rejects(entrega.salvar('loja-gs', { openingHours: dias().slice(0, 6) }), (erro) => erro.code === 'entrega_horarios_incompletos');
   await assert.rejects(
     entrega.salvar('loja-gs', { openingHours: dias((weekday) => (weekday === 2 ? { openingHours: '21:00' } : {})) }),
     (erro) => erro.code === 'entrega_horario_invalido',
   );
+});
+
+test('pedido perto de fechar: deliveryInfo.afterClosingDelivery, sem tocar no resto da entrega', async () => {
+  const { banco, entrega } = montar();
+  await entrega.salvar('loja-gs', { deliveryInfo: { afterClosingDelivery: 'nextDay' } });
+  const loja = banco.dados('estabelecimentos/loja-gs');
+  assert.deepEqual(loja.deliveryInfo, { ...DELIVERY_INFO, afterClosingDelivery: 'nextDay' });
+  assert.equal((await entrega.ler('loja-gs')).pedidoPertoDeFechar, 'nextDay');
+  const desconhecido = montar({ deliveryInfo: { afterClosingDelivery: 'sempre' } });
+  assert.equal((await desconhecido.entrega.ler('loja-gs')).pedidoPertoDeFechar, 'allow');
 });
 
 test('agendamento: so liga contratado; tirar o contrato desliga', async () => {
@@ -122,6 +132,7 @@ test('rota PATCH /entrega: so campos conhecidos, e quem mudou e quando vai para 
   try {
     assert.equal((await (await fetch(base)).json()).data.minimumPriceCart, 20);
     assert.equal((await patch({ deliveryInfo: { campoInventado: 1 } })).status, 400);
+    assert.equal((await patch({ deliveryInfo: { afterClosingDelivery: 'sempre' } })).status, 400);
     assert.equal((await patch({ deliveryInfo: { fretePorBairro: {} } })).status, 400, 'o mapa por bairro nao entra pela rota');
     const ok = await patch({ deliveryInfo: { baseValue: 6 } });
     assert.equal(ok.status, 200);
