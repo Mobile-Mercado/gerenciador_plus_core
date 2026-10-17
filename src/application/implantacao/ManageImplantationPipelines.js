@@ -1,5 +1,4 @@
 import { FieldValue } from 'firebase-admin/firestore';
-import { cpfValido, validarCpf } from '../../domain/cadastro/validacoes.js';
 import { AppError } from '../../domain/errors/AppError.js';
 
 const PIPELINE_COLLECTION = 'implantacaoGrenciador';
@@ -109,53 +108,12 @@ export class ManageImplantationPipelines {
     return this.get(establishmentId);
   }
 
-  // Dono da loja: o documento de Users apontado em userReference (o mesmo do cadastro, que
-  // guardava o CPF em cpfDocument).
-  async donoDaLoja(establishmentId, transaction = null) {
-    const ler = (ref) => (transaction ? transaction.get(ref) : ref.get());
-    const loja = await ler(this.firestore.collection('estabelecimentos').doc(establishmentId));
-    const campo = loja.exists ? loja.data()?.userReference : null;
-    // Loja antiga pode guardar o caminho em texto ("Users/{id}") em vez da referencia.
-    const referencia = typeof campo === 'string' && campo.startsWith('Users/') ? this.firestore.doc(campo) : campo;
-    const usuario = referencia && typeof referencia.get === 'function' ? await ler(referencia) : null;
-    if (!usuario?.exists) {
-      throw new AppError('Esta loja não tem a conta do dono ligada. Fale com a Móbile.', {
-        statusCode: 409,
-        code: 'implantacao_loja_sem_dono',
-      });
-    }
-    return { loja, usuario };
-  }
-
-  // CPF do dono, so com os 2 ultimos numeros a mostra: o painel libera o "Aprovar e lancar".
-  async cpfDoDono(establishmentId) {
-    const { usuario } = await this.donoDaLoja(establishmentId);
-    const cpf = String(usuario.data()?.cpfDocument || '');
-    const temCpf = cpfValido(cpf);
-    return { temCpf, cpfMascarado: temCpf ? `***.***.***-${cpf.slice(-2)}` : null };
-  }
-
-  // Grava o CPF do dono (mesma validacao do cadastro) em Users do dono, campo cpfDocument.
-  async gravarCpfDoDono({ establishmentId, cpf, uid }) {
-    const digitos = validarCpf(cpf);
-    const { usuario } = await this.donoDaLoja(establishmentId);
-    await usuario.ref.set({
-      cpfDocument: digitos,
-      cpfGravadoEm: FieldValue.serverTimestamp(),
-      cpfGravadoPor: uid || null,
-    }, { merge: true });
-    return this.cpfDoDono(establishmentId);
-  }
-
   // Aprovacao formal do lojista (faixa de implantacao do Gerenciador Plus): so depois que a
   // implantacao chega na validacao (etapa 06 liberada). Grava o nome de quem aprovou e a data,
   // e marca a verificacao clientApprovalRecorded da etapa 06.
   async aprovarFormalmente({ establishmentId, nome, uid }) {
     const reference = this.pipelineRef(establishmentId);
     await this.firestore.runTransaction(async (transaction) => {
-      // "Aprovar e lancar" so com o CPF do dono gravado (ordem nova de 16/10/2026: o CPF saiu do
-      // cadastro e passou para a aprovacao final).
-      const { usuario } = await this.donoDaLoja(establishmentId, transaction);
       const snapshot = await transaction.get(reference);
       const pipeline = normalizePipeline(snapshot.exists ? snapshot.data() : {}, establishmentId);
       // Mesma regra da faixa do painel: a 06 aberta ou as etapas antes dela (menos a 05, pulada)
@@ -169,12 +127,6 @@ export class ManageImplantationPipelines {
       }
       if (pipeline.aprovacaoFormal?.em) {
         throw new AppError('A implantação já tem aprovação formal.', { statusCode: 409, code: 'implantacao_ja_aprovada' });
-      }
-      if (!cpfValido(usuario.data()?.cpfDocument)) {
-        throw new AppError('Preencha o CPF do dono da empresa antes de aprovar o lançamento.', {
-          statusCode: 409,
-          code: 'implantacao_cpf_obrigatorio',
-        });
       }
       transaction.set(reference, {
         aprovacaoFormal: { nome, uid, em: FieldValue.serverTimestamp() },

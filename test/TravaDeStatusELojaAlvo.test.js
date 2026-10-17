@@ -87,9 +87,7 @@ test('politica: lojista nao grava status, offerColor nem o contrato; scheduling.
 test('aprovacao formal: so depois da validacao, uma vez, com nome e data', async () => {
   const firestore = new FirestoreEmMemoria({
     'estabelecimentos/l1/implantacaoGrenciador/pipeline': { type: 'pipeline', unlockedSteps: ['01', '02'] },
-    'Users/u': { userAuthId: 'u', cpfDocument: '52998224725' },
   });
-  firestore.docs.set('estabelecimentos/l1', { name: 'Loja', userReference: firestore.doc('Users/u') });
   const pipelines = new ManageImplantationPipelines({ firestore });
   await assert.rejects(pipelines.aprovarFormalmente({ establishmentId: 'l1', nome: 'Ana', uid: 'u' }), (erro) => erro.code === 'implantacao_aprovacao_antes_da_validacao');
   await firestore.doc('estabelecimentos/l1/implantacaoGrenciador/pipeline').update({ unlockedSteps: ['01', '02', '03', '04', '05', '06'] });

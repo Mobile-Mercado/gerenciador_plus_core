@@ -31,7 +31,6 @@ const pedidoSchema = z.object({
   nome: z.string().max(200),
   responsavel: z.object({
     nome: z.string().max(200),
-    cpf: z.string().max(32).nullish(),
     celular: z.string().max(32),
     email: z.string().max(320),
   }),

@@ -182,8 +182,6 @@ export class CadastroDeLoja {
       verified: false,
       createdAt: agora,
     };
-    // Sem CPF no cadastro, o campo nao nasce: ele e gravado depois, antes da aprovacao final.
-    if (pedido.responsavel.cpf) usuario.cpfDocument = pedido.responsavel.cpf;
     try {
       const lote = this.firestore.batch();
       // Users/{uid}: o id do documento e o uid. O campo id repete o id do documento, como o app

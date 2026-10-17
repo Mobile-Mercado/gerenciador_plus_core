@@ -14,7 +14,6 @@ const approvalSchema = z.object({
 });
 
 const aprovacaoFormalSchema = z.object({ nome: z.string().trim().min(2).max(80) });
-const cpfDoDonoSchema = z.object({ cpf: z.string().max(32) });
 
 const pipelineParamsSchema = z.object({
   establishmentId: z.string().min(1).max(120),
@@ -137,37 +136,6 @@ export function createImplantacaoRoutes({
         uid: request.auth?.uid,
       });
       response.json({ data: pipeline });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  // CPF do dono da empresa, exigido antes do "Aprovar e lancar": mesma regra de quem aprova (o
-  // dono logado, nao o admin da plataforma agindo na loja). A leitura so mostra os 2 ultimos.
-  const contaDoDono = async (request) => {
-    const conta = await accountForRequest(request);
-    if (conta.porAdminDaPlataforma || conta.permissions?.isAdmin !== true) {
-      throw new AppError('Só o dono da loja informa o CPF do dono da empresa.', { statusCode: 403, code: 'implantacao_cpf_so_dono' });
-    }
-    return conta;
-  };
-
-  router.get('/cpf-do-dono', async (request, response, next) => {
-    try {
-      const conta = await contaDoDono(request);
-      response.json({ data: await manageImplantationPipelines.cpfDoDono(conta.establishmentId) });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  router.post('/cpf-do-dono', async (request, response, next) => {
-    try {
-      const { cpf } = cpfDoDonoSchema.parse(request.body);
-      const conta = await contaDoDono(request);
-      response.json({
-        data: await manageImplantationPipelines.gravarCpfDoDono({ establishmentId: conta.establishmentId, cpf, uid: request.auth?.uid }),
-      });
     } catch (error) {
       next(error);
     }

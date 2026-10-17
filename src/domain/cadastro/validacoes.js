@@ -109,13 +109,6 @@ export function validarSenha(valor) {
   return senha;
 }
 
-// CPF opcional no cadastro (ordem nova de 16/10/2026): vazio passa e volta null; preenchido
-// valida como sempre. O CPF passa a ser exigido na aprovacao final da implantacao.
-export function validarCpfOpcional(valor) {
-  if (!somenteDigitos(valor)) return null;
-  return validarCpf(valor);
-}
-
 // "Sistema ERP da loja": nome da lista da especificacao, "outro" ou "nao_sei", mais o texto
 // digitado (ate 120 caracteres). Busca sem resultado grava o texto.
 export const ERPS = Object.freeze([
@@ -264,7 +257,8 @@ export function validarRascunho(passo, dados = {}) {
   throw recusa('passo', 'Passo do cadastro inválido.');
 }
 
-// Tudo do pedido de cadastro, na ordem das telas do app. Sem RG e sem data de nascimento.
+// Tudo do pedido de cadastro, na ordem das telas do app. Sem CPF (decisao do Thay de 17/10/2026:
+// nada exige CPF do dono; se vier no corpo, e ignorado), sem RG e sem data de nascimento.
 // `nome` e o "Nome real que esta na fachada" (mesma regra do nome da loja).
 export function validarPedidoDeCadastro(entrada = {}) {
   return {
@@ -272,7 +266,6 @@ export function validarPedidoDeCadastro(entrada = {}) {
     nome: validarNomeNoApp(entrada.nome),
     responsavel: {
       nome: validarNomeResponsavel(entrada.responsavel?.nome),
-      cpf: validarCpfOpcional(entrada.responsavel?.cpf),
       celular: validarCelular(entrada.responsavel?.celular),
       email: validarEmail(entrada.responsavel?.email),
     },

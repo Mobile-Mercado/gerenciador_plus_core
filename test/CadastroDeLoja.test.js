@@ -77,7 +77,7 @@ test('caminho completo: conta, Users/{uid} e loja aguardando o e-mail, sem claim
   assert.equal(usuario.userType, 'UserType.empresa');
   assert.equal(usuario.whitelabelId, 'br.com.mobile.gerenciador');
   assert.equal('rgDocument' in usuario || 'dateOfBirth' in usuario, false);
-  // Sem CPF no cadastro, o campo nao nasce.
+  // Sem CPF: o campo nao nasce.
   assert.equal('cpfDocument' in usuario, false);
 
   const loja = banco.dados(`estabelecimentos/${criado.lojaId}`);
@@ -160,18 +160,19 @@ test('CNPJ repetido nao bloqueia e marca cnpjRepetido; e-mail repetido continua 
   );
 });
 
-test('CPF opcional: preenchido valida e grava cpfDocument; ERP, endereco e instalacao validados', async () => {
+test('CPF fora do cadastro: no corpo e ignorado; ERP, endereco e instalacao validados', async () => {
   const { banco, cadastro } = montar();
-  const comCpf = await cadastro.criar(pedido({ responsavel: { ...pedido().responsavel, cpf: '529.982.247-25' } }));
-  assert.equal(banco.dados(`Users/${comCpf.uid}`).cpfDocument, '52998224725');
-  await recusa(montar().cadastro.criar(pedido({ responsavel: { ...pedido().responsavel, cpf: '111.111.111-11' } })), 'cadastro_cpf_invalido');
+  const comCpf = await cadastro.criar(pedido({ responsavel: { ...pedido().responsavel, cpf: '111.111.111-11' } }));
+  assert.equal('cpfDocument' in banco.dados(`Users/${comCpf.uid}`), false);
+  const { userReference, ...loja } = banco.dados(`estabelecimentos/${comCpf.lojaId}`);
+  assert.equal(JSON.stringify(loja).includes('11111111111'), false);
   await recusa(montar().cadastro.criar(pedido({ erp: { escolhido: 'Sistema X' } })), 'cadastro_erp_invalido');
   await recusa(montar().cadastro.criar(pedido({ endereco: { ...ENDERECO, numero: '' } })), 'cadastro_numero_invalido');
   await recusa(montar().cadastro.criar(pedido({ endereco: { ...ENDERECO, lat: undefined } })), 'cadastro_lat_invalido');
   await recusa(montar().cadastro.criar(pedido({ instalacaoId: 'curto' })), 'cadastro_instalacao_invalido');
 });
 
-test('recusas de campo: nome com emoji, CPF errado, celular sem 9, senha curta', async () => {
+test('recusas de campo: nome com emoji, celular sem 9, senha curta', async () => {
   const { cadastro } = montar();
   await recusa(cadastro.criar(pedido({ nome: 'Bom 🛒' })), 'cadastro_nome_invalido');
   await recusa(cadastro.criar(pedido({ responsavel: { ...pedido().responsavel, celular: '2733334444' } })), 'cadastro_celular_invalido');

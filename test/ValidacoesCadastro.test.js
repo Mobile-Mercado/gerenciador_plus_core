@@ -54,7 +54,7 @@ const ENDERECO = {
   cep: '29015-000', rua: 'Rua Sete', numero: '410', bairro: 'Centro', cidade: 'Vitória', uf: 'es', lat: -20.3, lng: -40.3,
 };
 
-test('pedido completo: sem RG e sem data de nascimento; CPF opcional', () => {
+test('pedido completo: sem CPF, sem RG e sem data de nascimento', () => {
   const entrada = {
     cnpj: '11.222.333/0001-81',
     nome: 'Bom Preço',
@@ -66,14 +66,13 @@ test('pedido completo: sem RG e sem data de nascimento; CPF opcional', () => {
     dataNascimento: '1990-01-01',
   };
   const pedido = validarPedidoDeCadastro(entrada);
-  assert.deepEqual(Object.keys(pedido.responsavel).sort(), ['celular', 'cpf', 'email', 'nome']);
+  // CPF no corpo e ignorado (decisao do Thay de 17/10/2026).
+  assert.deepEqual(Object.keys(pedido.responsavel).sort(), ['celular', 'email', 'nome']);
   assert.equal(pedido.cnpj, CNPJ_OK);
   assert.equal(pedido.instalacaoId, null);
   recusa(() => validarPedidoDeCadastro({ ...entrada, cnpj: '11222333000182' }), 'cadastro_cnpj_invalido');
-  recusa(() => validarPedidoDeCadastro({ ...entrada, responsavel: { ...entrada.responsavel, cpf: '52998224724' } }), 'cadastro_cpf_invalido');
-  // Sem CPF, ou com o campo vazio, o pedido passa.
-  assert.equal(validarPedidoDeCadastro({ ...entrada, responsavel: { ...entrada.responsavel, cpf: undefined } }).responsavel.cpf, null);
-  assert.equal(validarPedidoDeCadastro({ ...entrada, responsavel: { ...entrada.responsavel, cpf: '' } }).responsavel.cpf, null);
+  // CPF invalido no corpo tambem e ignorado.
+  assert.equal(validarPedidoDeCadastro({ ...entrada, responsavel: { ...entrada.responsavel, cpf: '52998224724' } }).responsavel.cpf, undefined);
 });
 
 test('ERP: nome da lista, "outro" ou "nao_sei", texto ate 120 caracteres', () => {
