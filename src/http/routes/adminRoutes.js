@@ -39,6 +39,35 @@ const listaPedidosSchema = z.object({
 const situacaoIncompletoSchema = z.object({ situacao: z.enum(['em_conversa', 'descartado', 'em_andamento']) });
 const instalacaoParamsSchema = z.object({ instalacaoId: z.string().min(8).max(100).regex(/^[A-Za-z0-9_-]+$/) });
 const recusaSchema = z.object({ motivo: z.string().max(500) });
+// Entrega da loja pelo Admin: so os campos conhecidos; o que nao vier fica como esta.
+const numero = z.number().finite().min(0).max(1000000);
+const inteiro = z.number().int().min(0).max(100000);
+const horario = z.string().regex(/^d{2}:d{2}$/);
+const entregaSchema = z.object({
+  deliveryInfo: z.object({
+    deliveryCalcType: z.enum(['DeliveryCalcType.distance', 'DeliveryCalcType.fixedValue']).optional(),
+    fixedValue: numero.optional(),
+    baseValue: numero.optional(),
+    minimumDistance: numero.optional(),
+    maximunDistance: numero.optional(),
+    valuePerKm: numero.optional(),
+    minimumDeliveryTimeInMinutes: inteiro.optional(),
+    maximumDeliveryTimeInMinutes: inteiro.optional(),
+    isConfigured: z.boolean().optional(),
+    scheduleDays: z.number().int().min(0).max(60).optional(),
+    scheduleIntervalType: z.enum(['hours', 'days']).optional(),
+    intervalTimeBetweenSchedules: inteiro.optional(),
+    maxSchedulesPerTime: inteiro.optional(),
+  }).strict().optional(),
+  minimumPriceCart: numero.optional(),
+  openingHours: z.array(z.object({
+    weekday: z.number().int().min(1).max(7),
+    isOpen: z.boolean(),
+    openingHours: horario,
+    closeHours: horario,
+  })).length(7).optional(),
+  scheduling: z.object({ contracted: z.boolean().optional(), enabled: z.boolean().optional() }).strict().optional(),
+}).strict();
 const jornadaDeEntradaSchema = z.object({
   periodo: z.coerce.number().int().refine((dias) => [7, 30, 90].includes(dias), 'Período inválido.').default(30),
   uf: z.string().length(2).optional(),
@@ -91,7 +120,7 @@ const sugestoesClientesSchema = z.object({
 
 export function createAdminRoutes({
   manageCatalogoPadrao, sugestoesDosClientes, pedidosDeLoja, lojaNoAdmin, franquias, administradores, dadosDoAdmin,
-  manageImplantationPipelines, jornadaDeEntrada = null,
+  manageImplantationPipelines, jornadaDeEntrada = null, entregaDaLoja = null,
 }) {
   const router = Router();
 
@@ -262,6 +291,19 @@ export function createAdminRoutes({
     const { tipo } = imagemAdminSchema.parse(request.params);
     response.locals.auditoria = { acao: 'imagem', tipo };
     response.json({ data: await lojaNoAdmin.trocarImagem(request.params.lojaId, tipo, request.body) });
+  }));
+
+  // Entrega da loja (cola 23.2): leitura e gravacao so dos campos enviados. O registro de quem
+  // mudou e quando vai para o adminAuditLogs e AdminAuditLogs da loja, com o valor de antes.
+  router.get('/estabelecimentos/:lojaId/entrega', asyncHandler(async (request, response) => {
+    response.json({ data: await entregaDaLoja.ler(request.params.lojaId) });
+  }));
+
+  router.patch('/estabelecimentos/:lojaId/entrega', asyncHandler(async (request, response) => {
+    const entrada = entregaSchema.parse(request.body);
+    const resultado = await entregaDaLoja.salvar(request.params.lojaId, entrada);
+    response.locals.auditoria = { acao: 'entrega', campos: resultado.campos, antes: resultado.antes };
+    response.json({ data: resultado.entrega });
   }));
 
   router.get('/estabelecimentos/:lojaId/agendamento', asyncHandler(async (request, response) => {

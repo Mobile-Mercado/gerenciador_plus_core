@@ -47,6 +47,7 @@ export function createApp({
   jornadaDoCadastro = null,
   clienteDaPlataforma = null,
   jornadaDeEntrada = null,
+  entregaDaLoja = null,
   verificarAppCheck,
   imagensDaLoja,
   pedidosDeLoja,
@@ -187,6 +188,7 @@ export function createApp({
       dadosDoAdmin,
       manageImplantationPipelines,
       jornadaDeEntrada,
+      entregaDaLoja,
     }),
   );
 

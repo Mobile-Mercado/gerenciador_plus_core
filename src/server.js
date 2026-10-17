@@ -4,6 +4,7 @@ import { GetDailyHomeOverviewUseCase } from './application/ai/GetDailyHomeOvervi
 import { GetManagerSession } from './application/auth/GetManagerSession.js';
 import { AdministradoresDaPlataforma } from './application/admin/AdministradoresDaPlataforma.js';
 import { DadosDoAdmin } from './application/admin/DadosDoAdmin.js';
+import { EntregaDaLoja } from './application/admin/EntregaDaLoja.js';
 import { JornadaDeEntrada } from './application/admin/JornadaDeEntrada.js';
 import { Franquias } from './application/admin/Franquias.js';
 import { LojaNoAdmin } from './application/admin/LojaNoAdmin.js';
@@ -121,6 +122,7 @@ const app = createApp({
   // Abertura com o app logado: reconhece o lojista que ja e cliente (corte dos acessos do Admin).
   clienteDaPlataforma: new ClienteDaPlataforma({ verificarToken: (token) => firebaseAuth.verifyIdToken(token), accessRepository }),
   jornadaDeEntrada: new JornadaDeEntrada({ firestore }),
+  entregaDaLoja: new EntregaDaLoja({ firestore }),
   verificarAppCheck: (token) => getFirebaseAppCheck().verifyToken(token),
   imagensDaLoja,
   pedidosDeLoja: new PedidosDeLoja({ firestore, auth: firebaseAuth, jornada: jornadaDoCadastro }),
