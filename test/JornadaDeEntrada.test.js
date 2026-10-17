@@ -253,6 +253,50 @@ test('leads que nao concluiram trazem erp e cidadeAcesso, os mesmos da lista ped
   assert.equal(leadsNaoConcluidos.find((lead) => lead.instalacaoId === 'inst-erp-0002').cidadeAcesso, null);
 });
 
+test('tempo no app do lead: soma das telas pela primeira entrada e a ultima marca; volta de passo conta uma vez; sem dado, null', async () => {
+  const banco = new FirestoreEmMemoria();
+  let agora = T0;
+  const jornada = new JornadaDoCadastro({
+    firestore: banco, clock: () => agora, serverTimestamp: () => new Date(agora), paraData: (ms) => new Date(ms),
+  });
+  const passo = async (instalacaoId, segundos, tipo, numero) => { agora = T0 + segundos * SEG; await jornada.registrarEvento({ instalacaoId, tipo, passo: numero }); };
+  const virarLead = async (instalacaoId, nome) => {
+    await jornada.gravarRascunho({ instalacaoId, passo: 1, dados: PASSO1(nome) });
+    await jornada.gravarRascunho({ instalacaoId, passo: 2, dados: { cnpj: '11222333000181', receita: receita('SERRA', 'ES') } });
+  };
+
+  // So para a frente: 100 s no passo 1 e 60 s no passo 2.
+  await passo('inst-tempo-ida', 0, 'entrou_passo', 1);
+  await passo('inst-tempo-ida', 100, 'saiu_passo', 1);
+  await passo('inst-tempo-ida', 100, 'entrou_passo', 2);
+  await passo('inst-tempo-ida', 160, 'saiu_passo', 2);
+  await virarLead('inst-tempo-ida', 'Ana Ida');
+
+  // Voltou do 2 para o 1 e foi de novo: passo 1 de 0 a 120 s, passo 2 de 50 a 200 s. A soma simples
+  // daria 270 s; o trecho de 50 a 120 s conta uma vez, 200 s.
+  await passo('inst-tempo-volta', 0, 'entrou_passo', 1);
+  await passo('inst-tempo-volta', 50, 'saiu_passo', 1);
+  await passo('inst-tempo-volta', 50, 'entrou_passo', 2);
+  await passo('inst-tempo-volta', 80, 'saiu_passo', 2);
+  await passo('inst-tempo-volta', 80, 'entrou_passo', 1);
+  await passo('inst-tempo-volta', 120, 'saiu_passo', 1);
+  await passo('inst-tempo-volta', 120, 'entrou_passo', 2);
+  await passo('inst-tempo-volta', 200, 'saiu_passo', 2);
+  await virarLead('inst-tempo-volta', 'Bia Volta');
+
+  // Uma entrada em cada passo e nenhuma saida: nao ha duracao para medir.
+  await passo('inst-tempo-nada', 0, 'entrou_passo', 1);
+  await passo('inst-tempo-nada', 30, 'entrou_passo', 2);
+  await virarLead('inst-tempo-nada', 'Caio Nada');
+
+  agora = T0 + 1000 * SEG;
+  const { leadsNaoConcluidos } = await new JornadaDeEntrada({ firestore: banco, clock: () => agora }).ler({ periodo: 7 });
+  const tempo = (instalacaoId) => leadsNaoConcluidos.find((lead) => lead.instalacaoId === instalacaoId).tempoNoAppSeg;
+  assert.equal(tempo('inst-tempo-ida'), 160);
+  assert.equal(tempo('inst-tempo-volta'), 200);
+  assert.equal(tempo('inst-tempo-nada'), null);
+});
+
 test('cidade do acesso: agrupa sem acento e sem maiuscula; nome da Receita quando ha par, senao iniciais maiusculas', async () => {
   const { chaveDoMunicipio, iniciaisMaiusculas } = await import('../src/domain/cadastro/municipio.js');
   assert.equal(chaveDoMunicipio('Vila Velha', 'ES'), 'vila velha - es');

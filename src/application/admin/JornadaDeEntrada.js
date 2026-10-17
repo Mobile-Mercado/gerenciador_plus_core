@@ -46,6 +46,29 @@ function media(lista) {
   return Math.round(validos.reduce((soma, valor) => soma + valor, 0) / validos.length / 1000);
 }
 
+// "Tempo no app" do lead (decisao do Thay, cola RP-4, 17/10/2026): soma do tempo em cada tela do
+// cadastro (passos 1 a 3), so com o que a jornada ja grava em passos.{n}. Tela: da primeira entrada
+// ate a ultima marca do passo (a maior entre ultimaEntrada e ultimaSaida). Trecho em que duas telas
+// se cruzam (a pessoa voltou um passo) conta uma vez so. Sem nenhuma tela com duracao, null.
+// Limite: so ha a primeira e a ultima marca de cada passo, entao o tempo com o app no fundo entre
+// elas entra na conta.
+function tempoNoAppSeg(jornada) {
+  const trechos = ['1', '2', '3'].map((passo) => {
+    const marcas = jornada.passos?.[passo] || {};
+    const inicio = emMs(marcas.primeiraEntrada);
+    const fim = Math.max(emMs(marcas.ultimaEntrada) ?? -Infinity, emMs(marcas.ultimaSaida) ?? -Infinity);
+    return inicio !== null && fim > inicio ? [inicio, fim] : null;
+  }).filter(Boolean).sort((a, b) => a[0] - b[0]);
+  let total = 0;
+  let ate = -Infinity;
+  trechos.forEach(([inicio, fim]) => {
+    if (fim <= ate) return;
+    total += fim - Math.max(inicio, ate);
+    ate = fim;
+  });
+  return total > 0 ? Math.round(total / 1000) : null;
+}
+
 // Cidade do acesso (aproximada), mandada pelo app; vem em minusculas e as vezes sem acento.
 function localDoAcesso(jornada) {
   const acesso = jornada.cidadeAcesso;
@@ -198,6 +221,7 @@ export class JornadaDeEntrada {
           razaoSocial: jornada.dados?.passo2?.receita?.razaoSocial || null,
           cidadeReceita: jornada.cidadeReceita || null,
           ufReceita: jornada.ufReceita || null,
+          tempoNoAppSeg: tempoNoAppSeg(jornada),
           atualizadoEm: emIso(jornada.atualizadoEm),
           marcadoEm: emIso(jornada.marcadoEm),
         }))
