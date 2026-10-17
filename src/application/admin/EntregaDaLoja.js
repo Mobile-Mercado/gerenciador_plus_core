@@ -1,6 +1,8 @@
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
-import { horarioDoValor, millisDoHorario, minutosDoHorario } from '../../domain/loja/horariosDaLoja.js';
+import {
+  DESLOCAMENTO_SAO_PAULO_MINUTOS, horarioDoValor, millisDoHorario, minutosDoHorario,
+} from '../../domain/loja/horariosDaLoja.js';
 
 // Entrega de qualquer loja pelo Admin (cola 23.2, 17/10/2026): deliveryInfo, minimumPriceCart,
 // openingHours, scheduling.contracted e scheduling.enabled.
@@ -21,6 +23,20 @@ export const PEDIDO_PERTO_DE_FECHAR = Object.freeze({
   nextDay: 'Passar para o dia seguinte',
 });
 export const DIAS_DA_SEMANA = Object.freeze([1, 2, 3, 4, 5, 6, 7]);
+
+// Janelas proprias por dia (cola RP-3, 17/10/2026): deliveryInfo.weekDaysDelivery, os 7 dias, no
+// formato que o getAvailablesSchedules le (mobile_old_web_platform, branch agendamento-horarios,
+// functions/src/api/schedules/available-schedules.ts) e que os apps gravam e leem (mobile_core,
+// weekday_delivery_adapter.dart e custom_interval_adapter.dart):
+//   { weekday, canDelivery, initTime, endTime, interval, maxSchedulesPerTime, scheduleIntervalType,
+//     customIntervals: [{ canDelivery, maxSchedulesPerTime, freight, init, end }] }
+// Horarios em Timestamp com data ficticia; vale so hora e minuto em Sao Paulo (-3 h). Sem
+// horario gravado para aproveitar, a data e 01/01/0001, como o app grava. O app le initTime,
+// endTime, init e end como Timestamp obrigatorio, entao todo dia vai completo. O servidor de
+// agendamento usa customIntervals quando o dia tem janelas; sem elas, os horarios da loja.
+// A lista vai inteira numa gravacao so (deliveryInfo.weekDaysDelivery), nunca item a item.
+// weekdaysDelivery (d minusculo) e o nome antigo, lido so quando falta o novo (como o app).
+const INICIO_DO_ANO_1 = -62135596800000; // 0001-01-01T00:00:00Z
 
 function recusa(mensagem, code, statusCode = 400) {
   return new AppError(mensagem, { statusCode, code });
@@ -53,6 +69,33 @@ function conferirPares(enviado, gravado) {
 
 function diaGravado(atuais, weekday, indice) {
   return atuais.find((item) => Number(item?.weekday) === weekday) || atuais[indice] || {};
+}
+
+function janelasGravadas(deliveryInfo) {
+  const lista = deliveryInfo?.weekDaysDelivery ?? deliveryInfo?.weekdaysDelivery;
+  return Array.isArray(lista) ? lista : [];
+}
+
+// Janelas por dia como a tela edita: horarios em "HH:mm". Sem lista gravada, null.
+function janelasParaATela(deliveryInfo) {
+  const gravadas = janelasGravadas(deliveryInfo);
+  if (!gravadas.length) return null;
+  return [...gravadas].sort((a, b) => Number(a?.weekday) - Number(b?.weekday)).map((dia) => ({
+    weekday: Number(dia?.weekday) || null,
+    canDelivery: dia?.canDelivery !== false,
+    initTime: horarioDoValor(dia?.initTime),
+    endTime: horarioDoValor(dia?.endTime),
+    interval: Number.isFinite(dia?.interval) ? dia.interval : null,
+    maxSchedulesPerTime: Number.isFinite(dia?.maxSchedulesPerTime) ? dia.maxSchedulesPerTime : null,
+    scheduleIntervalType: dia?.scheduleIntervalType || 'hours',
+    customIntervals: (Array.isArray(dia?.customIntervals) ? dia.customIntervals : []).map((janela) => ({
+      init: horarioDoValor(janela?.init),
+      end: horarioDoValor(janela?.end),
+      freight: typeof janela?.freight === 'number' ? janela.freight : null,
+      maxSchedulesPerTime: Number.isFinite(janela?.maxSchedulesPerTime) ? janela.maxSchedulesPerTime : null,
+      canDelivery: janela?.canDelivery !== false,
+    })),
+  }));
 }
 
 export class EntregaDaLoja {
@@ -90,10 +133,15 @@ export class EntregaDaLoja {
       if (entrada.deliveryInfo) {
         const existente = atual.deliveryInfo && typeof atual.deliveryInfo === 'object' ? atual.deliveryInfo : {};
         conferirPares(entrada.deliveryInfo, existente);
-        Object.entries(entrada.deliveryInfo).forEach(([campo, valor]) => {
+        const { weekDaysDelivery, ...campos } = entrada.deliveryInfo;
+        Object.entries(campos).forEach(([campo, valor]) => {
           mudancas[`deliveryInfo.${campo}`] = valor;
           antes[`deliveryInfo.${campo}`] = existente[campo] ?? null;
         });
+        if (weekDaysDelivery) {
+          mudancas['deliveryInfo.weekDaysDelivery'] = this.janelasParaGravar(weekDaysDelivery, janelasGravadas(existente));
+          antes['deliveryInfo.weekDaysDelivery'] = janelasParaATela(existente);
+        }
         // Espelhos que o painel mantem quando o mapa ja os tem.
         if (entrada.deliveryInfo.deliveryCalcType && Object.hasOwn(existente, 'deliveryType')) {
           mudancas['deliveryInfo.deliveryType'] = entrada.deliveryInfo.deliveryCalcType === 'DeliveryCalcType.fixedValue' ? 'fixed' : 'distance';
@@ -173,14 +221,83 @@ export class EntregaDaLoja {
       };
     });
   }
+
+  // Os 7 dias de weekDaysDelivery, completos. Campo do dia que a tela nao conhece fica como esta
+  // gravado; as janelas do dia sao as enviadas, na ordem do horario.
+  janelasParaGravar(dias, gravados) {
+    const porDia = new Map(dias.map((dia) => [dia.weekday, dia]));
+    if (porDia.size !== 7 || !DIAS_DA_SEMANA.every((weekday) => porDia.has(weekday))) {
+      throw recusa('Envie os 7 dias da semana, de segunda (1) a domingo (7).', 'entrega_janelas_incompletas');
+    }
+    const instante = (horario, original) => {
+      const alvo = minutosDoHorario(horario);
+      if (alvo === null) throw recusa('Informe os horários no formato HH:mm.', 'entrega_janela_invalida');
+      if (minutosDoHorario(original) === alvo) return original;
+      const millis = minutosDoHorario(original) === null
+        ? INICIO_DO_ANO_1 + (alvo - DESLOCAMENTO_SAO_PAULO_MINUTOS) * 60000
+        : millisDoHorario(horario, original);
+      return this.paraTimestamp(millis);
+    };
+    return DIAS_DA_SEMANA.map((weekday, indice) => {
+      const dia = porDia.get(weekday);
+      const gravado = diaGravado(gravados, weekday, indice);
+      const inicio = minutosDoHorario(dia.initTime);
+      const fim = minutosDoHorario(dia.endTime);
+      if (inicio === null || fim === null || (dia.canDelivery && inicio >= fim)) {
+        throw recusa('O fim da entrega do dia precisa ser depois do início.', 'entrega_janela_invalida');
+      }
+      const janelasGravadasDoDia = Array.isArray(gravado.customIntervals) ? gravado.customIntervals : [];
+      const janelas = [...dia.customIntervals]
+        .sort((a, b) => minutosDoHorario(a.init) - minutosDoHorario(b.init))
+        .map((janela, posicao) => {
+          const comeca = minutosDoHorario(janela.init);
+          const termina = minutosDoHorario(janela.end);
+          if (comeca === null || termina === null || comeca >= termina) {
+            throw recusa('Cada janela precisa terminar depois de começar.', 'entrega_janela_invalida');
+          }
+          const original = janelasGravadasDoDia[posicao] || {};
+          return {
+            canDelivery: janela.canDelivery,
+            maxSchedulesPerTime: janela.maxSchedulesPerTime,
+            freight: janela.freight ?? null,
+            init: instante(janela.init, original.init),
+            end: instante(janela.end, original.end),
+          };
+        });
+      // Janelas que entregam nao podem se cruzar no mesmo dia (a vaga de uma invadiria a outra).
+      const ativas = janelas.filter((janela) => janela.canDelivery);
+      ativas.slice(1).forEach((janela, posicao) => {
+        if (minutosDoHorario(janela.init) < minutosDoHorario(ativas[posicao].end)) {
+          throw recusa('As janelas do mesmo dia não podem se sobrepor.', 'entrega_janelas_sobrepostas');
+        }
+      });
+      return {
+        ...gravado,
+        weekday,
+        canDelivery: dia.canDelivery,
+        initTime: instante(dia.initTime, gravado.initTime),
+        endTime: instante(dia.endTime, gravado.endTime),
+        interval: dia.interval,
+        maxSchedulesPerTime: dia.maxSchedulesPerTime,
+        scheduleIntervalType: dia.scheduleIntervalType || gravado.scheduleIntervalType || 'hours',
+        customIntervals: janelas,
+      };
+    });
+  }
 }
 
-// Entrega como a tela do Admin edita: deliveryInfo como esta gravado e os horarios em "HH:mm".
+// Entrega como a tela do Admin edita: deliveryInfo como esta gravado, com weekDaysDelivery e os
+// horarios da loja em "HH:mm".
 function paraATela(lojaId, data) {
   const atuais = Array.isArray(data.openingHours) ? data.openingHours : [];
+  let deliveryInfo = null;
+  if (data.deliveryInfo) {
+    const { weekdaysDelivery: _nomeAntigo, ...resto } = data.deliveryInfo;
+    deliveryInfo = { ...resto, weekDaysDelivery: janelasParaATela(data.deliveryInfo) };
+  }
   return {
     lojaId,
-    deliveryInfo: data.deliveryInfo || null,
+    deliveryInfo,
     minimumPriceCart: data.minimumPriceCart ?? null,
     openingHours: DIAS_DA_SEMANA.map((weekday, indice) => {
       const gravado = diaGravado(atuais, weekday, indice);

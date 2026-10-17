@@ -212,3 +212,146 @@ test('prazo minimo menor que o maximo e distancia incluida ate a maxima, contra 
   const vazia = montar({ deliveryInfo: {} });
   await vazia.entrega.salvar('loja-gs', { deliveryInfo: { minimumDeliveryTimeInMinutes: 500 } });
 });
+
+// Janelas por dia como o app grava (mobile_core weekday_delivery_adapter.dart): Timestamp em
+// 01/01/0001, hora de Sao Paulo (-3 h). No banco em memoria, Date.
+const ANO_1 = -62135596800000;
+const ano1 = (hora, minuto = 0) => new Date(ANO_1 + ((hora + 3) * 60 + minuto) * 60000);
+const diaDoApp = (weekday) => ({
+  weekday,
+  canDelivery: weekday !== 7,
+  initTime: ano1(8),
+  endTime: ano1(20),
+  interval: 4,
+  maxSchedulesPerTime: 4,
+  scheduleIntervalType: 'hours',
+  customIntervals: weekday === 1 ? [
+    { canDelivery: true, maxSchedulesPerTime: 4, freight: null, init: ano1(8), end: ano1(12) },
+    { canDelivery: true, maxSchedulesPerTime: 2, freight: 5.5, init: ano1(14), end: ano1(18) },
+  ] : [],
+});
+const JANELAS_DO_APP = [1, 2, 3, 4, 5, 6, 7].map(diaDoApp);
+// Minuto do dia como o getAvailablesSchedules le (available-schedules.ts, minuteOfDayOfTimestamp).
+const minutoDoServidor = (instante) => {
+  const dia = 24 * 60 * 60000;
+  return Math.floor(((((instante.getTime() - 3 * 60 * 60000) % dia) + dia) % dia) / 60000);
+};
+const janelasDaTela = (mudar = () => ({})) => [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({
+  weekday,
+  canDelivery: weekday !== 7,
+  initTime: '08:00',
+  endTime: '20:00',
+  interval: 4,
+  maxSchedulesPerTime: 4,
+  customIntervals: weekday === 1 ? [
+    { init: '08:00', end: '12:00', freight: null, maxSchedulesPerTime: 4, canDelivery: true },
+    { init: '14:00', end: '18:00', freight: 5.5, maxSchedulesPerTime: 2, canDelivery: true },
+  ] : [],
+  ...mudar(weekday),
+}));
+const janela = (init, end, canDelivery = true) => ({ init, end, freight: null, maxSchedulesPerTime: 1, canDelivery });
+
+test('janelas por dia: o GET devolve weekDaysDelivery em HH:mm; nome antigo so sem o novo; sem lista, null', async () => {
+  const { entrega } = montar({ deliveryInfo: { ...DELIVERY_INFO, weekDaysDelivery: JANELAS_DO_APP } });
+  const lida = await entrega.ler('loja-gs');
+  assert.deepEqual(lida.deliveryInfo.weekDaysDelivery[0], {
+    weekday: 1, canDelivery: true, initTime: '08:00', endTime: '20:00', interval: 4, maxSchedulesPerTime: 4, scheduleIntervalType: 'hours',
+    customIntervals: [
+      { init: '08:00', end: '12:00', freight: null, maxSchedulesPerTime: 4, canDelivery: true },
+      { init: '14:00', end: '18:00', freight: 5.5, maxSchedulesPerTime: 2, canDelivery: true },
+    ],
+  });
+  assert.equal(lida.deliveryInfo.weekDaysDelivery[6].canDelivery, false);
+  assert.equal(lida.deliveryInfo.fretePorBairro.centro, 4, 'o resto do deliveryInfo vem como esta');
+
+  const antiga = montar({ deliveryInfo: { weekdaysDelivery: JANELAS_DO_APP } });
+  const daAntiga = (await antiga.entrega.ler('loja-gs')).deliveryInfo;
+  assert.equal(daAntiga.weekDaysDelivery.length, 7);
+  assert.equal(Object.hasOwn(daAntiga, 'weekdaysDelivery'), false);
+  assert.equal((await montar().entrega.ler('loja-gs')).deliveryInfo.weekDaysDelivery, null);
+});
+
+test('janelas por dia: o PATCH grava a lista inteira de uma vez, completa, no formato do app e do servidor', async () => {
+  const comCampoDoApp = JANELAS_DO_APP.map((dia) => ({ ...dia, campoDoApp: `dia-${dia.weekday}` }));
+  const { banco, entrega } = montar({ deliveryInfo: { ...DELIVERY_INFO, weekDaysDelivery: comCampoDoApp } });
+  const resultado = await entrega.salvar('loja-gs', {
+    deliveryInfo: {
+      weekDaysDelivery: janelasDaTela((weekday) => {
+        if (weekday === 1) {
+          return { customIntervals: [
+            { init: '19:00', end: '22:30', freight: 7, maxSchedulesPerTime: 3, canDelivery: true },
+            { init: '08:00', end: '12:00', freight: null, maxSchedulesPerTime: 4, canDelivery: true },
+          ] };
+        }
+        return weekday === 2 ? { initTime: '09:30', endTime: '17:00' } : {};
+      }),
+    },
+  });
+  const ultima = banco.escritas.at(-1);
+  assert.deepEqual(Object.keys(ultima.dados).sort(), ['deliveryInfo.weekDaysDelivery', 'updatedAt'], 'uma gravacao so, a lista inteira');
+  const loja = banco.dados('estabelecimentos/loja-gs');
+  assert.deepEqual(loja.deliveryInfo.fretePorBairro, { centro: 4, praia: 9 });
+  const [segunda, terca] = loja.deliveryInfo.weekDaysDelivery;
+  assert.equal(loja.deliveryInfo.weekDaysDelivery.length, 7);
+  assert.equal(segunda.campoDoApp, 'dia-1', 'campo do dia que a tela nao conhece fica');
+  assert.equal(segunda.initTime.getTime(), comCampoDoApp[0].initTime.getTime(), 'horario sem mudanca fica com o mesmo instante');
+  assert.deepEqual(
+    segunda.customIntervals.map((item) => [minutoDoServidor(item.init), minutoDoServidor(item.end), item.freight, item.maxSchedulesPerTime]),
+    [[8 * 60, 12 * 60, null, 4], [19 * 60, 22 * 60 + 30, 7, 3]],
+    'janelas na ordem do horario',
+  );
+  assert.deepEqual(Object.keys(segunda.customIntervals[0]), ['canDelivery', 'maxSchedulesPerTime', 'freight', 'init', 'end']);
+  assert.equal(minutoDoServidor(terca.initTime), 9 * 60 + 30);
+  assert.equal(minutoDoServidor(terca.endTime), 17 * 60);
+  assert.equal(terca.scheduleIntervalType, 'hours');
+  assert.equal(resultado.antes['deliveryInfo.weekDaysDelivery'][1].initTime, '08:00');
+  assert.equal(resultado.entrega.deliveryInfo.weekDaysDelivery[1].initTime, '09:30');
+
+  // Loja sem lista: todo dia nasce completo, com a data do app (01/01/0001).
+  const nova = montar();
+  await nova.entrega.salvar('loja-gs', { deliveryInfo: { weekDaysDelivery: janelasDaTela() } });
+  const dias = nova.banco.dados('estabelecimentos/loja-gs').deliveryInfo.weekDaysDelivery;
+  assert.equal(dias[0].initTime.getTime(), ano1(8).getTime());
+  assert.equal(dias[0].customIntervals[1].end.getTime(), ano1(18).getTime());
+  dias.forEach((dia) => assert.deepEqual(Object.keys(dia).sort(),
+    ['canDelivery', 'customIntervals', 'endTime', 'initTime', 'interval', 'maxSchedulesPerTime', 'scheduleIntervalType', 'weekday']));
+});
+
+test('janelas por dia: 7 dias, fim depois do inicio e janelas que entregam sem se cruzar', async () => {
+  const { banco, entrega } = montar({ deliveryInfo: { ...DELIVERY_INFO, weekDaysDelivery: JANELAS_DO_APP } });
+  const recusa = (weekDaysDelivery, codigo) => assert.rejects(
+    entrega.salvar('loja-gs', { deliveryInfo: { weekDaysDelivery } }),
+    (erro) => erro.code === codigo && erro.statusCode === 400,
+  );
+  await recusa(janelasDaTela().slice(0, 6), 'entrega_janelas_incompletas');
+  await recusa(janelasDaTela((weekday) => (weekday === 7 ? { weekday: 1 } : {})), 'entrega_janelas_incompletas');
+  await recusa(janelasDaTela((weekday) => (weekday === 3 ? { initTime: '20:00', endTime: '08:00' } : {})), 'entrega_janela_invalida');
+  await recusa(janelasDaTela((weekday) => (weekday === 1 ? { customIntervals: [janela('12:00', '12:00')] } : {})), 'entrega_janela_invalida');
+  await recusa(janelasDaTela((weekday) => (weekday === 1 ? { customIntervals: [janela('08:00', '12:00'), janela('11:00', '14:00')] } : {})),
+    'entrega_janelas_sobrepostas');
+  assert.deepEqual(banco.dados('estabelecimentos/loja-gs').deliveryInfo.weekDaysDelivery, JANELAS_DO_APP, 'recusa nao grava nada');
+
+  // Dia sem entrega aceita horario invertido; janela desligada pode cruzar com outra.
+  await entrega.salvar('loja-gs', { deliveryInfo: { weekDaysDelivery: janelasDaTela((weekday) => {
+    if (weekday === 7) return { initTime: '20:00', endTime: '08:00' };
+    return weekday === 1 ? { customIntervals: [janela('08:00', '12:00'), janela('11:00', '14:00', false)] } : {};
+  }) } });
+  assert.equal(banco.dados('estabelecimentos/loja-gs').deliveryInfo.weekDaysDelivery[0].customIntervals.length, 2);
+});
+
+test('rota PATCH /entrega: weekDaysDelivery so com os 7 dias e os campos do formato', async () => {
+  await comRotaDaEntrega(async ({ patch, ler, banco }) => {
+    const enviar = (mudar) => patch({ deliveryInfo: { weekDaysDelivery: janelasDaTela(mudar) } });
+    assert.equal((await patch({ deliveryInfo: { weekDaysDelivery: janelasDaTela().slice(0, 6) } })).status, 400);
+    assert.equal((await enviar((weekday) => (weekday === 2 ? { initTime: '8:00' } : {}))).status, 400);
+    assert.equal((await enviar((weekday) => (weekday === 2 ? { extra: 1 } : {}))).status, 400);
+    assert.equal((await enviar((weekday) => (weekday === 1 ? { customIntervals: [{ init: '08:00', end: '09:00' }] } : {}))).status, 400);
+    assert.equal((await enviar((weekday) => (weekday === 1 ? { maxSchedulesPerTime: 0 } : {}))).status, 400);
+    assert.equal(banco.dados('estabelecimentos/loja-gs').deliveryInfo.weekDaysDelivery, undefined);
+    const ok = await patch({ deliveryInfo: { weekDaysDelivery: janelasDaTela(), valuePerKm: 2 } });
+    assert.equal(ok.status, 200);
+    const lida = (await ler()).data.deliveryInfo;
+    assert.equal(lida.weekDaysDelivery[0].customIntervals[1].freight, 5.5);
+    assert.equal(lida.valuePerKm, 2);
+  });
+});
