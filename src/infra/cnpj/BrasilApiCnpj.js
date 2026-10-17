@@ -1,7 +1,7 @@
 // Consulta do CNPJ na BrasilAPI (dados publicos da Receita). Tres respostas possiveis:
-// { encontrado: true, ativa, razaoSocial, endereco }, { encontrado: false } quando a Receita
-// nao conhece o numero, ou null quando a consulta falhou (rede, prazo, servico fora). Quem chama
-// decide: falha segue o cadastro com cnpjConferido false.
+// { encontrado: true, ativa, razaoSocial, nomeFantasia, endereco }, { encontrado: false } quando
+// a Receita nao conhece o numero, ou null quando a consulta falhou (rede, prazo, servico fora).
+// Quem chama decide: nenhuma das tres bloqueia o cadastro (ordem nova de 16/10/2026).
 const PRAZO_MS = 6000;
 
 export class BrasilApiCnpj {
@@ -38,6 +38,8 @@ export function lerEmpresa(dados = {}) {
     ativa: situacao === 'ATIVA' || Number(dados.situacao_cadastral) === 2,
     situacao: situacao || null,
     razaoSocial: String(dados.razao_social || '').trim() || null,
+    // A folha do endereco do app preenche o "Nome real que esta na fachada" com ele.
+    nomeFantasia: String(dados.nome_fantasia || '').trim() || null,
     endereco: {
       street: logradouro || null,
       number: String(dados.numero || '').trim() || null,

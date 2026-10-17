@@ -20,11 +20,27 @@ const RECEITA_ATIVA = lerEmpresa({
   cep: '29015000',
 });
 
+const ENDERECO = {
+  cep: '29015-000',
+  rua: 'Rua Sete de Setembro',
+  numero: '410',
+  complemento: 'Loja 2',
+  bairro: 'Centro',
+  cidade: 'Vitória',
+  uf: 'ES',
+  referencia: 'Em frente à praça',
+  lat: -20.3194,
+  lng: -40.3378,
+};
+
 function pedido(mudancas = {}) {
   return {
     cnpj: '11.222.333/0001-81',
     nome: 'Bom Preço',
-    responsavel: { nome: 'Ana Paula', cpf: '529.982.247-25', celular: '(27) 99876-5432', email: 'ana@bompreco.com.br' },
+    responsavel: { nome: 'Ana Paula', celular: '(27) 99876-5432', email: 'ana@bompreco.com.br' },
+    erp: { escolhido: 'Linear', texto: null },
+    endereco: ENDERECO,
+    instalacaoId: 'inst-abc-12345',
     senha: 'senha-forte',
     ...mudancas,
   };
@@ -40,6 +56,7 @@ function montar({ dados = {}, contas = [], receita = RECEITA_ATIVA, firestore = 
     limites: new LimiteDeTentativas({ firestore: banco, clock: () => 1_000_000, paraData: (ms) => new Date(ms) }),
     imagens,
     serverTimestamp: () => new Date('2026-10-13T12:00:00Z'),
+    pontoNoMapa: (latitude, longitude) => ({ latitude, longitude }),
   });
   return { banco, auth, cadastro };
 }
@@ -60,13 +77,26 @@ test('caminho completo: conta, Users/{uid} e loja aguardando o e-mail, sem claim
   assert.equal(usuario.userType, 'UserType.empresa');
   assert.equal(usuario.whitelabelId, 'br.com.mobile.gerenciador');
   assert.equal('rgDocument' in usuario || 'dateOfBirth' in usuario, false);
+  // Sem CPF no cadastro, o campo nao nasce.
+  assert.equal('cpfDocument' in usuario, false);
 
   const loja = banco.dados(`estabelecimentos/${criado.lojaId}`);
   assert.equal(loja.name, 'Bom Preço');
   assert.equal(loja.razaoSocial, 'MERCADO BOM PRECO LTDA');
   assert.equal(loja.cnpj, CNPJ);
   assert.equal(loja.cnpjConferido, true);
-  assert.equal(loja.address.city, 'VITORIA');
+  // Endereco confirmado no mapa, no formato das lojas existentes; o da Receita fica a parte.
+  assert.deepEqual(loja.address.position, { latitude: -20.3194, longitude: -40.3378 });
+  assert.equal(loja.address.city, 'Vitória');
+  assert.equal(loja.address.number, '410');
+  assert.equal(loja.address.zipCode, '29015000');
+  assert.equal(loja.address.reference, 'Em frente à praça');
+  assert.equal(loja.address.fullAddress, 'Rua Sete de Setembro, 410, Centro, Vitória - ES');
+  assert.equal(loja.enderecoReceita.city, 'VITORIA');
+  assert.deepEqual(loja.erp, { escolhido: 'Linear', texto: null });
+  assert.equal(loja.instalacaoId, 'inst-abc-12345');
+  assert.equal(loja.cnpjRepetido, false);
+  assert.equal(loja.cnpjAtivo, true);
   assert.equal(loja.phone, '27998765432');
   assert.equal(loja.isActive, false);
   assert.equal(loja.status, 'aguardando_email');
@@ -93,30 +123,57 @@ test('consulta da Receita que falhou segue com cnpjConferido false', async () =>
   assert.equal(banco.dados(`estabelecimentos/${criado.lojaId}`).razaoSocial, null);
 });
 
-test('recusas: CNPJ inativo, desconhecido, ja usado e e-mail ja usado', async () => {
-  await recusa(montar({ receita: { encontrado: true, ativa: false, situacao: 'BAIXADA' } }).cadastro.criar(pedido()), 'cadastro_cnpj_inativo');
-  await recusa(montar({ receita: { encontrado: false } }).cadastro.criar(pedido()), 'cadastro_cnpj_inativo');
-  await recusa(
-    montar({ dados: { 'estabelecimentos/antiga': { cpfOrCnpj: '11.222.333/0001-81' } } }).cadastro.criar(pedido()),
-    'cadastro_cnpj_em_uso',
-  );
-  await recusa(
-    montar({ dados: { 'estabelecimentos/pedido': { cnpj: CNPJ, status: 'em_analise' } } }).cadastro.criar(pedido()),
-    'cadastro_cnpj_em_uso',
-  );
-  // Pedido recusado nao prende o CNPJ.
-  const recusado = await montar({ dados: { 'estabelecimentos/velho': { cnpj: CNPJ, status: 'recusada' } } }).cadastro.criar(pedido());
-  assert.equal(recusado.status, 'aguardando_email');
-  await recusa(
+test('CNPJ inativo ou desconhecido na Receita nao bloqueia: o pedido guarda a situacao', async () => {
+  const inativo = montar({ receita: { encontrado: true, ativa: false, situacao: 'BAIXADA', razaoSocial: 'X LTDA', endereco: null } });
+  const criadoInativo = await inativo.cadastro.criar(pedido());
+  const lojaInativa = inativo.banco.dados(`estabelecimentos/${criadoInativo.lojaId}`);
+  assert.equal(lojaInativa.cnpjConferido, true);
+  assert.equal(lojaInativa.cnpjAtivo, false);
+  assert.equal(lojaInativa.cnpjSituacao, 'BAIXADA');
+
+  const desconhecido = montar({ receita: { encontrado: false } });
+  const criadoDesconhecido = await desconhecido.cadastro.criar(pedido());
+  assert.equal(desconhecido.banco.dados(`estabelecimentos/${criadoDesconhecido.lojaId}`).cnpjAtivo, false);
+
+  const consulta = await inativo.cadastro.consultarCnpj('11.222.333/0001-81');
+  assert.equal(consulta.encontrado, true);
+  assert.equal(consulta.ativa, false);
+  assert.equal('cnpjRepetido' in consulta, false, 'a consulta publica nao diz se o CNPJ ja tem loja');
+});
+
+test('CNPJ repetido nao bloqueia e marca cnpjRepetido; e-mail repetido continua bloqueando', async () => {
+  const antiga = montar({ dados: { 'estabelecimentos/antiga': { cpfOrCnpj: '11.222.333/0001-81' } } });
+  const criado = await antiga.cadastro.criar(pedido());
+  const loja = antiga.banco.dados(`estabelecimentos/${criado.lojaId}`);
+  assert.equal(criado.cnpjRepetido, true);
+  assert.equal(loja.cnpjRepetido, true);
+  assert.deepEqual(loja.lojasComOMesmoCnpj, ['antiga']);
+
+  const emAnalise = montar({ dados: { 'estabelecimentos/pedido': { cnpj: CNPJ, status: 'em_analise' } } });
+  assert.equal((await emAnalise.cadastro.criar(pedido())).cnpjRepetido, true);
+  const recusado = montar({ dados: { 'estabelecimentos/velho': { cnpj: CNPJ, status: 'recusada' } } });
+  assert.equal((await recusado.cadastro.criar(pedido())).cnpjRepetido, true);
+
+  await assert.rejects(
     montar({ contas: [{ uid: 'outro', email: 'ana@bompreco.com.br' }] }).cadastro.criar(pedido()),
-    'cadastro_email_em_uso',
+    (erro) => erro.code === 'cadastro_email_em_uso' && erro.statusCode === 409 && /já tem cadastro/.test(erro.message),
   );
+});
+
+test('CPF opcional: preenchido valida e grava cpfDocument; ERP, endereco e instalacao validados', async () => {
+  const { banco, cadastro } = montar();
+  const comCpf = await cadastro.criar(pedido({ responsavel: { ...pedido().responsavel, cpf: '529.982.247-25' } }));
+  assert.equal(banco.dados(`Users/${comCpf.uid}`).cpfDocument, '52998224725');
+  await recusa(montar().cadastro.criar(pedido({ responsavel: { ...pedido().responsavel, cpf: '111.111.111-11' } })), 'cadastro_cpf_invalido');
+  await recusa(montar().cadastro.criar(pedido({ erp: { escolhido: 'Sistema X' } })), 'cadastro_erp_invalido');
+  await recusa(montar().cadastro.criar(pedido({ endereco: { ...ENDERECO, numero: '' } })), 'cadastro_numero_invalido');
+  await recusa(montar().cadastro.criar(pedido({ endereco: { ...ENDERECO, lat: undefined } })), 'cadastro_lat_invalido');
+  await recusa(montar().cadastro.criar(pedido({ instalacaoId: 'curto' })), 'cadastro_instalacao_invalido');
 });
 
 test('recusas de campo: nome com emoji, CPF errado, celular sem 9, senha curta', async () => {
   const { cadastro } = montar();
   await recusa(cadastro.criar(pedido({ nome: 'Bom 🛒' })), 'cadastro_nome_invalido');
-  await recusa(cadastro.criar(pedido({ responsavel: { ...pedido().responsavel, cpf: '111.111.111-11' } })), 'cadastro_cpf_invalido');
   await recusa(cadastro.criar(pedido({ responsavel: { ...pedido().responsavel, celular: '2733334444' } })), 'cadastro_celular_invalido');
   await recusa(cadastro.criar(pedido({ senha: 'curta' })), 'cadastro_senha_invalido');
 });
@@ -124,7 +181,7 @@ test('recusas de campo: nome com emoji, CPF errado, celular sem 9, senha curta',
 test('limite de tentativas por CNPJ, guardado com hash e campo de expiracao', async () => {
   const { banco, cadastro } = montar({ receita: { encontrado: true, ativa: false } });
   for (let tentativa = 0; tentativa < 5; tentativa += 1) {
-    await recusa(cadastro.criar(pedido({ responsavel: { ...pedido().responsavel, email: `a${tentativa}@bp.com.br` } }), { ip: `10.0.0.${tentativa}` }), 'cadastro_cnpj_inativo');
+    await cadastro.criar(pedido({ responsavel: { ...pedido().responsavel, email: `a${tentativa}@bp.com.br` } }), { ip: `10.0.0.${tentativa}` });
   }
   await recusa(cadastro.criar(pedido(), { ip: '10.0.0.99' }), 'cadastro_tentativas_excedidas');
   const contador = banco.dados(`limitesCadastro/${chaveDoLimite('cnpj', CNPJ)}`);
@@ -290,10 +347,10 @@ test('C3.1: limite por IP de 5 tentativas por dia; CNPJ e e-mail como estavam', 
     return base + primeiro + digito([...numeros, primeiro], [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
   };
   for (let tentativa = 0; tentativa < 5; tentativa += 1) {
-    await recusa(cadastro.consultarCnpj(cnpjValido(`1122233300${10 + tentativa}`), { ip: '200.9.9.9' }), 'cadastro_cnpj_inativo');
+    assert.equal((await cadastro.consultarCnpj(cnpjValido(`1122233300${10 + tentativa}`), { ip: '200.9.9.9' })).ativa, false);
   }
   await recusa(cadastro.consultarCnpj(cnpjValido('112223330099'), { ip: '200.9.9.9' }), 'cadastro_tentativas_excedidas');
-  await recusa(cadastro.consultarCnpj(cnpjValido('112223330098'), { ip: '200.9.9.10' }), 'cadastro_cnpj_inativo');
+  assert.equal((await cadastro.consultarCnpj(cnpjValido('112223330098'), { ip: '200.9.9.10' })).ativa, false);
 });
 
 test('C3.2 (temporario): registro do X-Forwarded-For so com quantidade e posicoes do Google, nunca os IPs', async () => {

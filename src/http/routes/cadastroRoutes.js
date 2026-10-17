@@ -7,15 +7,36 @@ import { logger } from '../../infra/logger/logger.js';
 // Cadastro de loja pelo app gerenciador. POST /loja e POST /loja/cnpj sao publicas (sem login),
 // com limite de tentativas por IP, CNPJ e e-mail contado no Firestore e App Check preparado.
 // As demais exigem o login da conta criada no cadastro.
+// Formato do que chega; as regras de cada campo ficam em domain/cadastro/validacoes.js.
+const erpSchema = z.object({
+  escolhido: z.string().max(60),
+  texto: z.string().max(200).nullish(),
+});
+const enderecoSchema = z.object({
+  cep: z.string().max(16).nullish(),
+  rua: z.string().max(200),
+  numero: z.string().max(40).nullish(),
+  complemento: z.string().max(200).nullish(),
+  bairro: z.string().max(200).nullish(),
+  cidade: z.string().max(200),
+  uf: z.string().max(4),
+  referencia: z.string().max(200).nullish(),
+  lat: z.number(),
+  lng: z.number(),
+});
 const pedidoSchema = z.object({
   cnpj: z.string().max(32),
+  // "Nome real que esta na fachada".
   nome: z.string().max(200),
   responsavel: z.object({
     nome: z.string().max(200),
-    cpf: z.string().max(32),
+    cpf: z.string().max(32).nullish(),
     celular: z.string().max(32),
     email: z.string().max(320),
   }),
+  erp: erpSchema,
+  endereco: enderecoSchema,
+  instalacaoId: z.string().max(120).nullish(),
   senha: z.string().max(200),
 });
 const cnpjSchema = z.object({ cnpj: z.string().max(32) });

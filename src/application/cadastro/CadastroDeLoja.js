@@ -1,4 +1,4 @@
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, GeoPoint } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 import { formatarCnpj, validarCnpj, validarPedidoDeCadastro } from '../../domain/cadastro/validacoes.js';
 import { logger } from '../../infra/logger/logger.js';
@@ -21,8 +21,9 @@ export const STATUS_DO_CADASTRO = Object.freeze([STATUS.AGUARDANDO_EMAIL, STATUS
 export const WHITELABEL_GERENCIADOR = 'br.com.mobile.gerenciador';
 export const ORIGEM_APP_GERENCIADOR = 'app_gerenciador';
 
+// O app mostra a tela E5: "Este e-mail já tem cadastro. Entrar".
 function emailJaUsado() {
-  return new AppError('Este e-mail já tem conta. Entre com ele ou use outro e-mail.', {
+  return new AppError('Este e-mail já tem cadastro. Entre com ele.', {
     statusCode: 409,
     code: 'cadastro_email_em_uso',
     details: { campo: 'email' },
@@ -37,7 +38,13 @@ function enderecoCompleto(endereco = {}) {
 
 export class CadastroDeLoja {
   constructor({
-    firestore, auth, consultaCnpj, limites = null, imagens = null, serverTimestamp = () => FieldValue.serverTimestamp(),
+    firestore,
+    auth,
+    consultaCnpj,
+    limites = null,
+    imagens = null,
+    serverTimestamp = () => FieldValue.serverTimestamp(),
+    pontoNoMapa = (lat, lng) => new GeoPoint(lat, lng),
   }) {
     this.firestore = firestore;
     this.auth = auth;
@@ -45,11 +52,14 @@ export class CadastroDeLoja {
     this.limites = limites;
     this.imagens = imagens;
     this.serverTimestamp = serverTimestamp;
+    this.pontoNoMapa = pontoNoMapa;
   }
 
-  // CNPJ unico: recusa se ja existe loja ou pedido nao recusado com ele. Lojas antigas guardam
-  // o CNPJ formatado em cpfOrCnpj (ou cpfOrCpnf); as novas, so os digitos em cnpj.
-  async assertCnpjLivre(cnpj) {
+  // CNPJ repetido nao bloqueia mais o cadastro (ordem nova de 16/10/2026): devolve as lojas e
+  // pedidos com o mesmo CNPJ, recusados inclusive, para o pedido guardar cnpjRepetido e o Admin
+  // ver. Lojas antigas guardam o CNPJ formatado em cpfOrCnpj (ou cpfOrCpnf); as novas, so os
+  // digitos em cnpj.
+  async lojasComOCnpj(cnpj) {
     const lojas = this.firestore.collection('estabelecimentos');
     const consultas = [
       lojas.where('cnpj', '==', cnpj),
@@ -58,14 +68,7 @@ export class CadastroDeLoja {
       lojas.where('cpfOrCpnf', '==', formatarCnpj(cnpj)),
     ];
     const resultados = await Promise.all(consultas.map((consulta) => consulta.limit(5).get()));
-    const emUso = resultados.some((resultado) => resultado.docs.some((documento) => documento.data()?.status !== STATUS.RECUSADA));
-    if (emUso) {
-      throw new AppError('Este CNPJ já tem loja ou pedido em andamento na Móbile. Fale com a gente pelo WhatsApp.', {
-        statusCode: 409,
-        code: 'cadastro_cnpj_em_uso',
-        details: { campo: 'cnpj' },
-      });
-    }
+    return [...new Set(resultados.flatMap((resultado) => resultado.docs.map((documento) => documento.id)))].slice(0, 5);
   }
 
   async assertEmailLivre(email) {
@@ -78,26 +81,36 @@ export class CadastroDeLoja {
     throw emailJaUsado();
   }
 
-  // Receita: empresa que nao esta ativa e recusada; consulta que falhou segue sem conferencia.
+  // Receita, sem bloqueio (estados E1 inativo e E2 sem resposta da especificacao): o app mostra
+  // o card de cada caso e segue. cnpjConferido e true quando a Receita respondeu, ativo ou nao.
   async conferirCnpj(cnpj) {
     const empresa = await this.consultaCnpj.consultar(cnpj);
-    if (!empresa) return { cnpjConferido: false, razaoSocial: null, endereco: null };
-    if (!empresa.encontrado || !empresa.ativa) {
-      throw new AppError('Este CNPJ não está ativo na Receita Federal.', {
-        statusCode: 400,
-        code: 'cadastro_cnpj_inativo',
-        details: { campo: 'cnpj', situacao: empresa.situacao || null },
-      });
+    if (!empresa) {
+      return {
+        cnpjConferido: false, encontrado: null, ativa: null, situacao: null, razaoSocial: null, nomeFantasia: null, endereco: null,
+      };
     }
-    return { cnpjConferido: true, razaoSocial: empresa.razaoSocial, endereco: empresa.endereco };
+    if (!empresa.encontrado) {
+      return {
+        cnpjConferido: true, encontrado: false, ativa: false, situacao: null, razaoSocial: null, nomeFantasia: null, endereco: null,
+      };
+    }
+    return {
+      cnpjConferido: true,
+      encontrado: true,
+      ativa: empresa.ativa === true,
+      situacao: empresa.situacao || null,
+      razaoSocial: empresa.razaoSocial || null,
+      nomeFantasia: empresa.nomeFantasia || null,
+      endereco: empresa.endereco || null,
+    };
   }
 
-  // Consulta usada pela tela do CNPJ do app, antes de criar a conta: mostra a razao social
-  // e o endereco encontrados.
+  // Consulta usada pela tela do CNPJ do app, antes de criar a conta: mostra a razao social,
+  // o nome fantasia e o endereco encontrados. Nao diz se o CNPJ ja tem loja.
   async consultarCnpj(cnpjInformado, { ip = null } = {}) {
     const digitos = validarCnpj(cnpjInformado);
     await this.limites?.registrar([{ tipo: 'ip', valor: ip }, { tipo: 'cnpj', valor: digitos }]);
-    await this.assertCnpjLivre(digitos);
     const conferencia = await this.conferirCnpj(digitos);
     return { cnpj: digitos, ...conferencia };
   }
@@ -109,9 +122,12 @@ export class CadastroDeLoja {
       { tipo: 'cnpj', valor: pedido.cnpj },
       { tipo: 'email', valor: pedido.responsavel.email },
     ]);
-    await this.assertCnpjLivre(pedido.cnpj);
     await this.assertEmailLivre(pedido.responsavel.email);
-    const { cnpjConferido, razaoSocial, endereco } = await this.conferirCnpj(pedido.cnpj);
+    const [lojasRepetidas, receita] = await Promise.all([
+      this.lojasComOCnpj(pedido.cnpj),
+      this.conferirCnpj(pedido.cnpj),
+    ]);
+    const { cnpjConferido, razaoSocial } = receita;
 
     let conta;
     try {
@@ -131,35 +147,63 @@ export class CadastroDeLoja {
     const usuarioRef = this.firestore.collection('Users').doc(uid);
     const lojaRef = this.firestore.collection('estabelecimentos').doc();
     const agora = this.serverTimestamp();
-    const address = endereco
-      ? { ...endereco, state: endereco.uf, fullAddress: enderecoCompleto(endereco), createAt: agora, updateAt: agora }
-      : null;
+    // Endereco confirmado no mapa, no formato das lojas que ja existem (address.position e o
+    // GeoPoint do pino). O endereco da Receita fica a parte, para o Admin comparar.
+    const { endereco } = pedido;
+    const camposDoEndereco = {
+      street: endereco.rua,
+      number: endereco.numero,
+      complement: endereco.complemento,
+      neighborhood: endereco.bairro,
+      city: endereco.cidade,
+      uf: endereco.uf,
+      state: endereco.uf,
+      zipCode: endereco.cep,
+      reference: endereco.referencia,
+    };
+    const address = {
+      ...camposDoEndereco,
+      position: this.pontoNoMapa(endereco.lat, endereco.lng),
+      fullAddress: enderecoCompleto(camposDoEndereco),
+      createAt: agora,
+      updateAt: agora,
+    };
+    const usuario = {
+      id: uid,
+      userAuthId: uid,
+      userType: 'UserType.empresa',
+      whitelabelId: WHITELABEL_GERENCIADOR,
+      name: pedido.responsavel.nome,
+      email: pedido.responsavel.email,
+      phone: pedido.responsavel.celular,
+      profileImage: null,
+      verified: false,
+      createdAt: agora,
+    };
+    // Sem CPF no cadastro, o campo nao nasce: ele e gravado depois, antes da aprovacao final.
+    if (pedido.responsavel.cpf) usuario.cpfDocument = pedido.responsavel.cpf;
     try {
       const lote = this.firestore.batch();
       // Users/{uid}: o id do documento e o uid. O campo id repete o id do documento, como o app
       // gerenciador espera (ele acha a loja por userReference = Users/{id}).
-      lote.create(usuarioRef, {
-        id: uid,
-        userAuthId: uid,
-        userType: 'UserType.empresa',
-        whitelabelId: WHITELABEL_GERENCIADOR,
-        name: pedido.responsavel.nome,
-        email: pedido.responsavel.email,
-        phone: pedido.responsavel.celular,
-        cpfDocument: pedido.responsavel.cpf,
-        profileImage: null,
-        verified: false,
-        createdAt: agora,
-      });
+      lote.create(usuarioRef, usuario);
       lote.create(lojaRef, {
         id: lojaRef.id,
         name: pedido.nome,
         razaoSocial: razaoSocial || null,
         corporateName: razaoSocial || null,
+        nomeFantasia: receita.nomeFantasia,
         cnpj: pedido.cnpj,
         cpfOrCnpj: formatarCnpj(pedido.cnpj),
         cnpjConferido,
+        cnpjAtivo: receita.ativa,
+        cnpjSituacao: receita.situacao,
+        cnpjRepetido: lojasRepetidas.length > 0,
+        lojasComOMesmoCnpj: lojasRepetidas,
+        enderecoReceita: receita.endereco,
         address,
+        erp: pedido.erp,
+        instalacaoId: pedido.instalacaoId,
         phone: pedido.responsavel.celular,
         email: pedido.responsavel.email,
         responsibleName: pedido.responsavel.nome,
@@ -181,7 +225,7 @@ export class CadastroDeLoja {
       throw error;
     }
 
-    return { uid, lojaId: lojaRef.id, status: STATUS.AGUARDANDO_EMAIL, cnpjConferido };
+    return { uid, lojaId: lojaRef.id, status: STATUS.AGUARDANDO_EMAIL, cnpjConferido, cnpjRepetido: lojasRepetidas.length > 0 };
   }
 
   // Loja do dono que esta logado: a que tem userReference = Users/{uid}.

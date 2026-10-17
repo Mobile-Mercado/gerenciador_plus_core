@@ -109,17 +109,109 @@ export function validarSenha(valor) {
   return senha;
 }
 
+// CPF opcional no cadastro (ordem nova de 16/10/2026): vazio passa e volta null; preenchido
+// valida como sempre. O CPF passa a ser exigido na aprovacao final da implantacao.
+export function validarCpfOpcional(valor) {
+  if (!somenteDigitos(valor)) return null;
+  return validarCpf(valor);
+}
+
+// "Sistema ERP da loja": nome da lista da especificacao, "outro" ou "nao_sei", mais o texto
+// digitado (ate 120 caracteres). Busca sem resultado grava o texto.
+export const ERPS = Object.freeze([
+  'Acesse ERP', 'ACS ERP', 'Alterdata', 'Apolo', 'Arius', 'Artsystem', 'Auditor ERP', 'Bling', 'Bluesoft', 'BytePDV',
+  'Cads ERP', 'CES', 'CH Sistemas', 'CISS', 'Consinco', 'Criare ERP', 'Criasoft', 'Cronos ERP', 'Devi', 'Dlinks ERP',
+  'GCF', 'Getway', 'Guarani Sistemas', 'GZ Sistemas', 'Hiper ERP', 'Infor', 'Intersolid', 'Linear', 'Linx Empório',
+  'Linx Emsys', 'Logtec Sistemas', 'Logus', 'Lumi', 'Millenium', 'Mobne', 'Omie', 'Prosystem', 'Protheus', 'Rech ERP',
+  'RMS', 'RP Info', 'Sankhya', 'SAP', 'SCE Sistemas', 'SCV Sistemas', 'SD Sistemas', 'Senior', 'SGE ERP', 'Softcom',
+  'Solidcon', 'Sysmo', 'SysPDV', 'Telecon', 'Uniplus', 'Varejo Fácil', 'Visual Software', 'Vix Soluções', 'VR Software',
+  'VSM', 'Winthor',
+]);
+export const ERP_OUTRO = 'outro';
+export const ERP_NAO_SEI = 'nao_sei';
+
+export function validarErp(valor) {
+  const escolhido = textoLimpo(valor?.escolhido);
+  const texto = textoLimpo(valor?.texto);
+  const naLista = ERPS.find((nome) => nome === escolhido);
+  if (!naLista && escolhido !== ERP_OUTRO && escolhido !== ERP_NAO_SEI) {
+    throw recusa('erp', 'Escolha o sistema ERP da loja na lista, "Outro" ou "Não sei".');
+  }
+  if (texto.length > 120 || EMOJI.test(texto) || HTML.test(texto)) {
+    throw recusa('erp', 'O nome do ERP pode ter até 120 caracteres, sem emoji.');
+  }
+  return { escolhido: naLista || escolhido, texto: texto || null };
+}
+
+const UFS = new Set(['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI',
+  'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO']);
+
+function textoDoEndereco(campo, valor, { maximo, obrigatorio = false, rotulo }) {
+  const texto = textoLimpo(valor);
+  if (!texto) {
+    if (obrigatorio) throw recusa(campo, `Preencha ${rotulo}.`);
+    return null;
+  }
+  if (texto.length > maximo || EMOJI.test(texto) || HTML.test(texto)) {
+    throw recusa(campo, `Confira ${rotulo}: até ${maximo} caracteres, sem emoji.`);
+  }
+  return texto;
+}
+
+function coordenada(campo, valor, limite) {
+  const numero = typeof valor === 'number' ? valor : Number.NaN;
+  if (!Number.isFinite(numero) || Math.abs(numero) > limite) {
+    throw recusa(campo, 'Marque a loja no mapa antes de continuar.');
+  }
+  return numero;
+}
+
+// Endereco que o lojista confirmou no mapa (passo 3 e folha do endereco). No pedido o numero
+// e o pino sao obrigatorios; no rascunho do passo 3 o numero ainda pode faltar.
+export function validarEndereco(valor = {}, { completo = true } = {}) {
+  const cep = somenteDigitos(valor.cep);
+  if (cep && cep.length !== 8) throw recusa('cep', 'CEP inválido. Confira os 8 números.');
+  const uf = textoLimpo(valor.uf).toUpperCase();
+  if (!UFS.has(uf)) throw recusa('uf', 'Confira a UF do endereço.');
+  return {
+    cep: cep || null,
+    rua: textoDoEndereco('rua', valor.rua, { maximo: 120, obrigatorio: true, rotulo: 'a rua' }),
+    numero: textoDoEndereco('numero', valor.numero, { maximo: 20, obrigatorio: completo, rotulo: 'o número' }),
+    complemento: textoDoEndereco('complemento', valor.complemento, { maximo: 80, rotulo: 'o complemento' }),
+    bairro: textoDoEndereco('bairro', valor.bairro, { maximo: 80, rotulo: 'o bairro' }),
+    cidade: textoDoEndereco('cidade', valor.cidade, { maximo: 80, obrigatorio: true, rotulo: 'a cidade' }),
+    uf,
+    referencia: textoDoEndereco('referencia', valor.referencia, { maximo: 120, rotulo: 'a referência' }),
+    lat: coordenada('lat', valor.lat, 90),
+    lng: coordenada('lng', valor.lng, 180),
+  };
+}
+
+// Id aleatorio que o app gera na primeira abertura e guarda no aparelho. Liga eventos,
+// rascunhos e o pedido da mesma instalacao.
+const INSTALACAO = /^[A-Za-z0-9_-]{8,100}$/;
+
+export function validarInstalacaoId(valor) {
+  const id = String(valor ?? '').trim();
+  if (!INSTALACAO.test(id)) throw recusa('instalacao', 'Atualize o app para continuar o cadastro.');
+  return id;
+}
+
 // Tudo do pedido de cadastro, na ordem das telas do app. Sem RG e sem data de nascimento.
+// `nome` e o "Nome real que esta na fachada" (mesma regra do nome da loja).
 export function validarPedidoDeCadastro(entrada = {}) {
   return {
     cnpj: validarCnpj(entrada.cnpj),
     nome: validarNomeNoApp(entrada.nome),
     responsavel: {
       nome: validarNomeResponsavel(entrada.responsavel?.nome),
-      cpf: validarCpf(entrada.responsavel?.cpf),
+      cpf: validarCpfOpcional(entrada.responsavel?.cpf),
       celular: validarCelular(entrada.responsavel?.celular),
       email: validarEmail(entrada.responsavel?.email),
     },
+    erp: validarErp(entrada.erp),
+    endereco: validarEndereco(entrada.endereco, { completo: true }),
+    instalacaoId: entrada.instalacaoId == null || entrada.instalacaoId === '' ? null : validarInstalacaoId(entrada.instalacaoId),
     senha: validarSenha(entrada.senha),
   };
 }
