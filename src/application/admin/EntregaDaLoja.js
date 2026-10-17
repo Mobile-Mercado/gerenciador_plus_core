@@ -26,6 +26,31 @@ function recusa(mensagem, code, statusCode = 400) {
   return new AppError(mensagem, { statusCode, code });
 }
 
+// Prazo minimo menor que o maximo e distancia incluida ate a maxima. Quando so um dos dois vem,
+// compara com o valor gravado; sem valor gravado do outro lado, nao ha o que comparar.
+function conferirPares(enviado, gravado) {
+  const valor = (campo) => {
+    const numero = enviado[campo] !== undefined ? enviado[campo] : gravado[campo];
+    return typeof numero === 'number' && Number.isFinite(numero) ? numero : null;
+  };
+  const tocou = (...campos) => campos.some((campo) => enviado[campo] !== undefined);
+  if (tocou('minimumDeliveryTimeInMinutes', 'maximumDeliveryTimeInMinutes')) {
+    const minimo = valor('minimumDeliveryTimeInMinutes');
+    const maximo = valor('maximumDeliveryTimeInMinutes');
+    if (minimo !== null && maximo !== null && minimo >= maximo) {
+      throw recusa('O prazo mínimo precisa ser menor que o prazo máximo.', 'entrega_prazo_invalido');
+    }
+  }
+  if (tocou('minimumDistance', 'maximunDistance')) {
+    const incluida = valor('minimumDistance');
+    // Loja antiga pode ter so o espelho com a grafia certa (maximumDistance).
+    const maxima = valor('maximunDistance') ?? (enviado.maximunDistance === undefined ? valor('maximumDistance') : null);
+    if (incluida !== null && maxima !== null && incluida > maxima) {
+      throw recusa('A distância incluída não pode passar da distância máxima.', 'entrega_distancia_invalida');
+    }
+  }
+}
+
 function diaGravado(atuais, weekday, indice) {
   return atuais.find((item) => Number(item?.weekday) === weekday) || atuais[indice] || {};
 }
@@ -64,6 +89,7 @@ export class EntregaDaLoja {
 
       if (entrada.deliveryInfo) {
         const existente = atual.deliveryInfo && typeof atual.deliveryInfo === 'object' ? atual.deliveryInfo : {};
+        conferirPares(entrada.deliveryInfo, existente);
         Object.entries(entrada.deliveryInfo).forEach(([campo, valor]) => {
           mudancas[`deliveryInfo.${campo}`] = valor;
           antes[`deliveryInfo.${campo}`] = existente[campo] ?? null;

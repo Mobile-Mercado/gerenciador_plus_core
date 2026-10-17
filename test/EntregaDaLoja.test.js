@@ -149,3 +149,31 @@ test('rota PATCH /entrega: so campos conhecidos, e quem mudou e quando vai para 
     servidor.close();
   }
 });
+
+test('prazo minimo menor que o maximo e distancia incluida ate a maxima, contra o valor gravado', async () => {
+  // Gravado: prazo 30 a 60 min, distancia maxima 10 km.
+  const { banco, entrega } = montar();
+  const recusa = (deliveryInfo, codigo) => assert.rejects(
+    entrega.salvar('loja-gs', { deliveryInfo }),
+    (erro) => erro.code === codigo && erro.statusCode === 400,
+  );
+  await recusa({ minimumDeliveryTimeInMinutes: 90, maximumDeliveryTimeInMinutes: 60 }, 'entrega_prazo_invalido');
+  await recusa({ minimumDeliveryTimeInMinutes: 60 }, 'entrega_prazo_invalido');
+  await recusa({ maximumDeliveryTimeInMinutes: 20 }, 'entrega_prazo_invalido');
+  await recusa({ minimumDistance: 12 }, 'entrega_distancia_invalida');
+  await recusa({ minimumDistance: 3, maximunDistance: 2 }, 'entrega_distancia_invalida');
+  await recusa({ maximunDistance: 0, minimumDistance: 1 }, 'entrega_distancia_invalida');
+  assert.deepEqual(banco.dados('estabelecimentos/loja-gs').deliveryInfo, DELIVERY_INFO, 'recusa nao grava nada');
+
+  await entrega.salvar('loja-gs', { deliveryInfo: { minimumDeliveryTimeInMinutes: 45 } });
+  await entrega.salvar('loja-gs', { deliveryInfo: { minimumDistance: 10 } });
+  assert.equal(banco.dados('estabelecimentos/loja-gs').deliveryInfo.minimumDeliveryTimeInMinutes, 45);
+  assert.equal(banco.dados('estabelecimentos/loja-gs').deliveryInfo.minimumDistance, 10);
+
+  // Loja antiga com so maximumDistance: compara com ele.
+  const antiga = montar({ deliveryInfo: { maximumDistance: 5 } });
+  await assert.rejects(antiga.entrega.salvar('loja-gs', { deliveryInfo: { minimumDistance: 6 } }), (erro) => erro.code === 'entrega_distancia_invalida');
+  // Sem o outro valor gravado, nao ha o que comparar.
+  const vazia = montar({ deliveryInfo: {} });
+  await vazia.entrega.salvar('loja-gs', { deliveryInfo: { minimumDeliveryTimeInMinutes: 500 } });
+});
