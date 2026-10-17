@@ -140,6 +140,12 @@ class Query {
         const atual = lerCampo(dados, campo);
         if (operador === '==') return ehReferencia(valor) ? ehReferencia(atual) && atual.path === valor.path : atual === valor;
         if (operador === 'array-contains') return Array.isArray(atual) && atual.includes(valor);
+        // Intervalo de datas, como o Firestore: documento sem o campo fica de fora.
+        if (operador === '>=' || operador === '<') {
+          const numero = (item) => (item instanceof Date ? item.getTime() : item);
+          if (atual === undefined || atual === null) return false;
+          return operador === '>=' ? numero(atual) >= numero(valor) : numero(atual) < numero(valor);
+        }
         throw new Error(`operador nao suportado: ${operador}`);
       }))
       .map(([caminho, dados]) => new Snapshot(this.banco.doc(caminho), copiar(dados)));

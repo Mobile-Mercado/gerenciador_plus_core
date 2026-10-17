@@ -39,6 +39,10 @@ const listaPedidosSchema = z.object({
 const situacaoIncompletoSchema = z.object({ situacao: z.enum(['em_conversa', 'descartado', 'em_andamento']) });
 const instalacaoParamsSchema = z.object({ instalacaoId: z.string().min(8).max(100).regex(/^[A-Za-z0-9_-]+$/) });
 const recusaSchema = z.object({ motivo: z.string().max(500) });
+const jornadaDeEntradaSchema = z.object({
+  periodo: z.coerce.number().int().refine((dias) => [7, 30, 90].includes(dias), 'Período inválido.').default(30),
+  uf: z.string().length(2).optional(),
+});
 const emConversaSchema = z.object({ emConversa: z.boolean() });
 const edicaoLojaSchema = z.object({
   name: z.string().max(200).optional(),
@@ -87,7 +91,7 @@ const sugestoesClientesSchema = z.object({
 
 export function createAdminRoutes({
   manageCatalogoPadrao, sugestoesDosClientes, pedidosDeLoja, lojaNoAdmin, franquias, administradores, dadosDoAdmin,
-  manageImplantationPipelines,
+  manageImplantationPipelines, jornadaDeEntrada = null,
 }) {
   const router = Router();
 
@@ -142,6 +146,12 @@ export function createAdminRoutes({
     response.locals.lojasAlvo = [request.params.lojaId];
     const input = liberacaoSchema.parse(request.params);
     response.json({ data: await manageCatalogoPadrao.revogar(input) });
+  }));
+
+  // ===== Jornada de entrada (App Gerenciador): so leitura do funil do cadastro =====
+  router.get('/jornada-de-entrada', asyncHandler(async (request, response) => {
+    const { periodo, uf } = jornadaDeEntradaSchema.parse(request.query);
+    response.json({ data: await jornadaDeEntrada.ler({ periodo, uf: uf || null }) });
   }));
 
   // ===== Pedidos de loja (cadastro pelo app gerenciador) =====

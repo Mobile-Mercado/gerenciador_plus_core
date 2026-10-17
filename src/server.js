@@ -4,11 +4,13 @@ import { GetDailyHomeOverviewUseCase } from './application/ai/GetDailyHomeOvervi
 import { GetManagerSession } from './application/auth/GetManagerSession.js';
 import { AdministradoresDaPlataforma } from './application/admin/AdministradoresDaPlataforma.js';
 import { DadosDoAdmin } from './application/admin/DadosDoAdmin.js';
+import { JornadaDeEntrada } from './application/admin/JornadaDeEntrada.js';
 import { Franquias } from './application/admin/Franquias.js';
 import { LojaNoAdmin } from './application/admin/LojaNoAdmin.js';
 import { PedidosDeLoja } from './application/admin/PedidosDeLoja.js';
 import { SugestoesDosClientes } from './application/admin/SugestoesDosClientes.js';
 import { CadastroDeLoja } from './application/cadastro/CadastroDeLoja.js';
+import { ClienteDaPlataforma } from './application/cadastro/ClienteDaPlataforma.js';
 import { ImagensDaLoja } from './application/cadastro/ImagensDaLoja.js';
 import { JornadaDoCadastro } from './application/cadastro/JornadaDoCadastro.js';
 import { LimiteDeTentativas } from './application/cadastro/LimiteDeTentativas.js';
@@ -116,6 +118,9 @@ const cadastroDeLoja = new CadastroDeLoja({
 const app = createApp({
   cadastroDeLoja,
   jornadaDoCadastro,
+  // Abertura com o app logado: reconhece o lojista que ja e cliente (corte dos acessos do Admin).
+  clienteDaPlataforma: new ClienteDaPlataforma({ verificarToken: (token) => firebaseAuth.verifyIdToken(token), accessRepository }),
+  jornadaDeEntrada: new JornadaDeEntrada({ firestore }),
   verificarAppCheck: (token) => getFirebaseAppCheck().verifyToken(token),
   imagensDaLoja,
   pedidosDeLoja: new PedidosDeLoja({ firestore, auth: firebaseAuth, jornada: jornadaDoCadastro }),

@@ -58,7 +58,12 @@ const rascunhoSchema = z.object({
 });
 
 export function createCadastroRoutes({
-  cadastroDeLoja, jornadaDoCadastro = null, appCheck, exigirLogin, registrar = (meta) => logger.info('cadastro_x_forwarded_for', meta),
+  cadastroDeLoja,
+  jornadaDoCadastro = null,
+  clienteDaPlataforma = null,
+  appCheck,
+  exigirLogin,
+  registrar = (meta) => logger.info('cadastro_x_forwarded_for', meta),
 }) {
   const router = Router();
 
@@ -83,7 +88,10 @@ export function createCadastroRoutes({
   // Sem login, com App Check e o limite por IP do cadastro (conta propria, "jornada").
   router.post('/evento', appCheck, asyncHandler(async (request, response) => {
     const evento = eventoSchema.parse(request.body);
-    response.status(201).json({ data: await jornadaDoCadastro.registrarEvento(evento, { ip: origemDaRequisicao(request) }) });
+    // Login opcional: na abertura, o app logado manda o token e o Core reconhece o lojista
+    // que ja e cliente (corte dos acessos na tela do Admin). Sem token, segue igual.
+    const cliente = evento.tipo === 'abertura' ? await clienteDaPlataforma?.daRequisicao(request) : null;
+    response.status(201).json({ data: await jornadaDoCadastro.registrarEvento(evento, { ip: origemDaRequisicao(request), cliente }) });
   }));
 
   router.post('/rascunho', appCheck, asyncHandler(async (request, response) => {

@@ -45,6 +45,8 @@ export function createApp({
   sugestoesDosClientes,
   cadastroDeLoja,
   jornadaDoCadastro = null,
+  clienteDaPlataforma = null,
+  jornadaDeEntrada = null,
   verificarAppCheck,
   imagensDaLoja,
   pedidosDeLoja,
@@ -99,6 +101,7 @@ export function createApp({
   app.use('/api/cadastro', createCadastroRoutes({
     cadastroDeLoja,
     jornadaDoCadastro,
+    clienteDaPlataforma,
     appCheck: createAppCheckMiddleware({ exigir: env.CADASTRO_EXIGE_APP_CHECK, verificar: verificarAppCheck }),
     exigirLogin: createFirebaseAuthMiddleware({ required: true }),
   }));
@@ -183,6 +186,7 @@ export function createApp({
       administradores,
       dadosDoAdmin,
       manageImplantationPipelines,
+      jornadaDeEntrada,
     }),
   );
 

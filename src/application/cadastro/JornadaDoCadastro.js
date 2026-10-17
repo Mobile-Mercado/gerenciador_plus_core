@@ -88,7 +88,9 @@ export class JornadaDoCadastro {
     transacao.set(this.funilRef(dia), { dia, ...contadores, atualizadoEm: this.serverTimestamp() }, { merge: true });
   }
 
-  async registrarEvento({ instalacaoId: entradaId, tipo, passo, horaDoAparelho } = {}, { ip = null } = {}) {
+  // `cliente`: { lojaId } quando a abertura veio de lojista logado que ja e cliente da plataforma
+  // (ClienteDaPlataforma). Marca a instalacao para o corte dos acessos da tela do Admin.
+  async registrarEvento({ instalacaoId: entradaId, tipo, passo, horaDoAparelho } = {}, { ip = null, cliente = null } = {}) {
     const instalacaoId = validarInstalacaoId(entradaId);
     if (!TIPOS_DE_EVENTO.includes(tipo)) throw recusa('Evento do cadastro inválido.', 'cadastro_evento_invalido');
     const numero = passoDoEvento(tipo, passo);
@@ -115,6 +117,7 @@ export class JornadaDoCadastro {
         if (!jornada?.primeiraAbertura) mudancas.primeiraAbertura = agora;
         contadores.aberturas = um;
         if (jornada?.ultimaAberturaDia !== hoje) contadores.instalacoesAbertas = this.incremento(1);
+        if (cliente?.lojaId) Object.assign(mudancas, { lojistaCliente: true, lojistaLojaId: cliente.lojaId, lojistaVistoEm: agora });
       }
       const comecando = (tipo === 'comecar' || numero !== null) && !jornada?.situacao;
       if (comecando) {
