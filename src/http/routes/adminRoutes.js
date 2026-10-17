@@ -82,9 +82,21 @@ const sugestoesClientesSchema = z.object({
 
 export function createAdminRoutes({
   manageCatalogoPadrao, sugestoesDosClientes, pedidosDeLoja, lojaNoAdmin, franquias, administradores, dadosDoAdmin,
-  manageImplantationPipelines,
+  manageImplantationPipelines, instalacoesDosApps = null,
 }) {
   const router = Router();
+
+  // ===== Instalacoes dos apps (tela Instalacoes, 16/10/2026) =====
+  // Leitura: os Stats/instalacoesApp das lojas com app, uma leitura por loja, quando a tela abre.
+  // "Atualizar agora": a mesma montagem da rotina semanal; um clique por vez (409 se ja esta rodando).
+  if (instalacoesDosApps) {
+    router.get('/instalacoes', asyncHandler(async (_request, response) => {
+      response.json({ data: await instalacoesDosApps.listar() });
+    }));
+    router.post('/instalacoes/atualizar', asyncHandler(async (_request, response) => {
+      response.json({ data: await instalacoesDosApps.atualizar() });
+    }));
+  }
 
   router.get('/sessao', (request, response) => {
     response.json({ data: { uid: request.auth.uid, email: request.auth.email || null, isPlatformAdmin: true } });

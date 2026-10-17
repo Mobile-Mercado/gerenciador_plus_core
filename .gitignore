@@ -1,6 +1,8 @@
 .env
 .env.*
 !.env.example
+# Parametros nao secretos das functions (sem chave): APPLE_ISSUER_ID, APPLE_KEY_ID, PLAY_REPORTS_BUCKET.
+!functions/.env.appmobileprod-19505
 node_modules/
 npm-debug.log*
 firebase-debug.log*
