@@ -150,6 +150,41 @@ test('rota PATCH /entrega: so campos conhecidos, e quem mudou e quando vai para 
   }
 });
 
+// Sobe as rotas do Admin com a entrega da loja montada e devolve o PATCH e o banco.
+async function comRotaDaEntrega(usar, mudancas = {}) {
+  const { default: express } = await import('express');
+  const { createAdminRoutes } = await import('../src/http/routes/adminRoutes.js');
+  const { errorHandler } = await import('../src/http/middlewares/errorHandler.js');
+  const { banco, entrega } = montar(mudancas);
+  const app = express();
+  app.use(express.json());
+  app.use('/api/admin', createAdminRoutes({ entregaDaLoja: entrega }));
+  app.use(errorHandler);
+  const servidor = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
+  const base = `http://127.0.0.1:${servidor.address().port}/api/admin/estabelecimentos/loja-gs/entrega`;
+  const patch = (corpo) => fetch(base, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+  try {
+    await usar({ patch, ler: () => fetch(base).then((resposta) => resposta.json()), banco });
+  } finally {
+    servidor.closeAllConnections();
+    servidor.close();
+  }
+}
+
+test('rota PATCH /entrega: openingHours em HH:mm passa; horario fora do formato e 400', async () => {
+  await comRotaDaEntrega(async ({ patch, banco }) => {
+    const ok = await patch({ openingHours: dias((weekday) => (weekday === 3 ? { openingHours: '08:30' } : {})) });
+    assert.equal(ok.status, 200);
+    assert.equal((await ok.json()).data.openingHours[2].openingHours, '08:30');
+    assert.deepEqual(banco.dados('estabelecimentos/loja-gs').openingHours[2].open, { hours: 8, minutes: 30 });
+    for (const errado of ['8:30', '08h30', 'dd:dd', '08:30:00']) {
+      const recusa = await patch({ openingHours: dias((weekday) => (weekday === 1 ? { closeHours: errado } : {})) });
+      assert.equal(recusa.status, 400, errado);
+    }
+    assert.deepEqual(banco.dados('estabelecimentos/loja-gs').openingHours[0].close, { hours: 20, minutes: 0 }, 'a recusa nao grava');
+  });
+});
+
 test('prazo minimo menor que o maximo e distancia incluida ate a maxima, contra o valor gravado', async () => {
   // Gravado: prazo 30 a 60 min, distancia maxima 10 km.
   const { banco, entrega } = montar();

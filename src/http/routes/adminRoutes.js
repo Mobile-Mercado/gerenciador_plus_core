@@ -42,7 +42,7 @@ const recusaSchema = z.object({ motivo: z.string().max(500) });
 // Entrega da loja pelo Admin: so os campos conhecidos; o que nao vier fica como esta.
 const numero = z.number().finite().min(0).max(1000000);
 const inteiro = z.number().int().min(0).max(100000);
-const horario = z.string().regex(/^d{2}:d{2}$/);
+const horario = z.string().regex(/^\d{2}:\d{2}$/);
 const entregaSchema = z.object({
   deliveryInfo: z.object({
     deliveryCalcType: z.enum(['DeliveryCalcType.distance', 'DeliveryCalcType.fixedValue']).optional(),
