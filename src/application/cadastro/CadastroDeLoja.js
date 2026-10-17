@@ -45,7 +45,9 @@ export class CadastroDeLoja {
     imagens = null,
     serverTimestamp = () => FieldValue.serverTimestamp(),
     pontoNoMapa = (lat, lng) => new GeoPoint(lat, lng),
+    jornada = null,
   }) {
+    this.jornada = jornada;
     this.firestore = firestore;
     this.auth = auth;
     this.consultaCnpj = consultaCnpj;
@@ -223,6 +225,14 @@ export class CadastroDeLoja {
         logger.error('cadastro_conta_solta', { uid, originalMessage: desfazer?.message });
       }
       throw error;
+    }
+
+    // A instalacao do app vira "concluido" com o id da loja. Falha aqui nao desfaz o pedido: o
+    // funil perde uma marca, a loja e a conta ficam.
+    try {
+      await this.jornada?.concluir(pedido.instalacaoId, lojaRef.id);
+    } catch (error) {
+      logger.error('cadastro_jornada_nao_concluida', { lojaId: lojaRef.id, originalMessage: error?.message });
     }
 
     return { uid, lojaId: lojaRef.id, status: STATUS.AGUARDANDO_EMAIL, cnpjConferido, cnpjRepetido: lojasRepetidas.length > 0 };

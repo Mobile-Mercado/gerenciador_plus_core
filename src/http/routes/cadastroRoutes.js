@@ -4,9 +4,10 @@ import { asyncHandler } from '../middlewares/asyncHandler.js';
 import { corpoDeImagem } from '../middlewares/corpoDeImagem.js';
 import { logger } from '../../infra/logger/logger.js';
 
-// Cadastro de loja pelo app gerenciador. POST /loja e POST /loja/cnpj sao publicas (sem login),
-// com limite de tentativas por IP, CNPJ e e-mail contado no Firestore e App Check preparado.
-// As demais exigem o login da conta criada no cadastro.
+// Cadastro de loja pelo app gerenciador. POST /loja, POST /loja/cnpj, POST /evento e
+// POST /rascunho sao publicas (sem login), com limite de tentativas por IP (e por CNPJ e e-mail
+// no pedido) contado no Firestore e App Check preparado. As demais exigem o login da conta
+// criada no cadastro.
 // Formato do que chega; as regras de cada campo ficam em domain/cadastro/validacoes.js.
 const erpSchema = z.object({
   escolhido: z.string().max(60),
@@ -41,8 +42,24 @@ const pedidoSchema = z.object({
 });
 const cnpjSchema = z.object({ cnpj: z.string().max(32) });
 const tipoSchema = z.object({ tipo: z.enum(['logo', 'fachada']) });
+// Jornada do cadastro: eventos sem dado pessoal e rascunhos de cada passo (nunca com senha).
+const horaSchema = z.union([z.string().max(40), z.number()]).nullish();
+const eventoSchema = z.object({
+  instalacaoId: z.string().max(120),
+  tipo: z.string().max(40),
+  passo: z.number().int().nullish(),
+  horaDoAparelho: horaSchema,
+});
+const rascunhoSchema = z.object({
+  instalacaoId: z.string().max(120),
+  passo: z.number().int(),
+  // O formato de cada passo e conferido em domain/cadastro/validacoes.js (validarRascunho).
+  dados: z.record(z.unknown()).refine((dados) => JSON.stringify(dados).length <= 8000, 'Rascunho grande demais.'),
+});
 
-export function createCadastroRoutes({ cadastroDeLoja, appCheck, exigirLogin, registrar = (meta) => logger.info('cadastro_x_forwarded_for', meta) }) {
+export function createCadastroRoutes({
+  cadastroDeLoja, jornadaDoCadastro = null, appCheck, exigirLogin, registrar = (meta) => logger.info('cadastro_x_forwarded_for', meta),
+}) {
   const router = Router();
 
   // TEMPORARIO (13/10/2026): conferir em producao a posicao do IP do cliente no X-Forwarded-For.
@@ -61,6 +78,17 @@ export function createCadastroRoutes({ cadastroDeLoja, appCheck, exigirLogin, re
   router.post('/loja', appCheck, asyncHandler(async (request, response) => {
     const pedido = pedidoSchema.parse(request.body);
     response.status(201).json({ data: await cadastroDeLoja.criar(pedido, { ip: origemDaRequisicao(request) }) });
+  }));
+
+  // Sem login, com App Check e o limite por IP do cadastro (conta propria, "jornada").
+  router.post('/evento', appCheck, asyncHandler(async (request, response) => {
+    const evento = eventoSchema.parse(request.body);
+    response.status(201).json({ data: await jornadaDoCadastro.registrarEvento(evento, { ip: origemDaRequisicao(request) }) });
+  }));
+
+  router.post('/rascunho', appCheck, asyncHandler(async (request, response) => {
+    const rascunho = rascunhoSchema.parse(request.body);
+    response.json({ data: await jornadaDoCadastro.gravarRascunho(rascunho, { ip: origemDaRequisicao(request) }) });
   }));
 
   router.post('/loja/enviar-pedido', exigirLogin, asyncHandler(async (request, response) => {

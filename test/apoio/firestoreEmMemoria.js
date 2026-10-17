@@ -1,7 +1,7 @@
 // Firestore em memoria para os testes dos casos de uso do catalogo e do Admin. Cobre so o
 // que eles usam: doc, collection, collectionGroup, where (== e array-contains), orderBy,
 // startAfter (snapshot), limit, select, count, getAll, batch, create, set (com merge),
-// update (com caminho pontuado) e delete, mais as sentinelas serverTimestamp e delete.
+// update (com caminho pontuado) e delete, mais as sentinelas serverTimestamp, delete e increment.
 // Referencia de documento gravada como campo (userReference) fica como referencia e o == compara
 // pelo caminho; runTransaction e recursiveDelete cobrem o cadastro e o Admin.
 
@@ -32,6 +32,8 @@ function sentinela(valor) {
 
 function resolverValor(valor) {
   if (sentinela(valor) === 'FieldValue.serverTimestamp') return new Date(AGORA);
+  // Incremento em campo que ainda nao existe vale o proprio valor.
+  if (sentinela(valor) === 'FieldValue.increment') return valor.operand;
   if (ehMapa(valor) && !sentinela(valor)) {
     return Object.fromEntries(Object.entries(valor).map(([chave, item]) => [chave, resolverValor(item)]));
   }
@@ -47,6 +49,7 @@ function aplicarCampo(alvo, caminho, valor) {
   });
   const ultima = partes.at(-1);
   if (sentinela(valor) === 'FieldValue.delete') delete atual[ultima];
+  else if (sentinela(valor) === 'FieldValue.increment') atual[ultima] = (Number(atual[ultima]) || 0) + valor.operand;
   else atual[ultima] = resolverValor(valor);
 }
 
@@ -54,6 +57,8 @@ function mesclar(alvo, dados) {
   Object.entries(dados).forEach(([chave, valor]) => {
     if (sentinela(valor) === 'FieldValue.delete') {
       delete alvo[chave];
+    } else if (sentinela(valor) === 'FieldValue.increment') {
+      alvo[chave] = (Number(alvo[chave]) || 0) + valor.operand;
     } else if (ehMapa(valor) && !sentinela(valor) && ehMapa(alvo[chave])) {
       mesclar(alvo[chave], valor);
     } else {

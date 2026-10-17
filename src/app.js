@@ -44,6 +44,7 @@ export function createApp({
   adminAuditMiddleware,
   sugestoesDosClientes,
   cadastroDeLoja,
+  jornadaDoCadastro = null,
   verificarAppCheck,
   imagensDaLoja,
   pedidosDeLoja,
@@ -97,6 +98,7 @@ export function createApp({
   // no Firestore e App Check preparado); o resto com o login da conta criada.
   app.use('/api/cadastro', createCadastroRoutes({
     cadastroDeLoja,
+    jornadaDoCadastro,
     appCheck: createAppCheckMiddleware({ exigir: env.CADASTRO_EXIGE_APP_CHECK, verificar: verificarAppCheck }),
     exigirLogin: createFirebaseAuthMiddleware({ required: true }),
   }));

@@ -197,6 +197,73 @@ export function validarInstalacaoId(valor) {
   return id;
 }
 
+// Hora que o aparelho informou (texto ISO ou milissegundos). Fica como Date, ou null quando falta.
+export function validarHoraDoAparelho(valor, campo = 'hora') {
+  if (valor === undefined || valor === null || valor === '') return null;
+  const data = new Date(typeof valor === 'number' ? valor : String(valor));
+  if (Number.isNaN(data.getTime())) throw recusa(campo, 'Hora do aparelho inválida.');
+  return data;
+}
+
+function textoDaReceita(valor, maximo) {
+  const texto = textoLimpo(valor);
+  if (!texto || HTML.test(texto)) return null;
+  return texto.slice(0, maximo);
+}
+
+// Retorno da Receita que o app guardou no passo 2 (o mesmo da consulta POST /loja/cnpj).
+// So texto curto, sem HTML; o que nao e do formato fica de fora.
+function receitaDoRascunho(valor = {}) {
+  const endereco = valor?.endereco || {};
+  const simNao = (item) => (typeof item === 'boolean' ? item : null);
+  return {
+    cnpjConferido: simNao(valor?.cnpjConferido),
+    encontrado: simNao(valor?.encontrado),
+    ativa: simNao(valor?.ativa),
+    situacao: textoDaReceita(valor?.situacao, 60),
+    razaoSocial: textoDaReceita(valor?.razaoSocial, 200),
+    nomeFantasia: textoDaReceita(valor?.nomeFantasia, 200),
+    endereco: {
+      street: textoDaReceita(endereco.street, 200),
+      number: textoDaReceita(endereco.number, 40),
+      complement: textoDaReceita(endereco.complement, 200),
+      neighborhood: textoDaReceita(endereco.neighborhood, 200),
+      city: textoDaReceita(endereco.city, 120),
+      uf: textoDaReceita(endereco.uf, 2)?.toUpperCase() || null,
+      zipCode: somenteDigitos(endereco.zipCode).slice(0, 8) || null,
+    },
+  };
+}
+
+export const CAMPOS_DE_SENHA = Object.freeze(['senha', 'repitaSenha', 'senhaConfirmacao', 'password']);
+
+// Rascunho de cada passo do cadastro (jornada). Nunca leva senha. O passo 1 so vale com o
+// aceite dos termos; os passos 2 e 3 sao conferidos contra o passo 1 gravado por quem chama.
+export function validarRascunho(passo, dados = {}) {
+  if (CAMPOS_DE_SENHA.some((campo) => dados && Object.prototype.hasOwnProperty.call(dados, campo))) {
+    throw recusa('rascunho', 'O rascunho do cadastro não leva senha.');
+  }
+  if (passo === 1) {
+    if (dados?.aceiteTermos?.aceito !== true) {
+      throw recusa('termos', 'Aceite os termos e a política de privacidade para continuar.');
+    }
+    return {
+      nome: validarNomeResponsavel(dados.nome),
+      celular: validarCelular(dados.celular),
+      email: validarEmail(dados.email),
+      erp: validarErp(dados.erp),
+      aceiteTermos: { aceito: true, horaDoAparelho: validarHoraDoAparelho(dados.aceiteTermos.em, 'termos') },
+    };
+  }
+  if (passo === 2) {
+    return { cnpj: validarCnpj(dados.cnpj), receita: receitaDoRascunho(dados.receita) };
+  }
+  if (passo === 3) {
+    return { endereco: validarEndereco(dados.endereco, { completo: false }) };
+  }
+  throw recusa('passo', 'Passo do cadastro inválido.');
+}
+
 // Tudo do pedido de cadastro, na ordem das telas do app. Sem RG e sem data de nascimento.
 // `nome` e o "Nome real que esta na fachada" (mesma regra do nome da loja).
 export function validarPedidoDeCadastro(entrada = {}) {

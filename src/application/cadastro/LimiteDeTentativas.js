@@ -10,6 +10,9 @@ export const LIMITES = Object.freeze({
   ip: { maximo: 5, janelaMs: 24 * 60 * 60 * 1000 },
   cnpj: { maximo: 5, janelaMs: 24 * 60 * 60 * 1000 },
   email: { maximo: 5, janelaMs: 24 * 60 * 60 * 1000 },
+  // Jornada do cadastro (eventos e rascunhos, por IP): conta separada da do cadastro, porque o
+  // app manda uma abertura a cada vez que abre, logado ou nao.
+  jornada: { maximo: 300, janelaMs: 24 * 60 * 60 * 1000 },
 });
 
 export function chaveDoLimite(tipo, valor) {

@@ -10,6 +10,7 @@ import { PedidosDeLoja } from './application/admin/PedidosDeLoja.js';
 import { SugestoesDosClientes } from './application/admin/SugestoesDosClientes.js';
 import { CadastroDeLoja } from './application/cadastro/CadastroDeLoja.js';
 import { ImagensDaLoja } from './application/cadastro/ImagensDaLoja.js';
+import { JornadaDoCadastro } from './application/cadastro/JornadaDoCadastro.js';
 import { LimiteDeTentativas } from './application/cadastro/LimiteDeTentativas.js';
 import { BannersDaLoja } from './application/loja/BannersDaLoja.js';
 import { FirestoreRest } from './infra/firebase/FirestoreRest.js';
@@ -101,18 +102,23 @@ const catalogoDaLoja = new CatalogoDaLoja({ firestore, travas });
 // Cadastro de loja pelo servidor e Admin completo (rodada de 13/10/2026).
 const firebaseAuth = getFirebaseAuth();
 const imagensDaLoja = new ImagensDaLoja({ firestore, bucket: getStorageBucket(env.STORAGE_BUCKET) });
+const limitesDoCadastro = new LimiteDeTentativas({ firestore });
+// Jornada do cadastro (funil do Admin): eventos e rascunhos do app, por instalacao.
+const jornadaDoCadastro = new JornadaDoCadastro({ firestore, limites: limitesDoCadastro });
 const cadastroDeLoja = new CadastroDeLoja({
   firestore,
   auth: firebaseAuth,
   consultaCnpj: new BrasilApiCnpj(),
-  limites: new LimiteDeTentativas({ firestore }),
+  limites: limitesDoCadastro,
   imagens: imagensDaLoja,
+  jornada: jornadaDoCadastro,
 });
 const app = createApp({
   cadastroDeLoja,
+  jornadaDoCadastro,
   verificarAppCheck: (token) => getFirebaseAppCheck().verifyToken(token),
   imagensDaLoja,
-  pedidosDeLoja: new PedidosDeLoja({ firestore, auth: firebaseAuth }),
+  pedidosDeLoja: new PedidosDeLoja({ firestore, auth: firebaseAuth, jornada: jornadaDoCadastro }),
   lojaNoAdmin: new LojaNoAdmin({
     firestore, auth: firebaseAuth, accessRepository, imagens: imagensDaLoja,
   }),
