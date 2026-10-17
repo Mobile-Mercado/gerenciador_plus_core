@@ -108,3 +108,16 @@ test('index.js: visitasPorMesNightly semanal, segunda as 02:45 (28.3), sem colid
   assert.equal(horarios.filter((horario) => horario.startsWith('45 2 ')).length, 1);
   assert.ok(index.includes("await registrarNoite(snapshot.ref, 'visitasPorMesNightly', {"));
 });
+
+test('36.1: a rotina le os dias pelo id; o dia sem createdAt (gravado so pelo agente) entra na soma', async () => {
+  const diarios = {
+    '26-09-2026': { agentAppViewsCount: 1 },
+    '10-10-2026': { viewsCount: 3, createdAt: { seconds: 1 } },
+  };
+  const { db, stats } = bancoFalso(diarios);
+  await atualizarVisitasPorMes({ db, FieldValue, lojaId: 'zg', agora: new Date('2026-10-16T15:00:00Z') });
+  assert.deepEqual(stats().meses, { '2026-09': { app: 0, agente: 1 }, '2026-10': { app: 3, agente: 0 } });
+  const soma = somarVisitasPorMes([{ id: '26-09-2026', dados: diarios['26-09-2026'] }]);
+  assert.deepEqual(soma.meses, { '2026-09': { app: 0, agente: 1 } });
+  assert.equal(soma.semCreatedAt, 1);
+});

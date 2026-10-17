@@ -55,6 +55,7 @@ const {
   doisUltimosMeses,
   leitorDaApple,
   lerSegredoOpcional,
+  pedidoAppleDaLoja,
   pedirRelatoriosQueFaltam,
 } = require('./instalacoesApp');
 const { avisoDeMensagem, avisoDePedidoCancelado, avisoDePedidoNovo } = require('./avisos');
@@ -1187,11 +1188,12 @@ const APPLE_RELATORIOS_LEITURA_P8 = defineSecret('APPLE_RELATORIOS_LEITURA_P8');
 const APPLE_ISSUER_ID = defineString('APPLE_ISSUER_ID');
 const APPLE_KEY_ID = defineString('APPLE_KEY_ID');
 const PLAY_REPORTS_BUCKET = defineString('PLAY_REPORTS_BUCKET');
-// Pedido automatico dos relatorios da Apple para app novo (Parte 32.3), preparado e desligado: liga quando
-// existirem a chave Admin no segredo APPLE_RELATORIOS_PEDIDO_P8 (lido em memoria pela conta da funcao,
-// so ela com acesso) e o Key ID dela aqui. Sem os dois, a rotina so registra app sem pedido.
+// Pedido automatico dos relatorios da Apple para app novo (Partes 32.3 e 36.2): a chave Admin mora no
+// segredo APPLE_RELATORIOS_PEDIDO_P8 do projeto mobile-chaves-apple, lido em memoria pela conta da funcao
+// (relatorios-lojas) pelo caminho completo; o defineSecret so enxerga segredos do proprio projeto. O Key
+// ID e o caminho vem do functions/.env.appmobileprod-19505. Sem os dois, a rotina so registra app sem pedido.
 const APPLE_PEDIDO_KEY_ID = defineString('APPLE_PEDIDO_KEY_ID', { default: '' });
-const SEGREDO_DE_PEDIDO = 'APPLE_RELATORIOS_PEDIDO_P8';
+const APPLE_PEDIDO_SEGREDO = defineString('APPLE_PEDIDO_SEGREDO', { default: '' });
 
 // Le um segredo opcional com a credencial da funcao (sem prende-lo ao deploy, como os de defineSecret).
 async function pedirAoGoogle({ url }) {
@@ -1201,13 +1203,13 @@ async function pedirAoGoogle({ url }) {
   return { data: await resposta.json() };
 }
 
-// Antes de ler os relatorios: os apps da conta Apple sem pedido ONGOING ganham ONGOING e ONE_TIME_SNAPSHOT
-// (com a chave de pedido) ou ficam apontados como sem pedido (sem ela). Falha aqui nao para a rotina.
+// Antes de ler os relatorios: os apps da conta Apple sem pedido ONGOING ganham um ONGOING (com a chave de
+// pedido) ou ficam apontados como sem pedido (sem ela). Falha aqui nao para a rotina.
 async function pedidosDaAppleDaSemana({ issuerId, chaveDeLeitura, keyIdDeLeitura }) {
   try {
     const keyIdDePedido = APPLE_PEDIDO_KEY_ID.value();
     const chaveDePedido = keyIdDePedido
-      ? await lerSegredoOpcional({ pedirAoGoogle, projeto: process.env.GCLOUD_PROJECT || 'appmobileprod-19505', nome: SEGREDO_DE_PEDIDO })
+      ? await lerSegredoOpcional({ pedirAoGoogle, caminho: APPLE_PEDIDO_SEGREDO.value() })
       : null;
     const resultado = await pedirRelatoriosQueFaltam({
       leitura: clienteDePedidos({ chaveP8: chaveDeLeitura, issuerId, keyId: keyIdDeLeitura }),
@@ -1215,7 +1217,7 @@ async function pedidosDaAppleDaSemana({ issuerId, chaveDeLeitura, keyIdDeLeitura
     });
     console.log('[instalacoesAppNightly] Pedidos da Apple', {
       chaveDePedido: Boolean(chaveDePedido),
-      apps: resultado.map(({ appId, bundle, situacao, pedidos }) => ({ appId, bundle, situacao, pedidos })),
+      apps: resultado.map(({ appId, bundle, situacao, pedidos, erro }) => ({ appId, bundle, situacao, pedidos, ...(erro ? { erro } : {}) })),
     });
     return resultado;
   } catch (error) {
@@ -1266,16 +1268,24 @@ exports.instalacoesAppNightly = onSchedule(
           keyId: APPLE_KEY_ID.value(),
         }),
         meses,
-        aoTerminarLoja: (snapshot, resultado) => registrarNoite(snapshot.ref, 'instalacoesAppNightly', {
-          dados: {
-            meses: meses.join(','),
-            androidAte: resultado.documento.dadosAte.android || '',
-            iosAte: resultado.documento.dadosAte.ios || '',
-            dimensaoAndroid: [...new Set((resultado.android?.arquivos || []).map((arquivo) => arquivo.dimensao))].join(','),
-            // Pedido da Apple do app desta loja: ja-tinha, pedido-criado:ONGOING+ONE_TIME_SNAPSHOT, sem-pedido ou falhou.
-            pedidoApple: situacaoDoPedido(snapshot),
-          },
-        }),
+        aoTerminarLoja: async (snapshot, resultado) => {
+          // Pedido da Apple do app da loja (app, situacao e motivo do erro) em Stats/instalacoesApp.
+          const pedidoApple = pedidoAppleDaLoja(pedidosDaApple, appsDaLoja(snapshot.get('whitelabelId'))?.ios);
+          if (pedidoApple) {
+            await snapshot.ref.collection('Stats').doc('instalacoesApp').set({ pedidoApple }, { merge: true })
+              .catch((error) => console.error('[instalacoesAppNightly] Falha ao registrar o pedido da Apple', { establishmentId: snapshot.id, error: error.message }));
+          }
+          await registrarNoite(snapshot.ref, 'instalacoesAppNightly', {
+            dados: {
+              meses: meses.join(','),
+              androidAte: resultado.documento.dadosAte.android || '',
+              iosAte: resultado.documento.dadosAte.ios || '',
+              dimensaoAndroid: [...new Set((resultado.android?.arquivos || []).map((arquivo) => arquivo.dimensao))].join(','),
+              // Pedido da Apple do app desta loja: ja-tinha, pedido-criado:ONGOING, sem-pedido ou falhou.
+              pedidoApple: situacaoDoPedido(snapshot),
+            },
+          });
+        },
         aoFalhar: (establishmentId, error) => console.error('[instalacoesAppNightly] Falha na loja', { establishmentId, error: error.message }),
       });
 

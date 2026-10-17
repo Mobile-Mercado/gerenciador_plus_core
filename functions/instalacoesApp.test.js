@@ -240,12 +240,13 @@ test('index.js: instalacoesAppNightly semanal, segunda as 04:15 (28.2), com a co
   assert.ok(index.includes("const APPLE_RELATORIOS_LEITURA_P8 = defineSecret('APPLE_RELATORIOS_LEITURA_P8');"));
   ['APPLE_ISSUER_ID', 'APPLE_KEY_ID', 'PLAY_REPORTS_BUCKET'].forEach((nome) => assert.ok(index.includes(`const ${nome} = defineString('${nome}');`)));
   assert.ok(index.includes('secrets: [APPLE_RELATORIOS_LEITURA_P8],'));
-  assert.ok(index.includes("aoTerminarLoja: (snapshot, resultado) => registrarNoite(snapshot.ref, 'instalacoesAppNightly', {"));
+  assert.ok(index.includes('aoTerminarLoja: async (snapshot, resultado) => {'));
+  assert.ok(index.includes("await registrarNoite(snapshot.ref, 'instalacoesAppNightly', {"));
 });
 
-// Parte 32.3: pedido automatico dos relatorios da Apple, com a API simulada.
+// Partes 32.3 e 36.2: pedido automatico dos relatorios da Apple, com a API simulada.
 const {
-  chamadaDePedidoPermitida, clienteDePedidos, lerSegredoOpcional, pedirRelatoriosQueFaltam,
+  chamadaDePedidoPermitida, clienteDePedidos, lerSegredoOpcional, pedidoAppleDaLoja, pedirRelatoriosQueFaltam,
 } = require('./instalacoesApp');
 
 const chaveDeTeste = () => crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ type: 'pkcs8', format: 'pem' });
@@ -253,6 +254,7 @@ const chaveDeTeste = () => crypto.generateKeyPairSync('ec', { namedCurve: 'P-256
 // API da Apple simulada: apps, pedidos por app e criacao de pedido; registra cada chamada.
 function appleSimulada({ apps, pedidos, falharAoCriar = [] }) {
   const chamadas = [];
+  const criados = [];
   let proximoId = 0;
   const responder = (status, corpo) => ({ ok: status < 400, status, json: async () => corpo });
   const buscar = async (url, opcoes = {}) => {
@@ -271,11 +273,12 @@ function appleSimulada({ apps, pedidos, falharAoCriar = [] }) {
       const appId = corpo.data.relationships.app.data.id;
       if (falharAoCriar.includes(appId)) return responder(403, { errors: [{ code: 'FORBIDDEN_ERROR' }] });
       proximoId += 1;
+      criados.push([appId, corpo.data.attributes.accessType]);
       return responder(201, { data: { type: 'analyticsReportRequests', id: `pedido-${proximoId}`, attributes: corpo.data.attributes } });
     }
     return responder(404, {});
   };
-  return { buscar, chamadas };
+  return { buscar, chamadas, criados };
 }
 
 const APPS = [
@@ -283,6 +286,7 @@ const APPS = [
   { id: '2', attributes: { name: 'App Novo', bundleId: 'br.com.novo' } },
   { id: '3', attributes: { name: 'Parado', bundleId: 'br.com.parado' } },
   { id: '4', attributes: { name: 'Recusado', bundleId: 'br.com.recusado' } },
+  { id: '5', attributes: { name: 'Depois do erro', bundleId: 'br.com.depois' } },
 ];
 const PEDIDOS = {
   1: [{ id: 'a', attributes: { accessType: 'ONGOING', stoppedDueToInactivity: false } }],
@@ -314,7 +318,7 @@ test('32.3: link de paginacao para fora da lista e recusado antes de sair', asyn
   assert.equal(chamadas.length, 1);
 });
 
-test('32.2/32.3: com a chave de pedido, app sem ONGOING ativo ganha ONGOING e ONE_TIME_SNAPSHOT', async () => {
+test('36.2: app sem ONGOING ativo ganha um ONGOING; app com request existente nao ganha outro; erro de um app nao para os outros', async () => {
   const apple = appleSimulada({ apps: APPS, pedidos: PEDIDOS, falharAoCriar: ['4'] });
   const chaveP8 = chaveDeTeste();
   const resultado = await pedirRelatoriosQueFaltam({
@@ -323,13 +327,31 @@ test('32.2/32.3: com a chave de pedido, app sem ONGOING ativo ganha ONGOING e ON
   });
   assert.deepEqual(resultado.map(({ appId, situacao, pedidos }) => [appId, situacao, pedidos.map((item) => item.tipo)]), [
     ['1', 'ja-tinha', []],
-    ['2', 'pedido-criado', ['ONGOING', 'ONE_TIME_SNAPSHOT']],
-    ['3', 'pedido-criado', ['ONGOING', 'ONE_TIME_SNAPSHOT']],
+    ['2', 'pedido-criado', ['ONGOING']],
+    ['3', 'pedido-criado', ['ONGOING']],
     ['4', 'falhou', []],
+    ['5', 'pedido-criado', ['ONGOING']],
   ]);
+  // O app 1 ja tinha ONGOING: nenhum POST para ele. O erro do app 4 nao parou o app 5.
+  assert.deepEqual(apple.criados, [['2', 'ONGOING'], ['3', 'ONGOING'], ['5', 'ONGOING']]);
   assert.match(resultado[3].erro, /403/);
-  assert.equal(apple.chamadas.filter((chamada) => chamada.startsWith('POST')).length, 5);
   assert.ok(apple.chamadas.every((chamada) => /^(GET \/v1\/apps(\/\d+\/analyticsReportRequests)?|POST \/v1\/analyticsReportRequests)$/.test(chamada)));
+});
+
+test('36.2: registro em Stats/instalacoesApp com o app, a situacao e o motivo, sem conteudo de chave', () => {
+  const pedidos = [
+    { appId: '1', bundle: 'br.com.zero.grau', situacao: 'ja-tinha', pedidos: [] },
+    { appId: '4', bundle: 'br.com.recusado', situacao: 'falhou', pedidos: [], erro: 'App Store Connect respondeu 403 em /v1/analyticsReportRequests' },
+    { appId: '2', bundle: 'br.com.novo', situacao: 'pedido-criado', pedidos: [{ tipo: 'ONGOING', id: 'pedido-1' }] },
+  ];
+  const agora = new Date('2026-10-19T07:15:00Z');
+  assert.deepEqual(pedidoAppleDaLoja(pedidos, 'br.com.zero.grau', agora), { appId: '1', bundle: 'br.com.zero.grau', situacao: 'ja-tinha', em: '2026-10-19T07:15:00.000Z' });
+  assert.deepEqual(pedidoAppleDaLoja(pedidos, 'br.com.recusado', agora), {
+    appId: '4', bundle: 'br.com.recusado', situacao: 'falhou', motivo: 'App Store Connect respondeu 403 em /v1/analyticsReportRequests', em: '2026-10-19T07:15:00.000Z',
+  });
+  assert.deepEqual(pedidoAppleDaLoja(pedidos, 'br.com.novo', agora).pedidos, [{ tipo: 'ONGOING', id: 'pedido-1' }]);
+  assert.equal(pedidoAppleDaLoja(pedidos, 'br.com.sem.app', agora), null);
+  assert.equal(pedidoAppleDaLoja(pedidos, undefined, agora), null);
 });
 
 test('32.3: sem a chave de pedido, a rotina so aponta o app sem pedido e nao cria nada', async () => {
@@ -338,41 +360,64 @@ test('32.3: sem a chave de pedido, a rotina so aponta o app sem pedido e nao cri
     leitura: clienteDePedidos({ chaveP8: chaveDeTeste(), issuerId: 'i', keyId: 'LEITURA', fetch: apple.buscar }),
     pedido: null,
   });
-  assert.deepEqual(resultado.map(({ appId, situacao }) => [appId, situacao]), [['1', 'ja-tinha'], ['2', 'sem-pedido'], ['3', 'sem-pedido'], ['4', 'sem-pedido']]);
+  assert.deepEqual(resultado.map(({ appId, situacao }) => [appId, situacao]), [['1', 'ja-tinha'], ['2', 'sem-pedido'], ['3', 'sem-pedido'], ['4', 'sem-pedido'], ['5', 'sem-pedido']]);
   assert.equal(apple.chamadas.filter((chamada) => chamada.startsWith('POST')).length, 0);
 });
 
-test('32.3: segredo de pedido opcional: sem o segredo ou sem acesso, null', async () => {
+test('36.2: segredo lido pelo caminho completo, em outro projeto; sem o segredo ou sem acesso, null', async () => {
   const conteudo = Buffer.from('-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n').toString('base64');
   const urls = [];
+  const caminho = 'projects/mobile-chaves-apple/secrets/APPLE_RELATORIOS_PEDIDO_P8/versions/latest';
   const lido = await lerSegredoOpcional({
     pedirAoGoogle: async ({ url }) => { urls.push(url); return { data: { payload: { data: conteudo } } }; },
-    projeto: 'appmobileprod-19505',
-    nome: 'APPLE_RELATORIOS_PEDIDO_P8',
+    caminho,
   });
   assert.ok(lido.startsWith('-----BEGIN PRIVATE KEY-----'));
-  assert.deepEqual(urls, ['https://secretmanager.googleapis.com/v1/projects/appmobileprod-19505/secrets/APPLE_RELATORIOS_PEDIDO_P8/versions/latest:access']);
-  assert.equal(await lerSegredoOpcional({ pedirAoGoogle: async () => { throw new Error('404'); }, projeto: 'p', nome: 'n' }), null);
-  assert.equal(await lerSegredoOpcional({ pedirAoGoogle: async () => ({ data: { payload: { data: '' } } }), projeto: 'p', nome: 'n' }), null);
+  assert.deepEqual(urls, [`https://secretmanager.googleapis.com/v1/${caminho}:access`]);
+  assert.equal(await lerSegredoOpcional({ pedirAoGoogle: async () => { throw new Error('403'); }, caminho }), null);
+  assert.equal(await lerSegredoOpcional({ pedirAoGoogle: async () => ({ data: { payload: { data: '' } } }), caminho }), null);
+  // Caminho vazio ou fora do formato: nem chama.
+  const chamadas = [];
+  const contar = async () => { chamadas.push(1); return { data: {} }; };
+  assert.equal(await lerSegredoOpcional({ pedirAoGoogle: contar, caminho: '' }), null);
+  assert.equal(await lerSegredoOpcional({ pedirAoGoogle: contar, caminho: 'APPLE_RELATORIOS_PEDIDO_P8' }), null);
+  assert.equal(chamadas.length, 0);
 });
 
-test('32.3: so a rotina semanal usa o segredo de pedido; a rota do Admin nunca; desligado sem o Key ID', () => {
+test('36.2 e 36.3: so a rotina semanal usa a chave de pedido; a rota do Admin nunca; Key ID e caminho no .env', () => {
   const index = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
   assert.ok(index.includes("const APPLE_PEDIDO_KEY_ID = defineString('APPLE_PEDIDO_KEY_ID', { default: '' });"));
-  assert.ok(index.includes("const SEGREDO_DE_PEDIDO = 'APPLE_RELATORIOS_PEDIDO_P8';"));
-  // Nao entra em secrets (o deploy nao depende do segredo existir).
-  assert.ok(index.includes('    secrets: [APPLE_RELATORIOS_LEITURA_P8],\n') || index.includes('    secrets: [APPLE_RELATORIOS_LEITURA_P8],\r\n'));
+  assert.ok(index.includes("const APPLE_PEDIDO_SEGREDO = defineString('APPLE_PEDIDO_SEGREDO', { default: '' });"));
+  assert.ok(index.includes('lerSegredoOpcional({ pedirAoGoogle, caminho: APPLE_PEDIDO_SEGREDO.value() })'));
+  // Nao entra em secrets (o defineSecret so enxerga o proprio projeto).
+  assert.ok(/secrets: \[APPLE_RELATORIOS_LEITURA_P8\],\r?\n/.test(index));
+  assert.ok(index.includes("await snapshot.ref.collection('Stats').doc('instalacoesApp').set({ pedidoApple }, { merge: true })"));
   assert.ok(index.includes('pedidoApple: situacaoDoPedido(snapshot),'));
-  const usos = index.split('pedidosDaAppleDaSemana(').length - 1;
-  assert.equal(usos, 2);
-  // Nada no Core (a rota do botao do Admin) usa o segredo de pedido nem o cliente de pedido.
+  assert.equal(index.split('pedidosDaAppleDaSemana(').length - 1, 2);
+  const env = fs.readFileSync(path.join(__dirname, '.env.appmobileprod-19505'), 'utf8').split(/\r?\n/).filter(Boolean);
+  assert.deepEqual(env.map((linha) => linha.split('=')[0]), ['APPLE_ISSUER_ID', 'APPLE_KEY_ID', 'PLAY_REPORTS_BUCKET', 'APPLE_PEDIDO_KEY_ID', 'APPLE_PEDIDO_SEGREDO']);
+  assert.ok(env.includes('APPLE_PEDIDO_SEGREDO=projects/mobile-chaves-apple/secrets/APPLE_RELATORIOS_PEDIDO_P8/versions/latest'));
+  assert.ok(!/BEGIN|PRIVATE/.test(env.join('\n')));
+  // Nada no Core (a rota do botao do Admin) nem no apphosting.yaml usa a chave de pedido.
   const arquivos = (pasta) => fs.readdirSync(pasta, { withFileTypes: true }).flatMap((item) => {
     const caminho = path.join(pasta, item.name);
     return item.isDirectory() ? arquivos(caminho) : [caminho];
   });
-  const doCore = arquivos(path.join(__dirname, '..', 'src')).filter((arquivo) => arquivo.endsWith('.js'));
+  const doCore = [...arquivos(path.join(__dirname, '..', 'src')).filter((arquivo) => arquivo.endsWith('.js')), path.join(__dirname, '..', 'apphosting.yaml')];
   doCore.forEach((arquivo) => {
     const texto = fs.readFileSync(arquivo, 'utf8');
-    assert.ok(!/APPLE_RELATORIOS_PEDIDO_P8|clienteDePedidos|pedirRelatoriosQueFaltam|APPLE_PEDIDO_KEY_ID/.test(texto), arquivo);
+    assert.ok(!/APPLE_RELATORIOS_PEDIDO_P8|clienteDePedidos|pedirRelatoriosQueFaltam|APPLE_PEDIDO_/.test(texto), arquivo);
   });
+});
+
+test('36.2: a montagem regrava o documento sem perder o registro do pedido da Apple', async () => {
+  const gravados = [];
+  const atual = { dias: {}, pedidoApple: { appId: '1', situacao: 'ja-tinha', em: 'x' } };
+  const referencia = { get: async () => ({ exists: true, data: () => atual }), set: async (dados) => { gravados.push(dados); } };
+  const db = { collection: () => ({ doc: () => ({ collection: () => ({ doc: () => referencia }) }) }) };
+  const bucket = bucketFalso({
+    [arquivoDaPlay('br.com.zero.grau', '2026-10', 'overview')]: utf16(`${CABECALHO.replace(',Country', '')}\n2026-10-02,br.com.zero.grau,0,0,0,0,2,0,56,0,0,0`),
+  });
+  await atualizarInstalacoes({ db, FieldValue: { serverTimestamp: () => 'agora' }, lojaId: 'zg', apps: appsDaLoja('br.com.zero.grau'), bucket, meses: ['2026-10'] });
+  assert.deepEqual(gravados[0].pedidoApple, atual.pedidoApple);
 });

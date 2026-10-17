@@ -237,8 +237,9 @@ function clienteDaApple({ chaveP8, issuerId, keyId, fetch: buscar = fetch }) {
 //
 // A chave de leitura (relatorios-leitura) nao pode criar pedido de relatorio: a Apple responde 403
 // FORBIDDEN_ERROR (teste de 16/10/2026). Criar pedido exige uma chave Admin, guardada num segredo proprio
-// (APPLE_RELATORIOS_PEDIDO_P8) que so a rotina semanal le. O cliente abaixo so chama a lista de apps e os
-// pedidos de relatorio (analyticsReportRequests); qualquer outro endereco e recusado antes de sair.
+// (APPLE_RELATORIOS_PEDIDO_P8, no projeto mobile-chaves-apple) que so a rotina semanal le, pelo caminho
+// completo. O cliente abaixo so chama a lista de apps e os pedidos de relatorio (analyticsReportRequests);
+// qualquer outro endereco e recusado antes de sair. O conteudo do .p8 nunca vai para log nem para o banco.
 const CHAMADAS_DE_PEDIDO = [
   { metodo: 'GET', caminho: /^\/v1\/apps$/ },
   { metodo: 'GET', caminho: /^\/v1\/apps\/\d+\/analyticsReportRequests$/ },
@@ -282,10 +283,10 @@ function clienteDePedidos({ chaveP8, issuerId, keyId, fetch: buscar = fetch }) {
   };
 }
 
-// Para cada app da conta: tem pedido ONGOING ativo? Sem ele e com o cliente de pedido (chave Admin),
-// cria o ONGOING e um ONE_TIME_SNAPSHOT (o historico). Sem o cliente de pedido, so aponta o app sem
-// pedido. Devolve { appId, nome, bundle, situacao: 'ja-tinha' | 'pedido-criado' | 'sem-pedido' |
-// 'falhou', pedidos } por app. Listar apps e pedidos funciona com qualquer uma das duas chaves.
+// Para cada app iOS da conta: tem pedido ONGOING ativo? Sem ele e com o cliente de pedido (chave Admin),
+// cria um ONGOING (36.2). App que ja tem fica como esta. Erro de um app nao para os outros: o app sai com
+// situacao 'falhou' e o motivo. Sem o cliente de pedido, so aponta o app sem pedido. Devolve { appId,
+// nome, bundle, situacao: 'ja-tinha' | 'pedido-criado' | 'sem-pedido' | 'falhou', pedidos, erro? } por app.
 async function pedirRelatoriosQueFaltam({ leitura, pedido = null }) {
   const cliente = pedido || leitura;
   const apps = await cliente.listarApps();
@@ -301,13 +302,9 @@ async function pedirRelatoriosQueFaltam({ leitura, pedido = null }) {
       } else if (!pedido) {
         resultado.push({ ...base, situacao: 'sem-pedido', pedidos: [] });
       } else {
-        const criados = [];
-        for (const tipo of ['ONGOING', 'ONE_TIME_SNAPSHOT']) {
-          // eslint-disable-next-line no-await-in-loop
-          const criado = await pedido.criarPedido(app.id, tipo);
-          criados.push({ tipo, id: criado?.data?.id || '' });
-        }
-        resultado.push({ ...base, situacao: 'pedido-criado', pedidos: criados });
+        // eslint-disable-next-line no-await-in-loop
+        const criado = await pedido.criarPedido(app.id, 'ONGOING');
+        resultado.push({ ...base, situacao: 'pedido-criado', pedidos: [{ tipo: 'ONGOING', id: criado?.data?.id || '' }] });
       }
     } catch (error) {
       resultado.push({ ...base, situacao: 'falhou', pedidos: [], erro: error.message });
@@ -316,11 +313,13 @@ async function pedirRelatoriosQueFaltam({ leitura, pedido = null }) {
   return resultado;
 }
 
-// Segredo opcional do Secret Manager, lido em memoria com a conta da funcao. Sem o segredo (ou sem
-// acesso), null: a rotina segue normal. pedirAoGoogle: request de um cliente do google-auth-library.
-async function lerSegredoOpcional({ pedirAoGoogle, projeto, nome }) {
+// Segredo opcional do Secret Manager, lido em memoria com a conta da funcao, pelo caminho completo
+// ("projects/{projeto}/secrets/{nome}/versions/latest", pode ser de outro projeto). Sem o segredo (ou sem
+// acesso), null: a rotina segue normal.
+async function lerSegredoOpcional({ pedirAoGoogle, caminho }) {
+  if (!/^projects\/[^/]+\/secrets\/[^/]+\/versions\/[^/]+$/.test(String(caminho || ''))) return null;
   try {
-    const { data } = await pedirAoGoogle({ url: `https://secretmanager.googleapis.com/v1/projects/${projeto}/secrets/${nome}/versions/latest:access` });
+    const { data } = await pedirAoGoogle({ url: `https://secretmanager.googleapis.com/v1/${caminho}:access` });
     const texto = Buffer.from(data?.payload?.data || '', 'base64').toString('utf8');
     return texto.trim() ? texto : null;
   } catch {
@@ -476,7 +475,10 @@ async function atualizarInstalacoes({
     ios,
     mesesRecalculados: meses || [],
   });
-  if (gravar && (android || ios)) await referencia.set({ ...documento, atualizadoEm: FieldValue.serverTimestamp() });
+  const pedidoApple = atual.exists ? atual.data()?.pedidoApple : null;
+  if (gravar && (android || ios)) {
+    await referencia.set({ ...documento, ...(pedidoApple ? { pedidoApple } : {}), atualizadoEm: FieldValue.serverTimestamp() });
+  }
   return { ...relatorio, documento };
 }
 
@@ -534,6 +536,21 @@ async function atualizarTodasAsLojas({
   return relatorio;
 }
 
+// Registro do pedido da Apple de uma loja em Stats/instalacoesApp (36.2): o app, a situacao e, se falhou,
+// o motivo (a mensagem da Apple, sem conteudo de chave). Sem o app da loja na conta, null.
+function pedidoAppleDaLoja(pedidos, bundle, agora = new Date()) {
+  const app = (pedidos || []).find((item) => item.bundle && item.bundle === bundle);
+  if (!app) return null;
+  return {
+    appId: app.appId,
+    bundle: app.bundle,
+    situacao: app.situacao,
+    ...(app.situacao === 'falhou' ? { motivo: String(app.erro || '').slice(0, 300) } : {}),
+    ...(app.pedidos?.length ? { pedidos: app.pedidos } : {}),
+    em: agora.toISOString(),
+  };
+}
+
 module.exports = {
   APPS_POR_WHITELABEL,
   COLUNAS_DA_APPLE,
@@ -560,6 +577,7 @@ module.exports = {
   lojasComApp,
   mesesNoBucket,
   montarDocumento,
+  pedidoAppleDaLoja,
   pedirRelatoriosQueFaltam,
   somarCsvsDaPlay,
   somarRelatoriosDaApple,
