@@ -6,6 +6,8 @@ import { STATUS } from '../cadastro/CadastroDeLoja.js';
 // pelo app gerenciador e decide: aprovar (status aprovada + claim adminOf do dono), recusar com
 // motivo ou marcar "Em conversa". Aprovar nao liga a loja no app (isActive e manual, pelo botao
 // do Admin). Os cadastros que pararam antes do e-mail confirmado ficam numa lista separada.
+// Os cadastros incompletos do app (rascunhos da jornada, que nao viraram pedido) vem nas
+// listas "incompletos" (em andamento e em conversa) e "descartados", com as marcas do Admin.
 const ABERTOS = [STATUS.EM_ANALISE, STATUS.EM_CONVERSA];
 const LISTAS = Object.freeze({
   abertos: ABERTOS,
@@ -13,6 +15,7 @@ const LISTAS = Object.freeze({
   aprovados: [STATUS.APROVADA],
   recusados: [STATUS.RECUSADA],
 });
+export const LISTAS_DA_JORNADA = Object.freeze(['incompletos', 'descartados']);
 
 export function quandoIso(valor) {
   if (!valor) return null;
@@ -24,12 +27,18 @@ export function quandoIso(valor) {
 function linhaDoPedido(documento) {
   const data = documento.data() || {};
   return {
+    tipo: 'pedido',
     id: documento.id,
     nome: data.name || documento.id,
     cidade: data.address?.city || null,
     uf: data.address?.uf || data.address?.state || null,
     cnpj: data.cnpj || null,
     cnpjConferido: data.cnpjConferido === true,
+    cnpjAtivo: data.cnpjAtivo ?? null,
+    cnpjRepetido: data.cnpjRepetido === true,
+    cidadeReceita: data.enderecoReceita?.city || null,
+    erp: data.erp || null,
+    instalacaoId: data.instalacaoId || null,
     razaoSocial: data.razaoSocial || null,
     responsavel: { nome: data.responsibleName || null, celular: data.phone || null, email: data.email || null },
     status: data.status,
@@ -44,13 +53,18 @@ function linhaDoPedido(documento) {
 }
 
 export class PedidosDeLoja {
-  constructor({ firestore, auth, serverTimestamp = () => FieldValue.serverTimestamp() }) {
+  constructor({ firestore, auth, jornada = null, serverTimestamp = () => FieldValue.serverTimestamp() }) {
     this.firestore = firestore;
     this.auth = auth;
+    this.jornada = jornada;
     this.serverTimestamp = serverTimestamp;
   }
 
   async listar(lista = 'abertos') {
+    if (LISTAS_DA_JORNADA.includes(lista)) {
+      if (!this.jornada) throw new AppError('Lista inválida.', { statusCode: 400, code: 'pedidos_lista_invalida' });
+      return this.jornada.listarIncompletos(lista);
+    }
     const status = LISTAS[lista];
     if (!status) throw new AppError('Lista inválida.', { statusCode: 400, code: 'pedidos_lista_invalida' });
     const resultados = await Promise.all(status.map((valor) => this.firestore
@@ -123,6 +137,13 @@ export class PedidosDeLoja {
       updatedAt: this.serverTimestamp(),
     });
     return linhaDoPedido(await loja.ref.get());
+  }
+
+  // Cadastro incompleto (rascunho da jornada): "Em conversa", "Descartar" ou voltar para em
+  // andamento. So marca; nada e apagado.
+  async marcarIncompleto(instalacaoId, situacao, ator = {}) {
+    if (!this.jornada) throw new AppError('Cadastro incompleto não encontrado.', { statusCode: 404, code: 'cadastro_incompleto_nao_encontrado' });
+    return this.jornada.marcar(instalacaoId, situacao, ator);
   }
 
   // "Em conversa": marcada e desmarcada pela equipe; desmarcar volta para em analise.

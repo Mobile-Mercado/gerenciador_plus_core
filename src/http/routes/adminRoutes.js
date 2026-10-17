@@ -32,7 +32,12 @@ const decisaoSchema = z.object({
   motivo: z.string().max(500).optional(),
 });
 const formatarSchema = z.object({ nome: z.string().max(200) });
-const listaPedidosSchema = z.object({ lista: z.enum(['abertos', 'parados', 'aprovados', 'recusados']).optional() });
+const listaPedidosSchema = z.object({
+  lista: z.enum(['abertos', 'parados', 'aprovados', 'recusados', 'incompletos', 'descartados']).optional(),
+});
+// Cadastro incompleto: "Em conversa", "Descartar" ou voltar para em andamento (so marca).
+const situacaoIncompletoSchema = z.object({ situacao: z.enum(['em_conversa', 'descartado', 'em_andamento']) });
+const instalacaoParamsSchema = z.object({ instalacaoId: z.string().min(8).max(100).regex(/^[A-Za-z0-9_-]+$/) });
 const recusaSchema = z.object({ motivo: z.string().max(500) });
 const emConversaSchema = z.object({ emConversa: z.boolean() });
 const edicaoLojaSchema = z.object({
@@ -143,6 +148,13 @@ export function createAdminRoutes({
   router.get('/pedidos-de-loja', asyncHandler(async (request, response) => {
     const { lista } = listaPedidosSchema.parse(request.query);
     response.json({ data: await pedidosDeLoja.listar(lista || 'abertos') });
+  }));
+
+  router.post('/pedidos-de-loja/incompletos/:instalacaoId/situacao', asyncHandler(async (request, response) => {
+    const { instalacaoId } = instalacaoParamsSchema.parse(request.params);
+    const { situacao } = situacaoIncompletoSchema.parse(request.body);
+    response.locals.auditoria = { acao: 'marcar_cadastro_incompleto', instalacaoId, situacao };
+    response.json({ data: await pedidosDeLoja.marcarIncompleto(instalacaoId, situacao, atorDe(request)) });
   }));
 
   router.post('/pedidos-de-loja/:lojaId/aprovar', asyncHandler(async (request, response) => {
