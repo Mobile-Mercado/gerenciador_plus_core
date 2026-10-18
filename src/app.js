@@ -5,6 +5,7 @@ import { env } from './config/env.js';
 import { createAdminRoutes } from './http/routes/adminRoutes.js';
 import { createAiRoutes } from './http/routes/aiRoutes.js';
 import { createBannersDaLojaRoutes } from './http/routes/bannersDaLojaRoutes.js';
+import { createEntregaDaLojaRoutes } from './http/routes/entregaDaLojaRoutes.js';
 import { createEntregadoresDaLojaRoutes } from './http/routes/entregadoresDaLojaRoutes.js';
 import { createCadastroRoutes } from './http/routes/cadastroRoutes.js';
 import { createCatalogoRoutes } from './http/routes/catalogoRoutes.js';
@@ -173,6 +174,12 @@ export function createApp({
     '/api/loja/entregadores',
     createFirebaseAuthMiddleware({ required: true }),
     createEntregadoresDaLojaRoutes({ entregadoresDaLoja, requirePermission, accountForRequest }),
+  );
+  // Entrega da propria loja: a mesma tela e o mesmo contrato do Admin, sem mudar o contrato.
+  app.use(
+    '/api/loja/entrega',
+    createFirebaseAuthMiddleware({ required: true }),
+    createEntregaDaLojaRoutes({ entregaDaLoja, requirePermission, accountForRequest }),
   );
   // Logo e capa da loja pelo painel: foto como sai do celular, convertida pelo Core.
   app.use(

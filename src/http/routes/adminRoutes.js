@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { formatarNome } from '../../domain/catalogo/formatarNome.js';
 import { asyncHandler } from '../middlewares/asyncHandler.js';
 import { corpoDeImagem } from '../middlewares/corpoDeImagem.js';
+import { entregaSchema } from './entregaSchema.js';
 
 // Rotas do Admin da plataforma. A barreira (requirePlatformAdmin) e o registro de quem agiu
 // (adminAudit) entram em app.js, antes deste roteador. Nao existe rota de excluir: item
@@ -39,56 +40,6 @@ const listaPedidosSchema = z.object({
 const situacaoIncompletoSchema = z.object({ situacao: z.enum(['em_conversa', 'descartado', 'em_andamento']) });
 const instalacaoParamsSchema = z.object({ instalacaoId: z.string().min(8).max(100).regex(/^[A-Za-z0-9_-]+$/) });
 const recusaSchema = z.object({ motivo: z.string().max(500) });
-// Entrega da loja pelo Admin: so os campos conhecidos; o que nao vier fica como esta.
-const numero = z.number().finite().min(0).max(1000000);
-const inteiro = z.number().int().min(0).max(100000);
-const horario = z.string().regex(/^\d{2}:\d{2}$/);
-const vagas = z.number().int().min(1).max(100000);
-// Janelas proprias por dia: os 7 dias de deliveryInfo.weekDaysDelivery, horarios em HH:mm.
-const diaDeEntregaSchema = z.object({
-  weekday: z.number().int().min(1).max(7),
-  canDelivery: z.boolean(),
-  initTime: horario,
-  endTime: horario,
-  interval: z.number().int().min(1).max(24),
-  maxSchedulesPerTime: vagas,
-  scheduleIntervalType: z.enum(['hours', 'days']).optional(),
-  customIntervals: z.array(z.object({
-    init: horario,
-    end: horario,
-    freight: numero.nullable().optional(),
-    maxSchedulesPerTime: vagas,
-    canDelivery: z.boolean(),
-  }).strict()).max(24),
-}).strict();
-const entregaSchema = z.object({
-  deliveryInfo: z.object({
-    deliveryCalcType: z.enum(['DeliveryCalcType.distance', 'DeliveryCalcType.fixedValue']).optional(),
-    fixedValue: numero.optional(),
-    baseValue: numero.optional(),
-    minimumDistance: numero.optional(),
-    maximunDistance: numero.optional(),
-    valuePerKm: numero.optional(),
-    minimumDeliveryTimeInMinutes: inteiro.optional(),
-    maximumDeliveryTimeInMinutes: inteiro.optional(),
-    isConfigured: z.boolean().optional(),
-    scheduleDays: z.number().int().min(0).max(60).optional(),
-    scheduleIntervalType: z.enum(['hours', 'days']).optional(),
-    intervalTimeBetweenSchedules: inteiro.optional(),
-    maxSchedulesPerTime: inteiro.optional(),
-    // "Pedido perto de fechar": allow, cut ou nextDay (lido pelo getAutoSchedule).
-    afterClosingDelivery: z.enum(['allow', 'cut', 'nextDay']).optional(),
-    weekDaysDelivery: z.array(diaDeEntregaSchema).length(7).optional(),
-  }).strict().optional(),
-  minimumPriceCart: numero.optional(),
-  openingHours: z.array(z.object({
-    weekday: z.number().int().min(1).max(7),
-    isOpen: z.boolean(),
-    openingHours: horario,
-    closeHours: horario,
-  })).length(7).optional(),
-  scheduling: z.object({ contracted: z.boolean().optional(), enabled: z.boolean().optional() }).strict().optional(),
-}).strict();
 const jornadaDeEntradaSchema = z.object({
   periodo: z.coerce.number().int().refine((dias) => [7, 30, 90].includes(dias), 'Período inválido.').default(30),
   uf: z.string().length(2).optional(),

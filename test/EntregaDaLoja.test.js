@@ -213,6 +213,109 @@ test('prazo minimo menor que o maximo e distancia incluida ate a maxima, contra 
   await vazia.entrega.salvar('loja-gs', { deliveryInfo: { minimumDeliveryTimeInMinutes: 500 } });
 });
 
+// Rotas da propria loja (cola RP-7): conta pelo uid do token, com o guarda de permissao de verdade.
+const CONTAS = {
+  'uid-dono': { establishmentId: 'loja-gs', permissions: { isAdmin: true, groupId: null, keys: [] } },
+  'uid-func-sem': { establishmentId: 'loja-gs', permissions: { isAdmin: false, groupId: 'g-pedidos', keys: ['requests.view'] } },
+  'uid-func-com': { establishmentId: 'loja-gs', permissions: { isAdmin: false, groupId: 'g-ajustes', keys: ['settings.edit'] } },
+  'uid-outra': { establishmentId: 'loja-outra', permissions: { isAdmin: true, groupId: null, keys: [] } },
+};
+
+async function comRotaDaLoja(usar) {
+  const { default: express } = await import('express');
+  const { createEntregaDaLojaRoutes } = await import('../src/http/routes/entregaDaLojaRoutes.js');
+  const { createPermissionGuard } = await import('../src/http/middlewares/requirePermission.js');
+  const { errorHandler } = await import('../src/http/middlewares/errorHandler.js');
+  const { banco, entrega } = montar();
+  banco.docs.set('estabelecimentos/loja-outra', { name: 'Outra', deliveryInfo: { valuePerKm: 9 }, scheduling: { contracted: true, enabled: false } });
+  const { requirePermission, accountForRequest } = createPermissionGuard({
+    accessRepository: { findAccountByClaims: async ({ uid }) => ({ hasEstablishment: true, establishmentDocument: {}, ...CONTAS[uid] }) },
+  });
+  const app = express();
+  app.use(express.json());
+  app.use((request, _response, next) => { request.auth = { uid: request.headers['x-uid'] }; next(); });
+  app.use('/api/loja/entrega', createEntregaDaLojaRoutes({ entregaDaLoja: entrega, requirePermission, accountForRequest }));
+  app.use(errorHandler);
+  const servidor = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
+  const base = `http://127.0.0.1:${servidor.address().port}/api/loja/entrega`;
+  const ler = (uid) => fetch(base, { headers: { 'x-uid': uid } });
+  const patch = (uid, corpo) => fetch(base, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'x-uid': uid }, body: JSON.stringify(corpo) });
+  try {
+    await usar({ ler, patch, banco });
+  } finally {
+    servidor.closeAllConnections();
+    servidor.close();
+  }
+}
+
+test('rota da loja GET /api/loja/entrega: a entrega da loja da conta, no mesmo formato do Admin', async () => {
+  await comRotaDaLoja(async ({ ler }) => {
+    const dono = await (await ler('uid-dono')).json();
+    assert.equal(dono.data.lojaId, 'loja-gs');
+    assert.equal(dono.data.minimumPriceCart, 20);
+    assert.equal(dono.data.openingHours.length, 7);
+    assert.equal((await (await ler('uid-func-sem')).json()).data.lojaId, 'loja-gs', 'ler nao pede permissao de gravar');
+    const outra = await (await ler('uid-outra')).json();
+    assert.equal(outra.data.lojaId, 'loja-outra');
+    assert.equal(outra.data.deliveryInfo.valuePerKm, 9);
+  });
+});
+
+test('rota da loja PATCH /api/loja/entrega: dono grava; funcionario sem settings.edit 403; outra loja so a dela', async () => {
+  await comRotaDaLoja(async ({ patch, banco }) => {
+    const dono = await patch('uid-dono', { deliveryInfo: { valuePerKm: 3, weekDaysDelivery: janelasDaTela() }, openingHours: dias() });
+    assert.equal(dono.status, 200);
+    const resposta = (await dono.json()).data;
+    assert.equal(resposta.deliveryInfo.valuePerKm, 3);
+    assert.equal(resposta.deliveryInfo.weekDaysDelivery[0].customIntervals.length, 2);
+    assert.equal(banco.dados('estabelecimentos/loja-gs').deliveryInfo.weekDaysDelivery.length, 7);
+
+    const semPermissao = await patch('uid-func-sem', { deliveryInfo: { valuePerKm: 7 } });
+    assert.equal(semPermissao.status, 403);
+    const erro = (await semPermissao.json()).error;
+    assert.equal(erro.code, 'permission_denied');
+    assert.equal(erro.key, 'settings.edit');
+    assert.equal((await patch('uid-func-com', { deliveryInfo: { valuePerKm: 4 } })).status, 200);
+    assert.equal(banco.dados('estabelecimentos/loja-gs').deliveryInfo.valuePerKm, 4);
+
+    // A outra loja grava so a dela; a loja-gs fica como estava.
+    assert.equal((await patch('uid-outra', { deliveryInfo: { valuePerKm: 11 } })).status, 200);
+    assert.equal(banco.dados('estabelecimentos/loja-outra').deliveryInfo.valuePerKm, 11);
+    assert.equal(banco.dados('estabelecimentos/loja-gs').deliveryInfo.valuePerKm, 4);
+
+    // As mesmas validacoes do Admin.
+    assert.equal((await patch('uid-dono', { deliveryInfo: { campoInventado: 1 } })).status, 400);
+    assert.equal((await patch('uid-dono', { deliveryInfo: { weekDaysDelivery: janelasDaTela().slice(0, 6) } })).status, 400);
+    const sobreposta = await patch('uid-dono', { deliveryInfo: { weekDaysDelivery: janelasDaTela((weekday) => (weekday === 1
+      ? { customIntervals: [janela('08:00', '12:00'), janela('11:00', '14:00')] } : {})) } });
+    assert.equal(sobreposta.status, 400);
+    assert.equal((await patch('uid-dono', { deliveryInfo: { minimumDeliveryTimeInMinutes: 90 } })).status, 400, 'prazo minimo maior que o gravado');
+  });
+});
+
+test('rota da loja: "Contratado" so pelo Admin; o mesmo valor passa e o agendamento so liga contratado', async () => {
+  await comRotaDaLoja(async ({ patch, banco }) => {
+    // loja-gs: contracted false.
+    const contratar = await patch('uid-dono', { scheduling: { contracted: true } });
+    assert.equal(contratar.status, 403);
+    assert.equal((await contratar.json()).error.code, 'agendamento_contrato_so_admin');
+    assert.equal(banco.dados('estabelecimentos/loja-gs').scheduling.contracted, false);
+    assert.equal((await patch('uid-dono', { scheduling: { contracted: true, enabled: true } })).status, 403);
+    assert.equal((await patch('uid-dono', { scheduling: { enabled: true } })).status, 409, 'sem contrato nao liga');
+    const mesmo = await patch('uid-dono', { scheduling: { contracted: false }, minimumPriceCart: 25 });
+    assert.equal(mesmo.status, 200, 'o mesmo valor gravado passa');
+    assert.equal(banco.dados('estabelecimentos/loja-gs').minimumPriceCart, 25);
+    assert.equal(Object.keys(banco.escritas.at(-1).dados).includes('scheduling.contracted'), false, 'e nao grava o contrato');
+
+    // loja-outra: contracted true; liga e desliga, mas nao descontrata.
+    assert.equal((await patch('uid-outra', { scheduling: { enabled: true } })).status, 200);
+    assert.deepEqual(banco.dados('estabelecimentos/loja-outra').scheduling, { contracted: true, enabled: true });
+    assert.equal((await patch('uid-outra', { scheduling: { contracted: false } })).status, 403);
+    assert.equal((await patch('uid-outra', { scheduling: { contracted: true, enabled: false } })).status, 200);
+    assert.deepEqual(banco.dados('estabelecimentos/loja-outra').scheduling, { contracted: true, enabled: false });
+  });
+});
+
 // Janelas por dia como o app grava (mobile_core weekday_delivery_adapter.dart): Timestamp em
 // 01/01/0001, hora de Sao Paulo (-3 h). No banco em memoria, Date.
 const ANO_1 = -62135596800000;

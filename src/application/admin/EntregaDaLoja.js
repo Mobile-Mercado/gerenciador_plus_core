@@ -121,12 +121,22 @@ export class EntregaDaLoja {
 
   // `entrada`: { deliveryInfo?, minimumPriceCart?, openingHours?, scheduling? }, ja no formato
   // conferido pela rota. Devolve a entrega como ficou e o que havia antes nos campos mudados.
-  async salvar(lojaId, entrada = {}) {
+  // `contratoSoDoAdmin`: a propria loja grava (PATCH /api/loja/entrega, cola RP-7); "Contratado"
+  // so muda pelo Admin, e o mesmo valor gravado passa sem gravar nada.
+  async salvar(lojaId, recebida = {}, { contratoSoDoAdmin = false } = {}) {
     const ref = this.lojaRef(lojaId);
     const resultado = await this.firestore.runTransaction(async (transacao) => {
       const loja = await transacao.get(ref);
       if (!loja.exists) throw recusa('Loja não encontrada.', 'loja_nao_encontrada', 404);
       const atual = loja.data() || {};
+      let entrada = recebida;
+      if (contratoSoDoAdmin && recebida.scheduling?.contracted !== undefined) {
+        if (recebida.scheduling.contracted !== (atual.scheduling?.contracted === true)) {
+          throw recusa('Só o Admin muda o agendamento contratado.', 'agendamento_contrato_so_admin', 403);
+        }
+        const { contracted: _mesmoValor, ...scheduling } = recebida.scheduling;
+        entrada = { ...recebida, scheduling: Object.keys(scheduling).length ? scheduling : undefined };
+      }
       const mudancas = {};
       const antes = {};
 
