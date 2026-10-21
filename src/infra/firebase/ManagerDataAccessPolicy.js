@@ -41,7 +41,12 @@ const COUPON_COLLECTIONS = new Set(['Cupons', 'Campaigns']);
 const CAMPOS_DA_LOJA_SO_ADMIN = [
   'isActive', 'status', 'motivoRecusa', 'aprovadoPor', 'aprovadoEm', 'recusadoPor', 'recusadoEm', 'enviadoEm',
   'origemCadastro', 'cnpjConferido', 'offerColor', 'scheduling.contracted',
+  // Contrato da versao 55 (cola RP-13): interruptores do app e blocos da Home, so pelo Admin
+  // (PATCH /api/admin/estabelecimentos/:lojaId/app-do-cliente).
+  'featureFlags', 'aparenciaHome',
 ];
+// Campos da loja que so mudam pela rota do Core que valida: a retirada vai por /api/loja/entrega.
+const CAMPOS_DA_LOJA_SO_PELA_ROTA = ['retirada'];
 const CAMPOS_DA_IMPLANTACAO_SO_ADMIN = ['aprovacaoFormal', 'appNasLojas'];
 const ALLOWED_AUTOMATIONS = new Set([
   'padronizador_nomes',
@@ -306,6 +311,9 @@ export class ManagerDataAccessPolicy {
     const proibidos = ehLoja ? CAMPOS_DA_LOJA_SO_ADMIN : CAMPOS_DA_IMPLANTACAO_SO_ADMIN;
     if (tocados.some((caminho) => proibidos.some((campo) => caminho === campo || caminho.startsWith(`${campo}.`) || campo.startsWith(`${caminho}.`)))) {
       throw forbidden('Este campo muda só pelo Admin.', 'campo_so_admin');
+    }
+    if (ehLoja && tocados.some((caminho) => CAMPOS_DA_LOJA_SO_PELA_ROTA.some((campo) => caminho === campo || caminho.startsWith(`${campo}.`)))) {
+      throw forbidden('Este campo muda pela tela de Entregas.', 'campo_so_pela_rota');
     }
     // Gravar o documento inteiro (set sem merge) apagaria os campos do Admin que ja existem.
     if (mutation.operation === 'set' && mutation.options?.merge !== true) {

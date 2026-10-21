@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { formatarNome } from '../../domain/catalogo/formatarNome.js';
 import { asyncHandler } from '../middlewares/asyncHandler.js';
 import { corpoDeImagem } from '../middlewares/corpoDeImagem.js';
+import { appDoClienteSchema, formasDePagamentoSchema } from './appDoClienteSchema.js';
 import { entregaSchema } from './entregaSchema.js';
 
 // Rotas do Admin da plataforma. A barreira (requirePlatformAdmin) e o registro de quem agiu
@@ -92,7 +93,8 @@ const sugestoesClientesSchema = z.object({
 
 export function createAdminRoutes({
   manageCatalogoPadrao, sugestoesDosClientes, pedidosDeLoja, lojaNoAdmin, franquias, administradores, dadosDoAdmin,
-  manageImplantationPipelines, jornadaDeEntrada = null, entregaDaLoja = null,
+  manageImplantationPipelines, jornadaDeEntrada = null, entregaDaLoja = null, appDoClienteDaLoja = null,
+  formasDePagamento = null,
 }) {
   const router = Router();
 
@@ -280,6 +282,30 @@ export function createAdminRoutes({
     const resultado = await entregaDaLoja.salvar(request.params.lojaId, entrada);
     response.locals.auditoria = { acao: 'entrega', campos: resultado.campos, antes: resultado.antes };
     response.json({ data: resultado.entrega });
+  }));
+
+  // App do cliente da loja (contrato da versao 55, itens 5 e 6; cola RP-13): interruptores
+  // (featureFlags) e blocos da Home (aparenciaHome), so pelo Admin.
+  router.get('/estabelecimentos/:lojaId/app-do-cliente', asyncHandler(async (request, response) => {
+    response.json({ data: await appDoClienteDaLoja.ler(request.params.lojaId) });
+  }));
+
+  router.patch('/estabelecimentos/:lojaId/app-do-cliente', asyncHandler(async (request, response) => {
+    const entrada = appDoClienteSchema.parse(request.body);
+    const resultado = await appDoClienteDaLoja.salvar(request.params.lojaId, entrada);
+    response.locals.auditoria = { acao: 'app_do_cliente', campos: resultado.campos, antes: resultado.antes };
+    response.json({ data: resultado.app });
+  }));
+
+  // Formas de pagamento da loja (item 2), as mesmas regras da rota da loja.
+  router.get('/estabelecimentos/:lojaId/formas-de-pagamento', asyncHandler(async (request, response) => {
+    response.json({ data: await formasDePagamento.ler(request.params.lojaId) });
+  }));
+
+  router.patch('/estabelecimentos/:lojaId/formas-de-pagamento', asyncHandler(async (request, response) => {
+    const { formas } = formasDePagamentoSchema.parse(request.body);
+    response.locals.auditoria = { acao: 'formas_de_pagamento', campos: Object.keys(formas) };
+    response.json({ data: await formasDePagamento.salvar(request.params.lojaId, formas) });
   }));
 
   router.get('/estabelecimentos/:lojaId/agendamento', asyncHandler(async (request, response) => {

@@ -1,5 +1,6 @@
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { FieldValue, GeoPoint, Timestamp } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
+import { TEMPO_DE_PREPARO_PADRAO_MIN, funcoesDoApp } from '../../domain/loja/appDoCliente.js';
 import {
   DESLOCAMENTO_SAO_PAULO_MINUTOS, horarioDoValor, millisDoHorario, minutosDoHorario,
 } from '../../domain/loja/horariosDaLoja.js';
@@ -103,10 +104,12 @@ export class EntregaDaLoja {
     firestore,
     serverTimestamp = () => FieldValue.serverTimestamp(),
     paraTimestamp = (ms) => Timestamp.fromMillis(ms),
+    paraGeoPoint = (latitude, longitude) => new GeoPoint(latitude, longitude),
   }) {
     this.firestore = firestore;
     this.serverTimestamp = serverTimestamp;
     this.paraTimestamp = paraTimestamp;
+    this.paraGeoPoint = paraGeoPoint;
   }
 
   lojaRef(lojaId) {
@@ -119,7 +122,7 @@ export class EntregaDaLoja {
     return paraATela(loja.id, loja.data() || {});
   }
 
-  // `entrada`: { deliveryInfo?, minimumPriceCart?, openingHours?, scheduling? }, ja no formato
+  // `entrada`: { deliveryInfo?, minimumPriceCart?, openingHours?, scheduling?, retirada? }, ja no formato
   // conferido pela rota. Devolve a entrega como ficou e o que havia antes nos campos mudados.
   // `contratoSoDoAdmin`: a propria loja grava (PATCH /api/loja/entrega, cola RP-7); "Contratado"
   // so muda pelo Admin, e o mesmo valor gravado passa sem gravar nada.
@@ -191,11 +194,43 @@ export class EntregaDaLoja {
         }
       }
 
+      if (entrada.retirada) this.retiradaParaGravar(entrada.retirada, atual.retirada, mudancas, antes);
+
       if (!Object.keys(mudancas).length) throw recusa('Nada para gravar.', 'entrega_sem_mudancas');
       transacao.update(ref, { ...mudancas, updatedAt: this.serverTimestamp() });
       return { antes, campos: Object.keys(mudancas) };
     });
     return { ...resultado, entrega: await this.ler(lojaId) };
+  }
+
+  // Retirada na loja (contrato da versao 55, item 1; cola RP-13): retirada.endereco (null = o
+  // endereco da loja), retirada.instrucoes, retirada.tempoPreparoMin e retirada.horarios, no mesmo
+  // formato e com as mesmas regras de weekDaysDelivery (frete sempre null; null = os horarios da
+  // loja). Cada campo e gravado sozinho. Ligar a retirada (featureFlags.retirada) e so do Admin, em
+  // AppDoClienteDaLoja.
+  retiradaParaGravar(retirada, gravada, mudancas, antes) {
+    const atual = gravada && typeof gravada === 'object' ? gravada : {};
+    const anterior = paraATela('', { retirada: atual }).retirada;
+    if (retirada.endereco !== undefined) {
+      mudancas['retirada.endereco'] = retirada.endereco === null ? null : enderecoParaGravar(retirada.endereco, this.paraGeoPoint);
+      antes['retirada.endereco'] = anterior.endereco;
+    }
+    if (retirada.instrucoes !== undefined) {
+      const texto = String(retirada.instrucoes ?? '').replace(/\s+/g, ' ').trim();
+      mudancas['retirada.instrucoes'] = texto || null;
+      antes['retirada.instrucoes'] = anterior.instrucoes;
+    }
+    if (retirada.tempoPreparoMin !== undefined) {
+      mudancas['retirada.tempoPreparoMin'] = retirada.tempoPreparoMin;
+      antes['retirada.tempoPreparoMin'] = anterior.tempoPreparoMin;
+    }
+    if (retirada.horarios !== undefined) {
+      mudancas['retirada.horarios'] = retirada.horarios === null ? FieldValue.delete() : this.janelasParaGravar(
+        retirada.horarios.map((dia) => ({ ...dia, customIntervals: dia.customIntervals.map((janela) => ({ ...janela, freight: null })) })),
+        Array.isArray(atual.horarios) ? atual.horarios : [],
+      );
+      antes['retirada.horarios'] = anterior.horarios;
+    }
   }
 
   // Os 7 dias, como o saveOpeningHours do painel: o dia gravado fica, e so mudam isOpen,
@@ -323,5 +358,45 @@ function paraATela(lojaId, data) {
     pedidoPertoDeFechar: Object.hasOwn(PEDIDO_PERTO_DE_FECHAR, data.deliveryInfo?.afterClosingDelivery)
       ? data.deliveryInfo.afterClosingDelivery
       : 'allow',
+    retirada: retiradaParaATela(data),
   };
+}
+
+// Retirada como a tela edita. `ligada` (featureFlags.retirada) so para mostrar: muda pelo Admin.
+function retiradaParaATela(data) {
+  const retirada = data.retirada && typeof data.retirada === 'object' ? data.retirada : {};
+  const endereco = retirada.endereco && typeof retirada.endereco === 'object' ? retirada.endereco : null;
+  return {
+    ligada: funcoesDoApp(data.featureFlags).retirada,
+    endereco: endereco ? enderecoParaATela(endereco) : null,
+    instrucoes: typeof retirada.instrucoes === 'string' && retirada.instrucoes ? retirada.instrucoes : null,
+    tempoPreparoMin: Number.isInteger(retirada.tempoPreparoMin) ? retirada.tempoPreparoMin : TEMPO_DE_PREPARO_PADRAO_MIN,
+    horarios: janelasParaATela({ weekDaysDelivery: retirada.horarios }),
+  };
+}
+
+const CAMPOS_DO_ENDERECO = Object.freeze(['street', 'number', 'complement', 'neighborhood', 'city', 'uf', 'zipCode']);
+
+function enderecoParaATela(endereco) {
+  const posicao = endereco.position;
+  const latitude = posicao?.latitude ?? posicao?._latitude;
+  const longitude = posicao?.longitude ?? posicao?._longitude;
+  return {
+    ...Object.fromEntries(CAMPOS_DO_ENDERECO.map((campo) => [campo, typeof endereco[campo] === 'string' && endereco[campo] ? endereco[campo] : null])),
+    position: Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : null,
+  };
+}
+
+// Endereco de retirada no formato do address da loja: textos limpos e position em GeoPoint.
+function enderecoParaGravar(endereco, paraGeoPoint) {
+  const limpo = Object.fromEntries(CAMPOS_DO_ENDERECO.map((campo) => {
+    const valor = String(endereco[campo] ?? '').replace(/\s+/g, ' ').trim();
+    return [campo, valor || null];
+  }));
+  if (limpo.uf) limpo.uf = limpo.uf.toUpperCase();
+  if (!limpo.street || !limpo.city || !limpo.uf) {
+    throw recusa('Informe rua, cidade e estado do endereço de retirada.', 'retirada_endereco_incompleto');
+  }
+  const posicao = endereco.position;
+  return { ...limpo, position: posicao ? paraGeoPoint(posicao.latitude, posicao.longitude) : null };
 }

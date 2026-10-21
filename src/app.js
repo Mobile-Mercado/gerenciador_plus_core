@@ -6,6 +6,7 @@ import { createAdminRoutes } from './http/routes/adminRoutes.js';
 import { createAiRoutes } from './http/routes/aiRoutes.js';
 import { createBannersDaLojaRoutes } from './http/routes/bannersDaLojaRoutes.js';
 import { createEntregaDaLojaRoutes } from './http/routes/entregaDaLojaRoutes.js';
+import { createFormasDePagamentoRoutes } from './http/routes/formasDePagamentoRoutes.js';
 import { createEntregadoresDaLojaRoutes } from './http/routes/entregadoresDaLojaRoutes.js';
 import { createCadastroRoutes } from './http/routes/cadastroRoutes.js';
 import { createCatalogoRoutes } from './http/routes/catalogoRoutes.js';
@@ -50,6 +51,8 @@ export function createApp({
   clienteDaPlataforma = null,
   jornadaDeEntrada = null,
   entregaDaLoja = null,
+  appDoClienteDaLoja = null,
+  formasDePagamento = null,
   entregadoresDaLoja = null,
   verificarAppCheck,
   imagensDaLoja,
@@ -181,6 +184,12 @@ export function createApp({
     createFirebaseAuthMiddleware({ required: true }),
     createEntregaDaLojaRoutes({ entregaDaLoja, requirePermission, accountForRequest }),
   );
+  // Formas de pagamento da propria loja: credito e debito separados, onde cada uma e cobrada.
+  app.use(
+    '/api/loja/formas-de-pagamento',
+    createFirebaseAuthMiddleware({ required: true }),
+    createFormasDePagamentoRoutes({ formasDePagamento, requirePermission, accountForRequest }),
+  );
   // Logo e capa da loja pelo painel: foto como sai do celular, convertida pelo Core.
   app.use(
     '/api/loja/imagens',
@@ -204,6 +213,8 @@ export function createApp({
       manageImplantationPipelines,
       jornadaDeEntrada,
       entregaDaLoja,
+      appDoClienteDaLoja,
+      formasDePagamento,
     }),
   );
 

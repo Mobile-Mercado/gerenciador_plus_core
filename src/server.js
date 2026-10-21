@@ -16,7 +16,9 @@ import { ImagensDaLoja } from './application/cadastro/ImagensDaLoja.js';
 import { JornadaDoCadastro } from './application/cadastro/JornadaDoCadastro.js';
 import { LimiteDeTentativas } from './application/cadastro/LimiteDeTentativas.js';
 import { BannersDaLoja } from './application/loja/BannersDaLoja.js';
+import { AppDoClienteDaLoja } from './application/loja/AppDoClienteDaLoja.js';
 import { EntregadoresDaLoja } from './application/loja/EntregadoresDaLoja.js';
+import { FormasDePagamento } from './application/loja/FormasDePagamento.js';
 import { FirestoreRest } from './infra/firebase/FirestoreRest.js';
 import { CatalogoDaLoja } from './application/catalogo/CatalogoDaLoja.js';
 import { ManageCatalogoPadrao } from './application/catalogo/ManageCatalogoPadrao.js';
@@ -124,6 +126,8 @@ const app = createApp({
   clienteDaPlataforma: new ClienteDaPlataforma({ verificarToken: (token) => firebaseAuth.verifyIdToken(token), accessRepository }),
   jornadaDeEntrada: new JornadaDeEntrada({ firestore }),
   entregaDaLoja: new EntregaDaLoja({ firestore }),
+  appDoClienteDaLoja: new AppDoClienteDaLoja({ firestore }),
+  formasDePagamento: new FormasDePagamento({ firestore }),
   entregadoresDaLoja: new EntregadoresDaLoja({ firestore }),
   verificarAppCheck: (token) => getFirebaseAppCheck().verifyToken(token),
   imagensDaLoja,

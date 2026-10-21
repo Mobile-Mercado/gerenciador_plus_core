@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { INSTRUCOES_MAXIMO, TEMPO_DE_PREPARO_MAXIMO_MIN } from '../../domain/loja/appDoCliente.js';
 
 // Entrega da loja: o mesmo contrato no Admin (PATCH /api/admin/estabelecimentos/:lojaId/entrega) e
 // na propria loja (PATCH /api/loja/entrega, cola RP-7). So os campos conhecidos; o que nao vier fica
@@ -24,6 +25,25 @@ const diaDeEntregaSchema = z.object({
     canDelivery: z.boolean(),
   }).strict()).max(24),
 }).strict();
+// Retirada na loja (contrato da versao 55, item 1): endereco, instrucoes, tempo de preparo e os
+// horarios no formato de weekDaysDelivery (o frete das janelas e gravado null).
+const textoDoEndereco = (maximo) => z.string().max(maximo).nullish();
+const retiradaSchema = z.object({
+  endereco: z.object({
+    street: textoDoEndereco(200),
+    number: textoDoEndereco(40),
+    complement: textoDoEndereco(200),
+    neighborhood: textoDoEndereco(120),
+    city: textoDoEndereco(120),
+    uf: textoDoEndereco(2),
+    zipCode: textoDoEndereco(20),
+    position: z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) }).strict().nullish(),
+  }).strict().nullable().optional(),
+  instrucoes: z.string().max(INSTRUCOES_MAXIMO).nullable().optional(),
+  tempoPreparoMin: z.number().int().min(0).max(TEMPO_DE_PREPARO_MAXIMO_MIN).optional(),
+  horarios: z.array(diaDeEntregaSchema).length(7).nullable().optional(),
+}).strict();
+
 export const entregaSchema = z.object({
   deliveryInfo: z.object({
     deliveryCalcType: z.enum(['DeliveryCalcType.distance', 'DeliveryCalcType.fixedValue']).optional(),
@@ -51,4 +71,5 @@ export const entregaSchema = z.object({
     closeHours: horario,
   })).length(7).optional(),
   scheduling: z.object({ contracted: z.boolean().optional(), enabled: z.boolean().optional() }).strict().optional(),
+  retirada: retiradaSchema.optional(),
 }).strict();

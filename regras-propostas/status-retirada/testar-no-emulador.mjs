@@ -1,6 +1,7 @@
-// Trava do status de retirada (cola RP-13, decisao do Thay de 21/10/2026): pedido em
+// Regras da versao 55 (cola RP-13). Trava do status de retirada (decisao do Thay de 21/10/2026): pedido em
 // PurchaseStatus.readyForPickup nao volta para pending, accepted nem separatingOrder. Roda so no
 // emulador, com projeto demo-*, contra o firestore.rules do repositorio e contra a proposta por dono.
+// Tambem: featureFlags e aparenciaHome so pelo Admin (servidor).
 //
 //   npx firebase-tools@15.30.0 emulators:exec --only firestore --project demo-regras \
 //     "node regras-propostas/status-retirada/testar-no-emulador.mjs"
@@ -59,6 +60,10 @@ const CASOS = [
   ['pending -> accepted (fluxo de sempre)', 'PurchaseRequests/pendente', { currentPurchaseStatus: S('accepted') }, true],
   ['dentro da loja: pronto -> accepted', 'estabelecimentos/loja-1/PurchaseRequests/pronto-a', { currentPurchaseStatus: S('accepted') }, false],
   ['dentro da loja: pronto -> completed', 'estabelecimentos/loja-1/PurchaseRequests/pronto-b', { currentPurchaseStatus: S('completed') }, true],
+  // Contrato da versao 55: interruptores e blocos da Home so pelo Admin (servidor), nunca pela loja.
+  ['loja liga a propria retirada (featureFlags)', 'estabelecimentos/loja-1', { 'featureFlags.retirada': true }, false],
+  ['loja troca os blocos da Home (aparenciaHome)', 'estabelecimentos/loja-1', { 'aparenciaHome.topo': 3 }, false],
+  ['loja muda o proprio nome', 'estabelecimentos/loja-1', { name: 'Loja 1 nova' }, true],
 ];
 
 let falhas = 0;

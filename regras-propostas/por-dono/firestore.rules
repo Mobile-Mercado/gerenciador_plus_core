@@ -265,7 +265,8 @@ service cloud.firestore {
       function camposDoAdminIguais() {
         let mudou = request.resource.data.diff(resource.data).affectedKeys();
         return !mudou.hasAny(['isActive', 'status', 'motivoRecusa', 'aprovadoPor', 'aprovadoEm',
-            'recusadoPor', 'recusadoEm', 'enviadoEm', 'origemCadastro', 'cnpjConferido', 'offerColor'])
+            'recusadoPor', 'recusadoEm', 'enviadoEm', 'origemCadastro', 'cnpjConferido', 'offerColor',
+            'featureFlags', 'aparenciaHome'])
           && request.resource.data.get('scheduling', {}).get('contracted', null)
             == resource.data.get('scheduling', {}).get('contracted', null);
       }
