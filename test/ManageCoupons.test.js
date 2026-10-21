@@ -281,6 +281,7 @@ function createManager({
   updated = [],
   deleted = [],
   coupons = [],
+  clientes = { 'cliente-9': 'uid-cliente-9' },
 } = {}) {
   return new ManageCoupons({
     couponRepository: {
@@ -296,6 +297,7 @@ function createManager({
       delete: async (id) => {
         deleted.push(id);
       },
+      findClienteDaLoja: async (userId) => (clientes[userId] ? { userId, userAuthId: clientes[userId] } : null),
     },
     accessRepository: {
       findAccountByUid: async () => (hasEstablishment ? { establishmentId, hasEstablishment: true } : null),
@@ -446,4 +448,61 @@ test('F3: leve N pague M e leve N por R$ X: a rota valida N, M e X e grava so a 
   } finally {
     servidor.close();
   }
+});
+
+test('versao 55: cupom para todos e para um cliente (destinatario com id do Users e userAuthId, uso unico)', async () => {
+  const created = [];
+  const manager = createManager({ created });
+  await manager.createCoupon({ actorUid: 'uid-lojista', ...validPayload, code: 'TODOS1', tipo: 'todos', perCustomerLimit: 2, totalUsageLimit: 50 });
+  assert.equal(created[0].tipo, 'todos');
+  assert.equal(created[0].destinatario, null);
+  assert.equal(created[0].targetClientId, null);
+  assert.equal(created[0].perCustomerLimit, 2);
+
+  await manager.createCoupon({ actorUid: 'uid-lojista', ...validPayload, code: 'SO-ANA', tipo: 'cliente', targetClientId: 'cliente-9', perCustomerLimit: 5, totalUsageLimit: 9 });
+  assert.equal(created[1].tipo, 'cliente');
+  assert.deepEqual(created[1].destinatario, { userId: 'cliente-9', userAuthId: 'uid-cliente-9' });
+  assert.equal(created[1].targetClientId, 'cliente-9', 'o aplicarCupom de hoje compara targetClientId');
+  assert.equal(created[1].perCustomerLimit, 1, 'uso unico');
+  assert.equal(created[1].totalUsageLimit, 1);
+
+  const recusa = (extra, codigo) => assert.rejects(
+    manager.createCoupon({ actorUid: 'uid-lojista', ...validPayload, code: `X${created.length}`, ...extra }),
+    (erro) => erro.code === codigo && erro.statusCode === 400,
+  );
+  await recusa({ tipo: 'cliente' }, 'coupon_destinatario_obrigatorio');
+  await recusa({ tipo: 'cliente', targetClientId: 'nunca-comprou' }, 'coupon_destinatario_invalido');
+  await recusa({ tipo: 'todos', targetClientId: 'cliente-9' }, 'coupon_tipo_invalido');
+  assert.equal(created.length, 2, 'recusa nao cria');
+});
+
+test('versao 55: cupom pessoal nao muda o limite e, usado, nao e apagado', async () => {
+  const pessoal = { id: 'c1', code: 'SO-ANA', tipo: 'cliente', establishmentIds: ['loja-1'], usageCount: 0, usadoEm: new Date('2026-10-20T12:00:00Z') };
+  const updated = [];
+  const deleted = [];
+  const manager = createManager({ coupons: [pessoal], updated, deleted });
+  await assert.rejects(manager.updateCoupon({ actorUid: 'uid', couponId: 'c1', patch: { perCustomerLimit: 3 } }), (erro) => erro.code === 'coupon_pessoal_uso_unico');
+  await manager.updateCoupon({ actorUid: 'uid', couponId: 'c1', patch: { description: 'Só para a Ana' } });
+  assert.equal(updated.length, 1);
+  await assert.rejects(manager.deleteCoupon({ actorUid: 'uid', couponId: 'c1' }), (erro) => erro.code === 'coupon_has_usage');
+  assert.equal(deleted.length, 0);
+});
+
+test('versao 55: destinatario so e cliente da loja quando o Users tem userAuthId e um pedido nela', async () => {
+  const { FirestoreCouponRepository } = await import('../src/infra/firebase/FirestoreCouponRepository.js');
+  const { FirestoreEmMemoria } = await import('./apoio/firestoreEmMemoria.js');
+  const banco = new FirestoreEmMemoria({
+    'Users/u-ana': { userAuthId: 'uid-ana' },
+    'Users/u-sem-login': {},
+    'Users/u-bia': { userAuthId: 'uid-bia' },
+    'estabelecimentos/loja-1': { name: 'Loja 1' },
+    'estabelecimentos/loja-2': { name: 'Loja 2' },
+  });
+  banco.docs.set('PurchaseRequests/p1', { clientId: 'u-ana', companyReference: banco.collection('estabelecimentos').doc('loja-1') });
+  banco.docs.set('PurchaseRequests/p2', { clientId: 'u-bia', companyReference: banco.collection('estabelecimentos').doc('loja-2') });
+  const repositorio = new FirestoreCouponRepository({ firestore: banco });
+  assert.deepEqual(await repositorio.findClienteDaLoja('u-ana', 'loja-1'), { userId: 'u-ana', userAuthId: 'uid-ana' });
+  assert.equal(await repositorio.findClienteDaLoja('u-bia', 'loja-1'), null, 'cliente de outra loja');
+  assert.equal(await repositorio.findClienteDaLoja('u-sem-login', 'loja-1'), null);
+  assert.equal(await repositorio.findClienteDaLoja('nao-existe', 'loja-1'), null);
 });

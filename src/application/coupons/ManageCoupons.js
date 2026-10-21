@@ -1,6 +1,9 @@
 import { Timestamp } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 
+export const TIPO_TODOS = 'todos';
+export const TIPO_CLIENTE = 'cliente';
+
 export class ManageCoupons {
   constructor({ couponRepository, accessRepository, clock = () => new Date() }) {
     this.couponRepository = couponRepository;
@@ -8,11 +11,32 @@ export class ManageCoupons {
     this.clock = clock;
   }
 
+  // Dois tipos (contrato da versao 55, decisao do Thay de 21/10/2026):
+  // - 'todos' (campanha): um codigo para muitos clientes, com limite por cliente;
+  // - 'cliente' (pessoal): destinatario { userId (id do Users), userAuthId }, uso unico. O cliente
+  //   e escolhido pela loja entre quem ja comprou nela; targetClientId fica igual ao userId, para o
+  //   aplicarCupom de hoje. Depois de usado o cupom fica marcado (usadoEm, usadoNoPedido) e nunca e
+  //   apagado: a marca e gravada pelo servidor do cupom (mobile_firebase_api).
   async createCoupon({
     actorUid, establishmentId, code, description, termsText, scopeName, firstPurchaseOnly, rules, discount,
     startAt, endAt, perCustomerLimit, totalUsageLimit, stackable, targetClientId = null, campaignId = null,
+    tipo = null,
   }) {
     const account = await this.requireEstablishment(actorUid, establishmentId);
+    const tipoDoCupom = tipo || (targetClientId ? TIPO_CLIENTE : TIPO_TODOS);
+    if (tipoDoCupom === TIPO_TODOS && targetClientId) {
+      throw new AppError('Cupom para todos não tem cliente escolhido.', { statusCode: 400, code: 'coupon_tipo_invalido' });
+    }
+    let destinatario = null;
+    if (tipoDoCupom === TIPO_CLIENTE) {
+      if (!targetClientId) {
+        throw new AppError('Escolha o cliente do cupom.', { statusCode: 400, code: 'coupon_destinatario_obrigatorio' });
+      }
+      destinatario = await this.couponRepository.findClienteDaLoja(targetClientId, account.establishmentId);
+      if (!destinatario) {
+        throw new AppError('Este cliente ainda não comprou nesta loja.', { statusCode: 400, code: 'coupon_destinatario_invalido' });
+      }
+    }
 
     const normalizedCode = String(code || '').trim().toUpperCase();
     await this.assertCodeNotActive(normalizedCode, account.establishmentId);
@@ -31,12 +55,14 @@ export class ManageCoupons {
       rules: rules || [],
       // Frete gratis sem desconto nos produtos: discount null.
       discount: discount ?? null,
-      perCustomerLimit: perCustomerLimit ?? 1,
-      totalUsageLimit: totalUsageLimit ?? null,
+      perCustomerLimit: destinatario ? 1 : (perCustomerLimit ?? 1),
+      totalUsageLimit: destinatario ? 1 : (totalUsageLimit ?? null),
       usageCount: 0,
       stackable: Boolean(stackable),
+      tipo: tipoDoCupom,
+      destinatario,
       // Cupom pessoal: so este cliente consegue aplicar (aplicarCupom confere).
-      targetClientId: targetClientId || null,
+      targetClientId: destinatario ? destinatario.userId : null,
       campaignId: campaignId || null,
       createdAt: Timestamp.fromDate(this.clock()),
     };
@@ -68,6 +94,10 @@ export class ManageCoupons {
     this.assertOwnership(coupon, account.establishmentId);
 
     const normalizedPatch = { ...patch };
+    // Cupom pessoal e de uso unico: os limites nao mudam.
+    if (coupon.tipo === TIPO_CLIENTE && ['perCustomerLimit', 'totalUsageLimit'].some((campo) => campo in normalizedPatch && normalizedPatch[campo] !== 1)) {
+      throw new AppError('Cupom de um cliente vale uma vez só.', { statusCode: 400, code: 'coupon_pessoal_uso_unico' });
+    }
     if (normalizedPatch.code != null) {
       const normalizedCode = String(normalizedPatch.code).trim().toUpperCase();
       if (normalizedCode !== coupon.code) {
@@ -97,7 +127,7 @@ export class ManageCoupons {
     const coupon = await this.requireCoupon(couponId);
     this.assertOwnership(coupon, account.establishmentId);
 
-    if (coupon.usageCount > 0) {
+    if (coupon.usageCount > 0 || coupon.usadoEm) {
       throw new AppError('Cupom ja possui uso registrado; desative-o em vez de excluir.', {
         statusCode: 409,
         code: 'coupon_has_usage',

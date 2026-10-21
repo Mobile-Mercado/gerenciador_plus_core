@@ -58,6 +58,9 @@ const createCouponSchema = z.object({
   perCustomerLimit: z.number().int().positive().default(1),
   totalUsageLimit: z.number().int().positive().nullable().default(null),
   stackable: z.boolean().default(false),
+  // "Para todos" ou "Para um cliente" (versao 55): no pessoal, targetClientId e o id do Users do
+  // cliente escolhido; o Core confere e grava o destinatario. Sem tipo, vale o de antes.
+  tipo: z.enum(['todos', 'cliente']).nullable().default(null),
   targetClientId: z.string().min(1).max(128).nullable().default(null),
   campaignId: z.string().min(1).max(128).nullable().default(null),
 }).refine(
