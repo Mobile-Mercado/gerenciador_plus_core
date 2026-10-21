@@ -146,6 +146,7 @@ test('codigo valido com pedido em rota devolve so o que a tela do entregador pre
     total: 74.5,
     pagamento: 'Dinheiro',
     troco: 25.5,
+    paymentValue: 100,
     pagoOnline: false,
   });
   const texto = JSON.stringify(body);
@@ -175,6 +176,19 @@ test('marcar entregue grava os cinco campos e nada mais', async () => {
   // nada fora da lista branca: o pedido mantem os mesmos campos de antes mais os tres novos
   const novos = Object.keys(gravado).filter((campo) => !Object.keys(pedido()).includes(campo));
   assert.deepEqual(novos.sort(), ['deliveredAt', 'deliveredBy', 'deliveredSource']);
+});
+
+test('valor da nota (paymentValue) so vem junto do troco: total 80, nota 100, troco 20', async () => {
+  const casos = [
+    ['dinheiro com troco', { paymentType: 'PaymentType.cash', paymentValue: 100, valueBack: 20 }, { troco: 20, paymentValue: 100 }],
+    ['dinheiro sem troco', { paymentType: 'PaymentType.cash', paymentValue: 80, valueBack: null }, { troco: null, paymentValue: null }],
+    ['pix, valor igual ao total', { paymentType: 'PaymentType.pix', paymentValue: 80 }, { troco: null, paymentValue: null }],
+  ];
+  for (const [rotulo, purchasePayment, esperado] of casos) {
+    const { app } = servidor({ p1: pedido({ total: 80, purchasePayment }) });
+    const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+    assert.deepEqual({ troco: body.data.troco, paymentValue: body.data.paymentValue }, esperado, rotulo);
+  }
 });
 
 test('pagoOnline sai do registro de transacao, nunca da forma de pagamento', async () => {

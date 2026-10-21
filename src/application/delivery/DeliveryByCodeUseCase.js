@@ -151,6 +151,9 @@ function resumoDoPedido(pedido = {}, { gatewayEmProducao = false, loja = null } 
   const endereco = pedido.address || {};
   const pagamento = pedido.purchasePayment || {};
   const troco = Number(pagamento.valueBack || 0);
+  // Valor da nota que o cliente entrega (purchasePayment.paymentValue), para a linha "Paga com
+  // R$ Y" do link (cola RP-13). So vem junto do troco: sem troco, a linha nao existe.
+  const notaDoCliente = Number(pagamento.paymentValue || 0);
   return {
     pedido: pedido.orderNumber || '',
     loja: nomeDaLoja(pedido, loja),
@@ -166,6 +169,7 @@ function resumoDoPedido(pedido = {}, { gatewayEmProducao = false, loja = null } 
     total: Number(pedido.total || 0),
     pagamento: pagamento.paymentType || '',
     troco: troco > 0 ? troco : null,
+    paymentValue: troco > 0 && notaDoCliente > 0 ? notaDoCliente : null,
     pagoOnline: pagamentoOnlineConfirmado(pedido, gatewayEmProducao),
   };
 }
