@@ -65,6 +65,16 @@ service cloud.firestore {
     }
     // ===== fim da posse =====
 
+    // Pedido de retirada pronto (PurchaseStatus.readyForPickup) nao volta para um status anterior
+    // (cola RP-13, decisao do Thay de 21/10/2026): o app Gerenciador antigo nao conhece o status,
+    // mostra o pedido como pendente, e o "Aceitar" dele regravaria accepted por cima.
+    function voltaDaRetirada() {
+      return resource.data.get('currentPurchaseStatus', '') == 'PurchaseStatus.readyForPickup'
+        && request.resource.data.get('currentPurchaseStatus', '') in [
+          'PurchaseStatus.pending', 'PurchaseStatus.accepted', 'PurchaseStatus.separatingOrder',
+          'pending', 'accepted', 'separatingOrder'];
+    }
+
     // Bloqueia tudo por padrão
     match /{document=**} {
       allow read, write: if false;
@@ -159,7 +169,8 @@ service cloud.firestore {
     match /PurchaseRequests/{orderId} {
       allow read: if podeVerPedido(resource.data);
       allow create: if ehOCliente(request.resource.data.clientId);
-      allow update: if (pedidoDaLoja(resource.data) || ehOCliente(resource.data.clientId)) && posseDoPedidoIgual();
+      allow update: if (pedidoDaLoja(resource.data) || ehOCliente(resource.data.clientId)) && posseDoPedidoIgual()
+        && !voltaDaRetirada();
       allow delete: if false;
 
       // AuditLog só é escrito pelas Cloud Functions (Admin SDK, ignora estas
@@ -342,7 +353,8 @@ service cloud.firestore {
       // PROPOSTA: só a loja lê (está vazia em produção; quem lê é a web antiga, Navbar.jsx:206).
       match /PurchaseRequests/{orderId} {
         allow read: if isAdminOf(estabId);
-        allow create, update: if isAdminOf(estabId);
+        allow create: if isAdminOf(estabId);
+        allow update: if isAdminOf(estabId) && !voltaDaRetirada();
         allow delete: if false;
       }
 
