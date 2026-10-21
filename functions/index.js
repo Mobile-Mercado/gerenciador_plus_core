@@ -45,6 +45,7 @@ const {
 } = require('./resumoClientes');
 const { atualizarResumoDoPedido } = require('./resumoPedidos');
 const { atualizarResumoDeVendas } = require('./resumoVendas');
+const { atualizarGruposDoPedido } = require('./resumoDoMes');
 const { atualizarSemGiro } = require('./semGiro');
 const { avisoDeMensagem, avisoDePedidoCancelado, avisoDePedidoNovo } = require('./avisos');
 
@@ -293,6 +294,25 @@ exports.resumirVendasDoPedido = onDocumentWritten(
         orderId: event.params.orderId,
         error,
       });
+    }
+  },
+);
+
+// Grupo do Resumo do mes (contrato da versao 55, item 7): gruposDosItens, resumoPorGrupo e
+// gruposVersao no proprio pedido, na criacao e quando productsCart muda. Falha aqui deixa o pedido
+// sem grupo ate a proxima mudanca: registra e nunca lanca.
+exports.agruparItensDoPedido = onDocumentWritten(
+  'PurchaseRequests/{orderId}',
+  async (event) => {
+    try {
+      await atualizarGruposDoPedido({
+        db,
+        ref: event.data?.after?.ref,
+        antes: event.data?.before?.data() || null,
+        depois: event.data?.after?.data() || null,
+      });
+    } catch (error) {
+      console.error('[agruparItensDoPedido] Falha ao agrupar os itens', { orderId: event.params.orderId, error });
     }
   },
 );
