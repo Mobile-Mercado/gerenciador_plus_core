@@ -14,9 +14,26 @@ import {
 // app do cliente da versao 54 so le pix e cartao. Item do array que nao e uma das quatro formas
 // (ids antigos, como cartao) fica como esta.
 // Debito so liga com featureFlags.debito, que so o Admin muda (AppDoClienteDaLoja).
+// Regra do Thay de 22/10 (cola RP-33): o lojista decide onde cada forma e cobrada e o app obedece.
+// "app" e "ambos" so com o gateway da loja ligado e para as formas que ele cobra; debito nunca e
+// cobrado pelo app. Com o gateway ligado, safrapay.methods (o que liga a cobranca no app) e gravado
+// aqui, na mesma transacao, a partir do que ficou.
 export const SUBCOLECAO_FORMAS = 'paymentMethods';
 export const ESPELHO_DO_CREDITO = 'cartao';
 const FORMAS = Object.keys(FORMAS_DE_PAGAMENTO);
+
+// O que cada gateway cobra no app, com o campo de safrapay.methods (o mesmo que a web usava).
+// Safrapay: Pix e credito; o debito nao entra e o campo debitcard vai sempre false.
+export const COBRADO_PELO_GATEWAY = Object.freeze({ pix: 'pix', credito: 'creditcard' });
+const CAMPO_DO_DEBITO_NO_GATEWAY = 'debitcard';
+
+export function gatewayLigado(loja = {}) {
+  return loja?.safrapay?.enabled === true;
+}
+
+export function cobraNoApp(loja, forma) {
+  return gatewayLigado(loja) && Object.hasOwn(COBRADO_PELO_GATEWAY, forma);
+}
 
 function recusa(mensagem, code, statusCode = 400) {
   return new AppError(mensagem, { statusCode, code });
@@ -27,15 +44,18 @@ function itemDoArray(lista, forma) {
 }
 
 // Como esta gravado, para a tela: ativa pelo array (a fonte do app); sem item, pela subcolecao.
-// cobradoEm pela subcolecao; credito e debito sem documento proprio caem no cartao de antes.
+// cobradoEm pela subcolecao; credito e debito sem documento proprio caem no cartao de antes. Sem
+// cobradoEm gravado, o que o app faz hoje (contrato da versao 55, item 2): "app" na forma que o
+// gateway ligado cobra, "entrega" nas outras. Debito e dinheiro sao sempre "entrega".
 export function formasDaLoja(loja = {}, documentos = new Map()) {
   const lista = Array.isArray(loja.paymentMethods) ? loja.paymentMethods : [];
   const formas = Object.fromEntries(FORMAS.map((forma) => {
     const item = itemDoArray(lista, forma);
     const documento = documentos.get(forma) || ((forma === 'credito' || forma === 'debito') ? documentos.get(ESPELHO_DO_CREDITO) : null);
     const ativa = item ? item.isActive === true : (documentos.has(forma) ? documentos.get(forma).isActive === true : false);
-    const cobradoEm = COBRADO_EM.includes(documento?.cobradoEm) ? documento.cobradoEm : COBRADO_EM_PADRAO;
-    return [forma, { ativa, cobradoEm: forma === 'dinheiro' ? 'entrega' : cobradoEm }];
+    const padrao = cobraNoApp(loja, forma) ? 'app' : COBRADO_EM_PADRAO;
+    const cobradoEm = COBRADO_EM.includes(documento?.cobradoEm) ? documento.cobradoEm : padrao;
+    return [forma, { ativa, cobradoEm: forma === 'dinheiro' || forma === 'debito' ? 'entrega' : cobradoEm }];
   }));
   return { formas, debitoLiberado: funcoesDoApp(loja.featureFlags).debito };
 }
@@ -62,7 +82,18 @@ export function gravacaoDasFormas(loja, documentos, mudancas) {
   if (mudancas.credito) {
     docs[ESPELHO_DO_CREDITO] = { name: FORMAS_DE_PAGAMENTO.credito.nome, isActive: final.credito.ativa, cobradoEm: final.credito.cobradoEm };
   }
-  return { paymentMethods: lista, documentos: docs, formas: final };
+  return { paymentMethods: lista, documentos: docs, formas: final, gateway: gatewayDasFormas(loja, final) };
+}
+
+// safrapay.methods a partir das formas como ficaram: ligada e cobrada no app (ou nos dois). So com o
+// gateway ligado; sem ele, nada e gravado.
+export function gatewayDasFormas(loja, formas) {
+  if (!gatewayLigado(loja)) return {};
+  const metodos = Object.fromEntries(Object.entries(COBRADO_PELO_GATEWAY).map(([forma, campo]) => [
+    `safrapay.methods.${campo}`,
+    formas[forma]?.ativa === true && formas[forma]?.cobradoEm !== 'entrega',
+  ]));
+  return { ...metodos, [`safrapay.methods.${CAMPO_DO_DEBITO_NO_GATEWAY}`]: false };
 }
 
 export class FormasDePagamento {
@@ -95,6 +126,9 @@ export class FormasDePagamento {
     if (mudancas.dinheiro?.cobradoEm && mudancas.dinheiro.cobradoEm !== 'entrega') {
       throw recusa('Dinheiro só é pago na entrega ou na retirada.', 'forma_cobranca_invalida');
     }
+    if (mudancas.debito?.cobradoEm && mudancas.debito.cobradoEm !== 'entrega') {
+      throw recusa('O cartão de débito não é cobrado pelo app: só na entrega ou na retirada.', 'debito_so_presencial');
+    }
     const ref = this.lojaRef(lojaId);
     await this.firestore.runTransaction(async (transacao) => {
       const loja = await transacao.get(ref);
@@ -103,9 +137,15 @@ export class FormasDePagamento {
       if (mudancas.debito?.ativa === true && !funcoesDoApp(dados.featureFlags).debito) {
         throw recusa('O cartão de débito ainda não foi liberado para esta loja.', 'debito_nao_liberado', 409);
       }
+      // "No app" e "Nos dois" so com o gateway ligado e nas formas que ele cobra.
+      const semGateway = Object.entries(mudancas)
+        .find(([forma, valor]) => valor.cobradoEm && valor.cobradoEm !== 'entrega' && !cobraNoApp(dados, forma));
+      if (semGateway) {
+        throw recusa('Esta loja ainda não recebe pagamento pelo app: escolha na entrega ou na retirada.', 'forma_sem_gateway');
+      }
       const documentos = await this.lerDocumentos(ref, transacao);
       const gravacao = gravacaoDasFormas(dados, documentos, mudancas);
-      transacao.update(ref, { paymentMethods: gravacao.paymentMethods, updatedAt: this.serverTimestamp() });
+      transacao.update(ref, { paymentMethods: gravacao.paymentMethods, ...gravacao.gateway, updatedAt: this.serverTimestamp() });
       Object.entries(gravacao.documentos).forEach(([forma, documento]) => {
         transacao.set(ref.collection(SUBCOLECAO_FORMAS).doc(forma), documento, { merge: true });
       });

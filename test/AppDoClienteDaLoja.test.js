@@ -87,7 +87,7 @@ test('formas de pagamento: le o array e a subcolecao; credito e debito sem docum
 });
 
 test('formas de pagamento: grava o array e a subcolecao juntos, com o espelho cartao igual ao credito', async () => {
-  const { banco, formas } = montar();
+  const { banco, formas } = montar({ safrapay: { enabled: true, methods: { pix: false, creditcard: false } } });
   const lida = await formas.salvar('loja-1', { credito: { cobradoEm: 'ambos' }, pix: { ativa: true, cobradoEm: 'app' } });
   assert.deepEqual(lida.formas.credito, { ativa: true, cobradoEm: 'ambos' });
   assert.deepEqual(lida.formas.pix, { ativa: true, cobradoEm: 'app' });
@@ -218,9 +218,12 @@ test('rotas da loja: a loja grava formas e retirada, mas nao liga a retirada nem
     assert.equal((await chamar('PATCH', '/api/loja/formas-de-pagamento', 'uid-func', { formas: { pix: { ativa: true } } })).status, 403);
     assert.equal((await chamar('PATCH', '/api/loja/formas-de-pagamento', 'uid-dono', { formas: { boleto: { ativa: true } } })).status, 400);
     assert.equal((await chamar('PATCH', '/api/loja/formas-de-pagamento', 'uid-dono', { formas: { debito: { ativa: true } } })).status, 409);
-    const pix = await chamar('PATCH', '/api/loja/formas-de-pagamento', 'uid-dono', { formas: { pix: { ativa: true, cobradoEm: 'app' } } });
+    const semGateway = await chamar('PATCH', '/api/loja/formas-de-pagamento', 'uid-dono', { formas: { pix: { ativa: true, cobradoEm: 'app' } } });
+    assert.equal(semGateway.status, 400);
+    assert.equal((await semGateway.json()).error.code, 'forma_sem_gateway');
+    const pix = await chamar('PATCH', '/api/loja/formas-de-pagamento', 'uid-dono', { formas: { pix: { ativa: true, cobradoEm: 'entrega' } } });
     assert.equal(pix.status, 200);
-    assert.deepEqual((await pix.json()).data.formas.pix, { ativa: true, cobradoEm: 'app' });
+    assert.deepEqual((await pix.json()).data.formas.pix, { ativa: true, cobradoEm: 'entrega' });
     assert.equal((await (await chamar('GET', '/api/loja/formas-de-pagamento', 'uid-func')).json()).data.formas.pix.ativa, true, 'ler nao pede chave');
     await chamar('PATCH', '/api/loja/formas-de-pagamento', 'uid-outra', { formas: { pix: { ativa: true } } });
     assert.equal(banco.dados('estabelecimentos/loja-2').paymentMethods[0].id, 'pix');
@@ -260,4 +263,55 @@ test('BFF de dados: featureFlags e aparenciaHome so pelo Admin; retirada so pela
   await recusa({ 'retirada.tempoPreparoMin': 5 }, 'campo_so_pela_rota');
   await recusa({ retirada: {} }, 'campo_so_pela_rota');
   await mudar({ name: 'Loja 1 nova' });
+});
+
+// Cola RP-33 (regra do Thay de 22/10): o lojista decide onde cada forma e cobrada; o app obedece;
+// debito nunca e cobrado pelo app.
+const GATEWAY_LIGADO = { safrapay: { enabled: true, methods: { pix: true, creditcard: true, debitcard: false } } };
+
+test('RP-33: sem cobradoEm gravado vale o que o app faz hoje (G&S: gateway ligado, Pix e credito no app)', async () => {
+  // Loja como a G&S: gateway ligado e nenhum documento de forma com cobradoEm.
+  const { formas } = montar(GATEWAY_LIGADO, { [`${LOJA}/paymentMethods/cartao`]: { name: 'Cartão', isActive: true } });
+  const lidas = (await formas.ler('loja-1')).formas;
+  assert.equal(lidas.pix.cobradoEm, 'app');
+  assert.equal(lidas.credito.cobradoEm, 'app');
+  assert.equal(lidas.debito.cobradoEm, 'entrega');
+  assert.equal(lidas.dinheiro.cobradoEm, 'entrega');
+  // Sem gateway, tudo na entrega ou na retirada; o que esta gravado vale (menos no debito).
+  const semGateway = montar({}, { [`${LOJA}/paymentMethods/cartao`]: { name: 'Cartão', isActive: true, cobradoEm: 'ambos' } });
+  const sem = (await semGateway.formas.ler('loja-1')).formas;
+  assert.equal(sem.pix.cobradoEm, 'entrega');
+  assert.equal(sem.credito.cobradoEm, 'ambos');
+  assert.equal(sem.debito.cobradoEm, 'entrega', 'debito nunca e cobrado pelo app');
+});
+
+test('RP-33: recusa "app" e "ambos" sem gateway, e no debito sempre', async () => {
+  const semGateway = montar();
+  for (const cobradoEm of ['app', 'ambos']) {
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(semGateway.formas.salvar('loja-1', { pix: { cobradoEm } }), (erro) => erro.code === 'forma_sem_gateway' && erro.statusCode === 400);
+  }
+  const comGateway = montar({ ...GATEWAY_LIGADO, featureFlags: { debito: true } });
+  for (const cobradoEm of ['app', 'ambos']) {
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(comGateway.formas.salvar('loja-1', { debito: { ativa: true, cobradoEm } }), (erro) => erro.code === 'debito_so_presencial' && erro.statusCode === 400);
+  }
+  // Com gateway, Pix e credito aceitam "app" e "ambos".
+  const salva = await comGateway.formas.salvar('loja-1', { pix: { ativa: true, cobradoEm: 'ambos' }, credito: { cobradoEm: 'app' } });
+  assert.equal(salva.formas.pix.cobradoEm, 'ambos');
+  assert.equal(salva.formas.credito.cobradoEm, 'app');
+});
+
+test('RP-33: com gateway, safrapay.methods e gravado pelo Core na mesma gravacao; sem gateway, nada', async () => {
+  const { banco, formas } = montar(GATEWAY_LIGADO);
+  await formas.salvar('loja-1', { pix: { ativa: true, cobradoEm: 'entrega' }, credito: { ativa: true, cobradoEm: 'ambos' } });
+  assert.deepEqual(banco.dados(LOJA).safrapay.methods, { pix: false, creditcard: true, debitcard: false });
+  assert.equal(banco.dados(LOJA).safrapay.enabled, true, 'o resto do mapa fica');
+  // Forma desligada nao e cobrada no app.
+  await formas.salvar('loja-1', { credito: { ativa: false } });
+  assert.equal(banco.dados(LOJA).safrapay.methods.creditcard, false);
+  // Loja sem gateway: o mapa safrapay nao e criado.
+  const sem = montar();
+  await sem.formas.salvar('loja-1', { pix: { ativa: true, cobradoEm: 'entrega' } });
+  assert.equal('safrapay' in sem.banco.dados(LOJA), false);
 });
