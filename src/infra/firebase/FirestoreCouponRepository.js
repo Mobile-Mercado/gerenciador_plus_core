@@ -34,6 +34,32 @@ export class FirestoreCouponRepository extends CouponRepository {
     await this.collection.doc(couponId).delete();
   }
 
+  // Clientes da loja para escolher o destinatario do cupom pessoal: { userId, nome, telefone }.
+  // Le o ResumoClientes da loja (16 blocos, functions/resumoClientes.js); loja sem o resumo gerado
+  // cai nos pedidos dela. So clientes com id do Users (o cupom pessoal precisa dele).
+  async listClientesDaLoja(establishmentId) {
+    const loja = this.firestore.collection('estabelecimentos').doc(String(establishmentId));
+    const blocos = await loja.collection('ResumoClientes').get();
+    const porId = new Map();
+    blocos.docs.forEach((bloco) => {
+      Object.values(bloco.data()?.clientes || {}).forEach((cliente) => {
+        if (cliente?.userId && !porId.has(cliente.userId)) {
+          porId.set(cliente.userId, { userId: cliente.userId, nome: cliente.nome || '', telefone: cliente.telefone || '' });
+        }
+      });
+    });
+    if (blocos.empty) {
+      const pedidos = await this.firestore.collection('PurchaseRequests').where('companyReference', '==', loja).get();
+      pedidos.docs.forEach((pedido) => {
+        const dados = pedido.data() || {};
+        if (dados.clientId && !porId.has(dados.clientId)) {
+          porId.set(dados.clientId, { userId: dados.clientId, nome: dados.clientName || '', telefone: dados.clientePhoneNumber || '' });
+        }
+      });
+    }
+    return [...porId.values()];
+  }
+
   // O pedido guarda em clientId o id do Users do cliente (nao o uid): um pedido dele nesta loja
   // basta para ele ser cliente da loja.
   async findClienteDaLoja(userId, establishmentId) {

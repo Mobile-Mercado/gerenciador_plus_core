@@ -506,3 +506,74 @@ test('versao 55: destinatario so e cliente da loja quando o Users tem userAuthId
   assert.equal(await repositorio.findClienteDaLoja('u-sem-login', 'loja-1'), null);
   assert.equal(await repositorio.findClienteDaLoja('nao-existe', 'loja-1'), null);
 });
+
+test('RP-14: busca de clientes da loja para o cupom pessoal, com telefone mascarado', async () => {
+  const { telefoneMascarado } = await import('../src/application/coupons/ManageCoupons.js');
+  assert.equal(telefoneMascarado('(27) 99876-5432'), '(27) *****-5432');
+  assert.equal(telefoneMascarado('+55 27 3333-4444'), '(27) ****-4444');
+  assert.equal(telefoneMascarado('12'), null);
+  assert.equal(telefoneMascarado(''), null);
+
+  const manager = createManager();
+  manager.couponRepository.listClientesDaLoja = async () => [
+    { userId: 'u3', nome: 'Zé Pereira', telefone: '' },
+    { userId: 'u1', nome: 'Ana Souza', telefone: '27998765432' },
+    { userId: 'u2', nome: 'Antônio Lima', telefone: '27991112222' },
+  ];
+  const todos = await manager.buscarClientes({ actorUid: 'uid' });
+  assert.deepEqual(todos.map((cliente) => cliente.nome), ['Ana Souza', 'Antônio Lima', 'Zé Pereira']);
+  assert.deepEqual(todos[0], { userId: 'u1', nome: 'Ana Souza', telefone: '(27) *****-5432' });
+  assert.equal(todos[2].telefone, null);
+  assert.deepEqual((await manager.buscarClientes({ actorUid: 'uid', busca: 'antonio' })).map((c) => c.userId), ['u2']);
+  assert.deepEqual((await manager.buscarClientes({ actorUid: 'uid', busca: '5432' })).map((c) => c.userId), ['u1']);
+  assert.ok(!JSON.stringify(todos).includes('98765432'), 'telefone inteiro nunca sai');
+});
+
+test('RP-14: repositorio le o ResumoClientes da loja; sem resumo, os pedidos dela', async () => {
+  const { FirestoreCouponRepository } = await import('../src/infra/firebase/FirestoreCouponRepository.js');
+  const { FirestoreEmMemoria } = await import('./apoio/firestoreEmMemoria.js');
+  const comResumo = new FirestoreEmMemoria({
+    'estabelecimentos/loja-1/ResumoClientes/00': { clientes: { 'u-ana': { userId: 'u-ana', nome: 'Ana', telefone: '27998765432' }, 'name:sem id': { userId: null, nome: 'Sem id' } } },
+    'estabelecimentos/loja-1/ResumoClientes/07': { clientes: { 'u-bia': { userId: 'u-bia', nome: 'Bia', telefone: '' } } },
+  });
+  const lidos = await new FirestoreCouponRepository({ firestore: comResumo }).listClientesDaLoja('loja-1');
+  assert.deepEqual(lidos.map((cliente) => cliente.userId).sort(), ['u-ana', 'u-bia']);
+
+  const semResumo = new FirestoreEmMemoria({ 'estabelecimentos/loja-2': { name: 'Loja 2' } });
+  const loja2 = semResumo.collection('estabelecimentos').doc('loja-2');
+  semResumo.docs.set('PurchaseRequests/p1', { clientId: 'u-cai', clientName: 'Caio', clientePhoneNumber: '27911112222', companyReference: loja2 });
+  semResumo.docs.set('PurchaseRequests/p2', { clientId: 'u-cai', clientName: 'Caio', companyReference: loja2 });
+  semResumo.docs.set('PurchaseRequests/p3', { clientId: 'u-outra', clientName: 'Outra', companyReference: semResumo.collection('estabelecimentos').doc('loja-9') });
+  assert.deepEqual(await new FirestoreCouponRepository({ firestore: semResumo }).listClientesDaLoja('loja-2'),
+    [{ userId: 'u-cai', nome: 'Caio', telefone: '27911112222' }]);
+});
+
+test('RP-14: rota GET /api/coupons/clientes pede a permissao de cupons', async () => {
+  const { default: express } = await import('express');
+  const { createCouponRoutes } = await import('../src/http/routes/couponRoutes.js');
+  const { errorHandler } = await import('../src/http/middlewares/errorHandler.js');
+  const { AppError } = await import('../src/domain/errors/AppError.js');
+  const manager = createManager();
+  manager.couponRepository.listClientesDaLoja = async () => [{ userId: 'u1', nome: 'Ana', telefone: '27998765432' }];
+  const app = express();
+  app.use((request, _response, next) => { request.auth = { uid: 'uid' }; next(); });
+  app.use('/api/coupons', createCouponRoutes({
+    manageCoupons: manager,
+    requirePermission: (chave) => (request, _response, next) => next(
+      String(request.headers['x-chaves'] || '').split(',').includes(chave) ? undefined : new AppError('sem', { statusCode: 403, code: 'permission_denied' }),
+    ),
+    accountForRequest: async () => ({ establishmentId: 'loja-1' }),
+  }));
+  app.use(errorHandler);
+  const servidor = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
+  const base = `http://127.0.0.1:${servidor.address().port}/api/coupons/clientes`;
+  try {
+    assert.equal((await fetch(`${base}?busca=ana`, { headers: { 'x-chaves': 'requests.view' } })).status, 403);
+    const ok = await fetch(`${base}?busca=ana`, { headers: { 'x-chaves': 'coupons.manage' } });
+    assert.equal(ok.status, 200);
+    assert.deepEqual((await ok.json()).data, [{ userId: 'u1', nome: 'Ana', telefone: '(27) *****-5432' }]);
+  } finally {
+    servidor.closeAllConnections();
+    servidor.close();
+  }
+});

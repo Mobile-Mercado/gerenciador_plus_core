@@ -3,6 +3,21 @@ import { AppError } from '../../domain/errors/AppError.js';
 
 export const TIPO_TODOS = 'todos';
 export const TIPO_CLIENTE = 'cliente';
+const LIMITE_DA_BUSCA = 20;
+
+function semAcento(texto) {
+  return String(texto || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+}
+
+// "(27) *****-5432": so o DDD e os 4 ultimos digitos. Sem telefone, null.
+export function telefoneMascarado(telefone) {
+  let digitos = String(telefone || '').replace(/\D/g, '');
+  if (digitos.length > 11 && digitos.startsWith('55')) digitos = digitos.slice(2);
+  if (digitos.length < 8) return null;
+  const ddd = digitos.length >= 10 ? digitos.slice(0, 2) : null;
+  const resto = ddd ? digitos.slice(2) : digitos;
+  return `${ddd ? `(${ddd}) ` : ''}${'*'.repeat(Math.max(resto.length - 4, 0))}-${resto.slice(-4)}`;
+}
 
 export class ManageCoupons {
   constructor({ couponRepository, accessRepository, clock = () => new Date() }) {
@@ -68,6 +83,22 @@ export class ManageCoupons {
     };
 
     return this.couponRepository.create(coupon);
+  }
+
+  // Busca de clientes da loja na criacao do cupom pessoal (cola RP-14 A.2): nome, telefone
+  // mascarado (so DDD e os 4 ultimos) e o id do Users. Busca por nome (sem acento) ou pelos
+  // digitos do telefone; no maximo 20, por nome.
+  async buscarClientes({ actorUid, establishmentId, busca = '' }) {
+    const account = await this.requireEstablishment(actorUid, establishmentId);
+    const termo = semAcento(busca);
+    const digitos = String(busca || '').replace(/\D/g, '');
+    const clientes = await this.couponRepository.listClientesDaLoja(account.establishmentId);
+    return clientes
+      .filter((cliente) => !termo || semAcento(cliente.nome).includes(termo)
+        || (digitos.length >= 4 && String(cliente.telefone || '').replace(/\D/g, '').includes(digitos)))
+      .sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'))
+      .slice(0, LIMITE_DA_BUSCA)
+      .map((cliente) => ({ userId: cliente.userId, nome: cliente.nome || 'Cliente', telefone: telefoneMascarado(cliente.telefone) }));
   }
 
   async assertCodeNotActive(code, establishmentId) {

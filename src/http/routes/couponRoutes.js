@@ -68,6 +68,8 @@ const createCouponSchema = z.object({
   { message: 'Informe o desconto, a regra de frete ou o leve N.', path: ['discount'] },
 );
 
+const buscaClientesSchema = z.object({ busca: z.string().max(100).optional() });
+
 const couponIdParamsSchema = z.object({
   couponId: z.string().min(1),
 });
@@ -104,6 +106,16 @@ export function createCouponRoutes({ manageCoupons, requirePermission, accountFo
     asyncHandler(async (request, response) => {
       const result = await manageCoupons.listCoupons({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request) });
       response.json({ data: result });
+    }),
+  );
+
+  // Clientes da loja para o cupom "Para um cliente" (cola RP-14 A.2), com a permissao de cupons.
+  router.get(
+    '/clientes',
+    requirePermission('coupons.manage'),
+    asyncHandler(async (request, response) => {
+      const { busca } = buscaClientesSchema.parse(request.query);
+      response.json({ data: await manageCoupons.buscarClientes({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request), busca }) });
     }),
   );
 

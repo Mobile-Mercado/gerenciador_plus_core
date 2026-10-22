@@ -19,6 +19,11 @@ export class CouponRepository {
     throw new Error('CouponRepository.delete nao implementado.');
   }
 
+  // Clientes da loja ({ userId, nome, telefone }), para escolher o destinatario do cupom pessoal.
+  async listClientesDaLoja(_establishmentId) {
+    throw new Error('CouponRepository.listClientesDaLoja nao implementado.');
+  }
+
   // Destinatario do cupom pessoal: o Users do cliente ({ userId, userAuthId }) quando ele ja comprou
   // na loja; senao, null.
   async findClienteDaLoja(_userId, _establishmentId) {
