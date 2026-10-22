@@ -361,6 +361,9 @@ function resumirPedido(id, data = {}) {
     price: precoDaVenda(data.price),
     paidAt: emMilissegundos(toDate(data.paidAt)),
     formaPagamento: formaDePagamento(data),
+    // Versao 55 (cola RP-14): entrega ou retirada na loja. Resumo antigo sem o campo vale entrega,
+    // como todo pedido de antes; por isso a versao do resumo nao muda.
+    modoRecebimento: data.modoRecebimento === 'retirada' ? 'retirada' : 'entrega',
   };
   // Campo ausente vira null: o merge nunca deixa sobra de versao antiga.
   return Object.fromEntries(Object.entries(resumo).map(([campo, valor]) => [campo, valor ?? null]));
