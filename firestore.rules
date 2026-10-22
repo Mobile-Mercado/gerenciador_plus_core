@@ -89,6 +89,44 @@ service cloud.firestore {
         allow read, write: if request.auth != null &&
           request.auth.uid == get(/databases/$(database)/documents/Users/$(userId)).data.userAuthId;
       }
+      // Cupons fiscais do cliente (contrato da versao 55, item 8, ajustado em 22/10/2026; cola RP-14).
+      // Id = chave de acesso de 44 numeros (foto sem chave: id livre). So o dono le, cria e apaga;
+      // ninguem altera pelo app. O app grava a nota lida na pagina da Sefaz (origem 'qr', situacao
+      // 'lido') ou a foto do cupom (origem 'foto', situacao 'aguardando'). Documento do consumidor
+      // sempre mascarado. Origem 'pedido' e so do servidor.
+      match /CuponsFiscais/{cupomId} {
+        function donoDoCupom() {
+          return request.auth != null &&
+            request.auth.uid == get(/databases/$(database)/documents/Users/$(userId)).data.userAuthId;
+        }
+        function documentoMascarado(documento) {
+          return documento == null || (documento is string
+            && (documento.matches('^[*]{3}[.][*]{3}[.][0-9]{3}-[0-9]{2}$')
+              || documento.matches('^[*]{2}[.][*]{3}[.][*]{3}/[0-9]{4}-[0-9]{2}$')));
+        }
+        function cupomLido(cupom) {
+          return cupom.keys().hasOnly(['chaveAcesso', 'urlQr', 'origem', 'situacao', 'uf', 'emitente', 'itens',
+              'total', 'pagamentos', 'tributos', 'emitidoEm', 'numero', 'serie', 'protocolo',
+              'consumidorDocumento', 'criadoEm', 'atualizadoEm'])
+            && cupom.origem == 'qr' && cupom.situacao == 'lido'
+            && cupomId.matches('^[0-9]{44}$') && cupom.chaveAcesso == cupomId
+            && cupom.emitente is map && cupom.itens is list && cupom.pagamentos is list
+            && cupom.total is number && cupom.emitidoEm is timestamp
+            && cupom.numero is string && cupom.serie is string && cupom.protocolo is string
+            && documentoMascarado(cupom.get('consumidorDocumento', null))
+            && cupom.criadoEm == request.time;
+        }
+        function cupomFotografado(cupom) {
+          return cupom.keys().hasOnly(['chaveAcesso', 'urlQr', 'origem', 'situacao', 'fotoPath', 'criadoEm', 'atualizadoEm'])
+            && cupom.origem == 'foto' && cupom.situacao == 'aguardando'
+            && cupom.fotoPath is string && cupom.fotoPath.size() > 0 && cupom.fotoPath.size() <= 300
+            && (cupom.get('chaveAcesso', null) == null || cupom.chaveAcesso.matches('^[0-9]{44}$'))
+            && cupom.criadoEm == request.time;
+        }
+        allow read, delete: if donoDoCupom();
+        allow create: if donoDoCupom() && (cupomLido(request.resource.data) || cupomFotografado(request.resource.data));
+        allow update: if false;
+      }
     }
 
     // Pedido de retirada pronto (PurchaseStatus.readyForPickup) nao volta para um status anterior
