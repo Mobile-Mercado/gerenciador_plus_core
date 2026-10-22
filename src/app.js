@@ -64,6 +64,7 @@ export function createApp({
   firestore,
   registrarAcaoDoAdmin,
   bannersDaLoja,
+  instalacoesDosApps,
 }) {
   const app = express();
   // Barreira de escrita por chave de permissao, com cache por token.
@@ -215,6 +216,7 @@ export function createApp({
       entregaDaLoja,
       appDoClienteDaLoja,
       formasDePagamento,
+      instalacoesDosApps,
     }),
   );
 

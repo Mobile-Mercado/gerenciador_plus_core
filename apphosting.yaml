@@ -35,3 +35,17 @@ env:
 
   - variable: GROQ_TEMPERATURE
     value: "0.2"
+
+  # Tela Instalacoes do Admin ("Atualizar agora"): mesmos parametros nao secretos da rotina
+  # instalacoesAppNightly. A chave da Apple fica no Secret Manager (APPLE_RELATORIOS_LEITURA_P8).
+  - variable: INSTALACOES_CONTA_DE_SERVICO
+    value: "relatorios-lojas@appmobileprod-19505.iam.gserviceaccount.com"
+
+  - variable: PLAY_REPORTS_BUCKET
+    value: "pubsite_prod_8207483442033797961"
+
+  - variable: APPLE_ISSUER_ID
+    value: "ee6e5714-dd2e-4704-9958-3d3377837045"
+
+  - variable: APPLE_KEY_ID
+    value: "G38M6BUN37"
