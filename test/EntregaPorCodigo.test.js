@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import express from 'express';
-import { DeliveryByCodeUseCase, STATUS_DE_ENTREGA, STATUS_DE_ROTA } from '../src/application/delivery/DeliveryByCodeUseCase.js';
+import {
+  DeliveryByCodeUseCase, STATUS_DE_ENTREGA, STATUS_DE_ESPERA, STATUS_DE_ROTA,
+} from '../src/application/delivery/DeliveryByCodeUseCase.js';
 import { createDeliveryRoutes } from '../src/http/routes/deliveryRoutes.js';
 import { errorHandler } from '../src/http/middlewares/errorHandler.js';
 
@@ -148,6 +150,7 @@ test('codigo valido com pedido em rota devolve so o que a tela do entregador pre
     troco: 25.5,
     paymentValue: 100,
     pagoOnline: false,
+    etapa: 'em_rota',
   });
   const texto = JSON.stringify(body);
   ['cliente-1', 'Aparecida', 'joao@exemplo.com', 'productsCart', 'deliveryCode', '75000-000'].forEach((proibido) => {
@@ -256,7 +259,7 @@ test('a gravacao devolve a hora que o servidor gravou em deliveredAt', async () 
 test('codigo valido com pedido ja entregue responde link invalido, sem dado', async () => {
   const { app } = servidor({ p1: pedido({ currentPurchaseStatus: STATUS_DE_ENTREGA }) });
 
-  for (const rota of ['resumo', 'entregue']) {
+  for (const rota of ['resumo', 'iniciar-rota', 'entregue']) {
     const { status, body } = await chamar(app, rota, { codigo: 'A7K2Z9' });
     assert.equal(status, 404);
     assert.equal(body.error.code, 'entrega_link_invalido');
@@ -265,13 +268,46 @@ test('codigo valido com pedido ja entregue responde link invalido, sem dado', as
   }
 });
 
-test('pedido em waitingForDelivery responde igual, porque ainda nao ha entregador', async () => {
-  const { app } = servidor({ p1: pedido({ currentPurchaseStatus: 'PurchaseStatus.waitingForDelivery' }) });
+test('pedido em waitingForDelivery sem entregador responde igual, porque ainda nao ha entregador', async () => {
+  const { app } = servidor({ p1: pedido({ currentPurchaseStatus: STATUS_DE_ESPERA, deliveryPerson: null }) });
 
-  const { status, body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+  for (const rota of ['resumo', 'iniciar-rota']) {
+    const { status, body } = await chamar(app, rota, { codigo: 'A7K2Z9' });
+    assert.equal(status, 404);
+    assert.equal(body.error.code, 'entrega_link_invalido');
+  }
+});
 
-  assert.equal(status, 404);
-  assert.equal(body.error.code, 'entrega_link_invalido');
+test('fluxo novo: aguardando com entregador -> Iniciar rota grava deliveryRoute -> Entregue', async () => {
+  const { app, firestore } = servidor({ p1: pedido({ currentPurchaseStatus: STATUS_DE_ESPERA }) });
+
+  const resumo = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+  assert.equal(resumo.status, 200);
+  assert.equal(resumo.body.data.etapa, 'aguardando');
+  assert.equal(resumo.body.data.troco, 25.5, 'o resto do resumo e o mesmo');
+
+  // Aguardando, o "Entregue" ainda nao vale: so depois de iniciar a rota.
+  assert.equal((await chamar(app, 'entregue', { codigo: 'A7K2Z9' })).status, 404);
+  assert.equal(firestore.documentos.get('p1').currentPurchaseStatus, STATUS_DE_ESPERA);
+
+  const iniciar = await chamar(app, 'iniciar-rota', { codigo: 'A7K2Z9' });
+  assert.equal(iniciar.status, 200);
+  assert.equal(iniciar.body.data.etapa, 'em_rota');
+  assert.equal(iniciar.body.data.iniciadaPor, 'Joao Entregador');
+  const gravado = firestore.documentos.get('p1');
+  assert.equal(gravado.currentPurchaseStatus, STATUS_DE_ROTA);
+  assert.equal(gravado.statusList.at(-1).purchaseStatus, STATUS_DE_ROTA);
+  assert.equal(gravado.routeStartedBy, 'Joao Entregador');
+  assert.equal(gravado.routeStartedSource, 'entregador_link');
+  assert.ok(gravado.routeStartedAt, 'routeStartedAt gravado');
+  const novos = Object.keys(gravado).filter((campo) => !Object.keys(pedido()).includes(campo));
+  assert.deepEqual(novos.sort(), ['routeStartedAt', 'routeStartedBy', 'routeStartedSource']);
+
+  // Segundo toque: ja em rota, o link nao inicia de novo.
+  assert.equal((await chamar(app, 'iniciar-rota', { codigo: 'A7K2Z9' })).status, 404);
+  assert.equal((await chamar(app, 'resumo', { codigo: 'A7K2Z9' })).body.data.etapa, 'em_rota');
+  assert.equal((await chamar(app, 'entregue', { codigo: 'A7K2Z9' })).status, 200);
+  assert.equal(firestore.documentos.get('p1').currentPurchaseStatus, STATUS_DE_ENTREGA);
 });
 
 test('codigo inexistente responde a mesma coisa que pedido inexistente', async () => {

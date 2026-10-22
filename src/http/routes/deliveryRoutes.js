@@ -2,8 +2,9 @@
 // servico, e o unico caminho de escrita em PurchaseRequests que nao passa pela
 // ManagerDataAccessPolicy: a pagina do entregador e aberta por link, sem login, e a
 // autorizacao e o proprio deliveryCode do pedido. Ela pode gravar exatamente
-// currentPurchaseStatus, statusList, deliveredBy, deliveredAt e deliveredSource, e
-// nada mais; a lista fica fechada no DeliveryByCodeUseCase. Qualquer outra escrita do
+// currentPurchaseStatus, statusList, deliveredBy, deliveredAt e deliveredSource (Entregue) e
+// routeStartedBy, routeStartedAt e routeStartedSource (Iniciar rota), e nada mais; a lista
+// fica fechada no DeliveryByCodeUseCase. Qualquer outra escrita do
 // painel continua indo por /api/data/mutate e pela politica.
 //
 // O limite de tentativas abaixo e contado na memoria do processo: com varias
@@ -55,6 +56,16 @@ export function createDeliveryRoutes({ deliveryByCodeUseCase, clock = () => Date
     asyncHandler(async (request, response) => {
       const { codigo } = codigoBodySchema.parse(request.body);
       response.json({ data: await deliveryByCodeUseCase.summary(codigo) });
+    }),
+  );
+
+  // "Iniciar rota": o pedido aguardando o entregador vai para deliveryRoute (cola RP-14).
+  router.post(
+    '/iniciar-rota',
+    limitar,
+    asyncHandler(async (request, response) => {
+      const { codigo } = codigoBodySchema.parse(request.body);
+      response.json({ data: await deliveryByCodeUseCase.startRoute(codigo) });
     }),
   );
 
