@@ -1,0 +1,51 @@
+rules_version = '2';
+
+// PROPOSTA (cola RP-15, item 3, 22/10/2026). NAO PUBLICAR sem a autorizacao do Thay.
+// Base: a regra do Storage no ar (ruleset 19b671ef, publicada pelo console em 19/03/2026 por
+// lucas@mobilemercado.com.br; nao existe em nenhum repositorio). Mudam:
+// 1. cuponsFiscais/{uid}/{arquivo}: fotos de cupom fiscal do cliente (contrato da versao 55, item
+//    8, campo fotoPath). So o dono (o uid do login, que e a pasta) grava e le; so imagem; ate 8 MB;
+//    ninguem sobrescreve (cada foto e um arquivo novo); o dono apaga.
+// 2. A regra geral deixa de valer para cuponsFiscais: no Storage basta uma regra liberar, entao
+//    sem isso a foto ficaria publica e qualquer conta logada gravaria na pasta de outro cliente.
+// 3. Products/{productId}/images: "request.auth != true" era sempre verdadeiro e deixava gravar
+//    sem login (dossie item 3). Passa a exigir login, como as outras pastas.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Regra específica para imagens de produtos - DEVE VIR PRIMEIRO
+    match /Products/{productId}/images/{imageId} {
+      allow read: if true; // Leitura pública
+      allow write: if request.auth != null;
+    }
+
+    // Arquivos
+    match /MobileProdutos/resized-400px/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Arquivos
+    match /produtosMobile/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Fotos de cupom fiscal do cliente (contrato da versao 55, item 8).
+    match /cuponsFiscais/{uid}/{arquivo} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow create: if request.auth != null && request.auth.uid == uid && resource == null
+        && request.resource.size <= 8 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp|heic|heif)');
+      allow update: if false;
+      allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Regra geral para outros arquivos, fora da pasta dos cupons fiscais. Era /{allPaths=**}; o
+    // curinga recursivo e um caminho (sem texto para comparar), entao a primeira parte vem a parte.
+    match /{pasta}/{resto=**} {
+      allow read: if pasta != 'cuponsFiscais';
+      allow write: if request.auth != null && pasta != 'cuponsFiscais';
+    }
+  }
+}
