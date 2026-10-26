@@ -60,7 +60,13 @@ const {
   pedidoAppleDaLoja,
   pedirRelatoriosQueFaltam,
 } = require('./instalacoesApp');
-const { avisoDeMensagem, avisoDePedidoCancelado, avisoDePedidoNovo } = require('./avisos');
+const {
+  avisaPedidoNovoNaAtualizacao,
+  avisaPedidoNovoNaCriacao,
+  avisarPedidoNovoUmaVez,
+  avisoDeMensagem,
+  avisoDePedidoCancelado,
+} = require('./avisos');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -520,6 +526,10 @@ async function enviarAvisoParaLoja({
   return { totalSuccess, totalFailures };
 }
 
+// Pedido novo: avisa na criacao, menos o pedido pago pelo app ainda em
+// waitingForOrderPayment, que so avisa quando o pagamento confirma (avisarPedidoPagoPeloApp).
+// Os dois gatilhos reservam a mesma marca (PurchaseRequests/{id}/Avisos/pedidoNovo), entao a
+// loja recebe um aviso so por pedido.
 exports.sendOrderNotification = onDocumentCreated(
   'PurchaseRequests/{orderId}',
   async (event) => {
@@ -537,6 +547,11 @@ exports.sendOrderNotification = onDocumentCreated(
       return null;
     }
 
+    if (!avisaPedidoNovoNaCriacao(order)) {
+      console.log(`[sendOrderNotification] Pedido ${orderId} esperando o pagamento pelo app; avisa quando confirmar`);
+      return null;
+    }
+
     const companyId = extractCompanyId(order);
     if (!companyId) {
       console.warn('[sendOrderNotification] Pedido sem referência de empresa', orderId);
@@ -545,22 +560,48 @@ exports.sendOrderNotification = onDocumentCreated(
 
     console.log(`[sendOrderNotification] Processando pedido ${orderId} da empresa ${companyId}`);
 
-    const { title, body, orderNumber, clientName } = avisoDePedidoNovo(order);
-
-    return enviarAvisoParaLoja({
+    return avisarPedidoNovoUmaVez({
+      db,
+      FieldValue: admin.firestore.FieldValue,
+      order,
+      pedidoId: orderId,
       companyId,
-      title,
-      body,
-      url: '/pedidos',
-      tag: orderId,
-      data: {
-        orderId,
-        orderNumber: orderNumber || '',
-        clientName,
-      },
+      enviar: enviarAvisoParaLoja,
       origem: 'sendOrderNotification',
     });
   }
+);
+
+// Pedido pago pelo app: o aviso de pedido novo sai quando o status passa de
+// waitingForOrderPayment para pending, com o mesmo titulo e texto de sendOrderNotification.
+exports.avisarPedidoPagoPeloApp = onDocumentUpdated(
+  'PurchaseRequests/{orderId}',
+  async (event) => {
+    try {
+      const antes = event.data?.before?.data() || {};
+      const depois = event.data?.after?.data() || {};
+      if (!avisaPedidoNovoNaAtualizacao({ antes, depois })) return;
+      const companyId = extractCompanyId(depois);
+      if (!companyId) {
+        console.warn('[avisarPedidoPagoPeloApp] Pedido sem referência de empresa', event.params.orderId);
+        return;
+      }
+      await avisarPedidoNovoUmaVez({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        order: depois,
+        pedidoId: event.params.orderId,
+        companyId,
+        enviar: enviarAvisoParaLoja,
+        origem: 'avisarPedidoPagoPeloApp',
+      });
+    } catch (error) {
+      console.error('[avisarPedidoPagoPeloApp] Falha ao avisar pedido pago', {
+        orderId: event.params.orderId,
+        error,
+      });
+    }
+  },
 );
 
 // Mensagem nova do cliente no chat. Mensagem da loja nao avisa. Mensagens do mesmo chat
