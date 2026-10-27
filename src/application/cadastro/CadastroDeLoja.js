@@ -32,6 +32,16 @@ function emailJaUsado() {
   });
 }
 
+// O app mostra a tela E10 no passo do CNPJ: "Este CNPJ já tem cadastro na Móbile.", com
+// "Recuperar conta" e o WhatsApp. Nao devolve nenhum dado da conta, loja ou pedido existente.
+function cnpjJaCadastrado() {
+  return new AppError('Este CNPJ já tem cadastro na Móbile.', {
+    statusCode: 409,
+    code: 'cnpj_ja_cadastrado',
+    details: { campo: 'cnpj' },
+  });
+}
+
 function enderecoCompleto(endereco = {}) {
   const rua = [endereco.street, endereco.number].filter(Boolean).join(', ');
   return [rua, endereco.neighborhood, [endereco.city, endereco.uf].filter(Boolean).join(' - ')]
@@ -59,10 +69,12 @@ export class CadastroDeLoja {
     this.pontoNoMapa = pontoNoMapa;
   }
 
-  // CNPJ repetido nao bloqueia mais o cadastro (ordem nova de 16/10/2026): devolve as lojas e
-  // pedidos com o mesmo CNPJ, recusados inclusive, para o pedido guardar cnpjRepetido e o Admin
-  // ver. Lojas antigas guardam o CNPJ formatado em cpfOrCnpj (ou cpfOrCpnf); as novas, so os
-  // digitos em cnpj.
+  // CNPJ que ja tem cadastro e recusado (decisao do Thay de 27/10/2026, que desfaz a de 16/10 de
+  // criar a conta mesmo assim): a consulta do passo do CNPJ e a criacao respondem 409
+  // cnpj_ja_cadastrado. "Ja tem cadastro" e o mesmo criterio do antigo cnpjRepetido: alguma loja
+  // em estabelecimentos ou algum pedido em pedidosDeLoja com o CNPJ, em qualquer situacao
+  // (recusados inclusive). Lojas antigas guardam o CNPJ formatado em cpfOrCnpj (ou cpfOrCpnf);
+  // as novas, so os digitos em cnpj.
   async lojasComOCnpj(cnpj) {
     const lojas = this.firestore.collection('estabelecimentos');
     const consultas = [
@@ -79,6 +91,11 @@ export class CadastroDeLoja {
   async pedidosComOCnpj(cnpj) {
     const resultado = await this.firestore.collection(COLECAO_PEDIDOS).where('cnpj', '==', cnpj).limit(5).get();
     return resultado.docs.map((documento) => documento.id);
+  }
+
+  async assertCnpjLivre(cnpj) {
+    const [lojas, pedidos] = await Promise.all([this.lojasComOCnpj(cnpj), this.pedidosComOCnpj(cnpj)]);
+    if (lojas.length > 0 || pedidos.length > 0) throw cnpjJaCadastrado();
   }
 
   async assertEmailLivre(email) {
@@ -117,10 +134,12 @@ export class CadastroDeLoja {
   }
 
   // Consulta usada pela tela do CNPJ do app, antes de criar a conta: mostra a razao social,
-  // o nome fantasia e o endereco encontrados. Nao diz se o CNPJ ja tem loja.
+  // o nome fantasia e o endereco encontrados. CNPJ que ja tem cadastro recebe o 409 (E10), depois
+  // de contar a tentativa e antes de consultar a Receita.
   async consultarCnpj(cnpjInformado, { ip = null } = {}) {
     const digitos = validarCnpj(cnpjInformado);
     await this.limites?.registrar([{ tipo: 'ip', valor: ip }, { tipo: 'cnpj', valor: digitos }]);
+    await this.assertCnpjLivre(digitos);
     const conferencia = await this.conferirCnpj(digitos);
     return { cnpj: digitos, ...conferencia };
   }
@@ -133,13 +152,9 @@ export class CadastroDeLoja {
       { tipo: 'email', valor: pedido.responsavel.email },
     ]);
     await this.assertEmailLivre(pedido.responsavel.email);
-    const [lojasRepetidas, pedidosRepetidos, receita] = await Promise.all([
-      this.lojasComOCnpj(pedido.cnpj),
-      this.pedidosComOCnpj(pedido.cnpj),
-      this.conferirCnpj(pedido.cnpj),
-    ]);
+    await this.assertCnpjLivre(pedido.cnpj);
+    const receita = await this.conferirCnpj(pedido.cnpj);
     const { cnpjConferido, razaoSocial } = receita;
-    const cnpjRepetido = lojasRepetidas.length > 0 || pedidosRepetidos.length > 0;
 
     let conta;
     try {
@@ -214,9 +229,11 @@ export class CadastroDeLoja {
         cnpjConferido,
         cnpjAtivo: receita.ativa,
         cnpjSituacao: receita.situacao,
-        cnpjRepetido,
-        lojasComOMesmoCnpj: lojasRepetidas,
-        pedidosComOMesmoCnpj: pedidosRepetidos,
+        // Desde 27/10/2026 o CNPJ repetido nao chega aqui; os campos ficam, vazios, no formato
+        // que o Admin le (PedidosDeLoja).
+        cnpjRepetido: false,
+        lojasComOMesmoCnpj: [],
+        pedidosComOMesmoCnpj: [],
         enderecoReceita: receita.endereco,
         address,
         erp: pedido.erp,
@@ -248,7 +265,8 @@ export class CadastroDeLoja {
       logger.error('cadastro_jornada_nao_concluida', { pedidoId: pedidoRef.id, originalMessage: error?.message });
     }
 
-    return { uid, pedidoId: pedidoRef.id, status: STATUS.AGUARDANDO_EMAIL, cnpjConferido, cnpjRepetido };
+    // cnpjRepetido fica na resposta (sempre false) para o app que ainda le o campo.
+    return { uid, pedidoId: pedidoRef.id, status: STATUS.AGUARDANDO_EMAIL, cnpjConferido, cnpjRepetido: false };
   }
 
   // Pedido de loja do dono que esta logado: o id gravado em Users/{uid}.pedidoDeLojaId ou, sem

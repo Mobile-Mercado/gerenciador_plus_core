@@ -141,26 +141,67 @@ test('CNPJ inativo ou desconhecido na Receita nao bloqueia: o pedido guarda a si
   const criadoDesconhecido = await desconhecido.cadastro.criar(pedido());
   assert.equal(desconhecido.banco.dados(`pedidosDeLoja/${criadoDesconhecido.pedidoId}`).cnpjAtivo, false);
 
-  const consulta = await inativo.cadastro.consultarCnpj('11.222.333/0001-81');
+  // Consulta num banco sem o pedido criado acima (com ele, o CNPJ ja teria cadastro).
+  const consulta = await montar({ receita: { encontrado: true, ativa: false, situacao: 'BAIXADA', razaoSocial: 'X LTDA', endereco: null } })
+    .cadastro.consultarCnpj('11.222.333/0001-81');
   assert.equal(consulta.encontrado, true);
   assert.equal(consulta.ativa, false);
-  assert.equal('cnpjRepetido' in consulta, false, 'a consulta publica nao diz se o CNPJ ja tem loja');
+  assert.equal('cnpjRepetido' in consulta, false, 'CNPJ livre: a consulta nao traz campo de repeticao');
 });
 
-test('CNPJ repetido nao bloqueia e marca cnpjRepetido; e-mail repetido continua bloqueando', async () => {
-  const antiga = montar({ dados: { 'estabelecimentos/antiga': { cpfOrCnpj: '11.222.333/0001-81' } } });
-  const criado = await antiga.cadastro.criar(pedido());
-  const loja = antiga.banco.dados(`pedidosDeLoja/${criado.pedidoId}`);
-  assert.equal(criado.cnpjRepetido, true);
-  assert.equal(loja.cnpjRepetido, true);
-  assert.deepEqual(loja.lojasComOMesmoCnpj, ['antiga']);
+// 409 do E10: so codigo, mensagem e o campo; nada da conta, loja ou pedido que ja existe.
+function cnpjJaCadastrado(erro) {
+  assert.equal(erro.code, 'cnpj_ja_cadastrado');
+  assert.equal(erro.statusCode, 409);
+  assert.equal(erro.message, 'Este CNPJ já tem cadastro na Móbile.');
+  assert.deepEqual(erro.details, { campo: 'cnpj' });
+  return true;
+}
 
-  // Outro pedido (ainda sem loja) com o mesmo CNPJ tambem marca.
-  const emAnalise = montar({ dados: { 'pedidosDeLoja/pedido': { cnpj: CNPJ, status: 'em_analise' } } });
-  assert.equal((await emAnalise.cadastro.criar(pedido())).cnpjRepetido, true);
-  const recusado = montar({ dados: { 'estabelecimentos/velho': { cnpj: CNPJ, status: 'recusada' } } });
-  assert.equal((await recusado.cadastro.criar(pedido())).cnpjRepetido, true);
+test('CNPJ que ja tem cadastro (27/10): consulta e criacao recusam com 409, sem criar conta nem pedido', async () => {
+  // Loja antiga com o CNPJ formatado: a consulta do passo do CNPJ recusa antes da Receita.
+  const antiga = montar({ dados: { 'estabelecimentos/antiga': { cpfOrCnpj: '11.222.333/0001-81', email: 'dono@antigo.com.br' } } });
+  let consultasNaReceita = 0;
+  antiga.cadastro.consultaCnpj = { consultar: async () => { consultasNaReceita += 1; return RECEITA_ATIVA; } };
+  await assert.rejects(antiga.cadastro.consultarCnpj('11.222.333/0001-81'), cnpjJaCadastrado);
+  assert.equal(consultasNaReceita, 0);
+  // A criacao tambem recusa: nenhuma conta no Auth, nenhum Users nem pedido.
+  await assert.rejects(antiga.cadastro.criar(pedido()), cnpjJaCadastrado);
+  assert.equal(antiga.auth.contas.size, 0);
+  assert.equal([...antiga.banco.docs.keys()].some((caminho) => /^(Users|pedidosDeLoja)\//.test(caminho)), false);
 
+  // Mesmo criterio do antigo cnpjRepetido: loja com os digitos em cnpj ou o formato antigo em
+  // cpfOrCpnf, e pedido em qualquer situacao (recusados inclusive).
+  const casos = [
+    { 'estabelecimentos/nova': { cnpj: CNPJ } },
+    { 'estabelecimentos/digitos': { cpfOrCnpj: CNPJ } },
+    { 'estabelecimentos/velha': { cpfOrCpnf: '11.222.333/0001-81' } },
+    { 'estabelecimentos/velho': { cnpj: CNPJ, status: 'recusada' } },
+    { 'pedidosDeLoja/parado': { cnpj: CNPJ, status: 'aguardando_email' } },
+    { 'pedidosDeLoja/pedido': { cnpj: CNPJ, status: 'em_analise' } },
+    { 'pedidosDeLoja/recusado': { cnpj: CNPJ, status: 'recusada' } },
+  ];
+  for (const dados of casos) {
+    await assert.rejects(montar({ dados }).cadastro.consultarCnpj(CNPJ), cnpjJaCadastrado);
+    await assert.rejects(montar({ dados }).cadastro.criar(pedido()), cnpjJaCadastrado);
+  }
+
+  // Outro CNPJ segue normal; o segundo cadastro do mesmo CNPJ e recusado.
+  const livre = montar({ dados: { 'estabelecimentos/outra': { cnpj: '11444777000161' } } });
+  const criado = await livre.cadastro.criar(pedido());
+  assert.equal(criado.cnpjRepetido, false);
+  const novo = livre.banco.dados(`pedidosDeLoja/${criado.pedidoId}`);
+  assert.equal(novo.cnpjRepetido, false);
+  assert.deepEqual(novo.lojasComOMesmoCnpj, []);
+  assert.deepEqual(novo.pedidosComOMesmoCnpj, []);
+  await assert.rejects(livre.cadastro.consultarCnpj(CNPJ), cnpjJaCadastrado);
+  await assert.rejects(
+    livre.cadastro.criar(pedido({ responsavel: { ...pedido().responsavel, email: 'outra@bompreco.com.br' } })),
+    cnpjJaCadastrado,
+  );
+});
+
+test('e-mail repetido continua bloqueando', async () => {
   await assert.rejects(
     montar({ contas: [{ uid: 'outro', email: 'ana@bompreco.com.br' }] }).cadastro.criar(pedido()),
     (erro) => erro.code === 'cadastro_email_em_uso' && erro.statusCode === 409 && /já tem cadastro/.test(erro.message),
@@ -189,7 +230,10 @@ test('recusas de campo: nome com emoji, celular sem 9, senha curta', async () =>
 test('limite de tentativas por CNPJ, guardado com hash e campo de expiracao', async () => {
   const { banco, cadastro } = montar({ receita: { encontrado: true, ativa: false } });
   for (let tentativa = 0; tentativa < 5; tentativa += 1) {
-    await cadastro.criar(pedido({ responsavel: { ...pedido().responsavel, email: `a${tentativa}@bp.com.br` } }), { ip: `10.0.0.${tentativa}` });
+    const criacao = cadastro.criar(pedido({ responsavel: { ...pedido().responsavel, email: `a${tentativa}@bp.com.br` } }), { ip: `10.0.0.${tentativa}` });
+    // Depois do primeiro pedido, o CNPJ ja tem cadastro: a recusa tambem conta no limite.
+    if (tentativa === 0) await criacao;
+    else await recusa(criacao, 'cnpj_ja_cadastrado');
   }
   await recusa(cadastro.criar(pedido(), { ip: '10.0.0.99' }), 'cadastro_tentativas_excedidas');
   const contador = banco.dados(`limitesCadastro/${chaveDoLimite('cnpj', CNPJ)}`);
@@ -322,6 +366,17 @@ test('rotas: POST /loja sem login, App Check quando ligado, login nas outras e f
     const corpo = await grande.json();
     assert.equal(corpo.error.code, 'imagem_acima_do_limite');
     assert.match(corpo.error.message, /20 MB/);
+
+    // CNPJ que ja tem cadastro (o pedido criado acima): 409 na consulta e na criacao, com o corpo
+    // so com codigo, mensagem e campo, sem dado do pedido ou da conta existente.
+    const corpoDoE10 = { error: { code: 'cnpj_ja_cadastrado', message: 'Este CNPJ já tem cadastro na Móbile.', details: { campo: 'cnpj' } } };
+    const consulta = await fetch(`${base}/loja/cnpj`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cnpj: CNPJ }) });
+    assert.equal(consulta.status, 409);
+    assert.deepEqual(await consulta.json(), corpoDoE10);
+    const outraConta = pedido({ responsavel: { ...pedido().responsavel, email: 'outra@bompreco.com.br' } });
+    const repetida = await fetch(`${base}/loja`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(outraConta) });
+    assert.equal(repetida.status, 409);
+    assert.deepEqual(await repetida.json(), corpoDoE10);
   } finally {
     servidor.close();
   }
