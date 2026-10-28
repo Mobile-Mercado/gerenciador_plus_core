@@ -15,6 +15,11 @@ export const appDoClienteSchema = z.object({
   }).strict().optional(),
 }).strict();
 
+// Pela propria loja (cola RP-58, item 2.1): so featureFlags.cuponsFiscais, sempre booleano.
+export const cuponsFiscaisDaLojaSchema = z.object({
+  featureFlags: z.object({ cuponsFiscais: z.boolean() }).strict(),
+}).strict();
+
 // Item 2: formas de pagamento, cada uma com ativa e onde e cobrada.
 const formaSchema = z.object({ ativa: z.boolean().optional(), cobradoEm: z.enum(COBRADO_EM).optional() }).strict();
 export const formasDePagamentoSchema = z.object({

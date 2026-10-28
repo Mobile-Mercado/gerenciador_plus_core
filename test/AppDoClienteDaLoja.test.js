@@ -315,3 +315,109 @@ test('RP-33: com gateway, safrapay.methods e gravado pelo Core na mesma gravacao
   await sem.formas.salvar('loja-1', { pix: { ativa: true, cobradoEm: 'entrega' } });
   assert.equal('safrapay' in sem.banco.dados(LOJA), false);
 });
+
+// Cola RP-58, item 2.1 (decisao do Thay de 27/10): a propria loja liga e desliga "Meus cupons
+// fiscais" (featureFlags.cuponsFiscais) pela rota da loja. Contas pela claim adminOf (funcionario
+// em AdminUsers + PermissionGroups) e pelo dono (Users + userReference), como no Core.
+async function comRotaDaLoja(usar) {
+  const { default: express } = await import('express');
+  const { createAppDoClienteDaLojaRoutes } = await import('../src/http/routes/appDoClienteDaLojaRoutes.js');
+  const { createPermissionGuard } = await import('../src/http/middlewares/requirePermission.js');
+  const { FirestoreEstablishmentAccessRepository } = await import('../src/infra/firebase/FirestoreEstablishmentAccessRepository.js');
+  const { errorHandler } = await import('../src/http/middlewares/errorHandler.js');
+  const contexto = montar({ featureFlags: { promotions: true, banners: true, allBannersTypes: false, retirada: true, debito: false } }, {
+    'Users/doc-dono': { id: 'loja-1', userAuthId: 'uid-dono' },
+    [`${LOJA}/AdminUsers/uid-func`]: { active: true, firstName: 'Ana' },
+    [`${LOJA}/AdminUsers/uid-sem-chave`]: { active: true },
+    [`${LOJA}/PermissionGroups/g-ajustes`]: { permissions: ['settings.edit'] },
+    [`${LOJA}/PermissionGroups/g-pedidos`]: { permissions: ['requests.view'] },
+    'estabelecimentos/loja-2/AdminUsers/uid-outra': { active: true },
+    'estabelecimentos/loja-2/PermissionGroups/g-ajustes': { permissions: ['settings.edit'] },
+  });
+  const { banco } = contexto;
+  banco.docs.set(LOJA, { ...banco.dados(LOJA), userReference: banco.doc('Users/doc-dono') });
+  const { requirePermission, accountForRequest } = createPermissionGuard({
+    accessRepository: new FirestoreEstablishmentAccessRepository({ firestore: banco }),
+  });
+  const app = express();
+  app.use(express.json());
+  app.use((request, _response, next) => {
+    request.auth = { uid: request.headers['x-uid'], adminOf: request.headers['x-admin-of'] || undefined, groupId: request.headers['x-group'] || undefined };
+    next();
+  });
+  app.use('/api/loja/app-do-cliente', createAppDoClienteDaLojaRoutes({ appDoClienteDaLoja: contexto.app, requirePermission, accountForRequest }));
+  app.use(errorHandler);
+  const servidor = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
+  const base = `http://127.0.0.1:${servidor.address().port}/api/loja/app-do-cliente`;
+  const chamar = ({ uid, adminOf, groupId }, corpo) => fetch(base, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', 'x-uid': uid || '', 'x-admin-of': adminOf || '', 'x-group': groupId || '' },
+    body: JSON.stringify(corpo),
+  });
+  try {
+    await usar({ chamar, banco });
+  } finally {
+    servidor.closeAllConnections();
+    servidor.close();
+  }
+}
+
+const FUNCIONARIO = { uid: 'uid-func', adminOf: 'loja-1', groupId: 'g-ajustes' };
+const FLAGS_ANTES = { promotions: true, banners: true, allBannersTypes: false, retirada: true, debito: false };
+
+test('RP-58: lojista da loja (claim adminOf com settings.edit, e o dono) grava featureFlags.cuponsFiscais; as outras chaves ficam', async () => {
+  await comRotaDaLoja(async ({ chamar, banco }) => {
+    const ligar = await chamar(FUNCIONARIO, { featureFlags: { cuponsFiscais: true } });
+    assert.equal(ligar.status, 200);
+    assert.equal((await ligar.json()).data.featureFlags.cuponsFiscais, true);
+    assert.deepEqual(banco.dados(LOJA).featureFlags, { ...FLAGS_ANTES, cuponsFiscais: true }, 'so o caminho featureFlags.cuponsFiscais');
+    assert.ok(banco.dados(LOJA).paymentMethods.every((item) => item?.id !== 'debito'), 'nada nas formas de pagamento');
+
+    const desligar = await chamar({ uid: 'uid-dono' }, { featureFlags: { cuponsFiscais: false } });
+    assert.equal(desligar.status, 200);
+    assert.equal((await desligar.json()).data.featureFlags.cuponsFiscais, false);
+    assert.deepEqual(banco.dados(LOJA).featureFlags, { ...FLAGS_ANTES, cuponsFiscais: false });
+
+    // Funcionario da loja sem settings.edit: 403, nada muda.
+    const semChave = await chamar({ uid: 'uid-sem-chave', adminOf: 'loja-1', groupId: 'g-pedidos' }, { featureFlags: { cuponsFiscais: true } });
+    assert.equal(semChave.status, 403);
+    assert.equal((await semChave.json()).error.code, 'permission_denied');
+    assert.equal(banco.dados(LOJA).featureFlags.cuponsFiscais, false);
+  });
+});
+
+test('RP-58: lojista de outra loja recusado na loja-1; na loja dele grava so a dele', async () => {
+  await comRotaDaLoja(async ({ chamar, banco }) => {
+    // Conta da loja-2 com a claim apontando para a loja-1: nao e funcionario da loja-1 nem dono dela.
+    const intruso = await chamar({ uid: 'uid-outra', adminOf: 'loja-1', groupId: 'g-ajustes' }, { featureFlags: { cuponsFiscais: true } });
+    assert.equal(intruso.status, 403);
+    assert.equal((await intruso.json()).error.code, 'data_establishment_required');
+    // A mesma conta pela claim da propria loja: grava na loja-2 e a loja-1 fica como estava.
+    const naDela = await chamar({ uid: 'uid-outra', adminOf: 'loja-2', groupId: 'g-ajustes' }, { featureFlags: { cuponsFiscais: true } });
+    assert.equal(naDela.status, 200);
+    assert.equal((await naDela.json()).data.lojaId, 'loja-2');
+    assert.deepEqual(banco.dados('estabelecimentos/loja-2').featureFlags, { cuponsFiscais: true });
+    assert.deepEqual(banco.dados(LOJA).featureFlags, FLAGS_ANTES, 'a loja-1 fica como estava');
+  });
+});
+
+test('RP-58: valor nao booleano e outras chaves recusados (400), nada gravado', async () => {
+  await comRotaDaLoja(async ({ chamar, banco }) => {
+    for (const corpo of [
+      { featureFlags: { cuponsFiscais: 'true' } },
+      { featureFlags: { cuponsFiscais: 1 } },
+      { featureFlags: { cuponsFiscais: null } },
+      { featureFlags: {} },
+      {},
+      { featureFlags: { cuponsFiscais: true, retirada: false } },
+      { featureFlags: { debito: true } },
+      { featureFlags: { cuponsFiscais: true }, aparenciaHome: { topo: 1 } },
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      const resposta = await chamar(FUNCIONARIO, corpo);
+      assert.equal(resposta.status, 400, JSON.stringify(corpo));
+    }
+    assert.deepEqual(banco.dados(LOJA).featureFlags, FLAGS_ANTES);
+    assert.equal('aparenciaHome' in banco.dados(LOJA), false);
+  });
+});

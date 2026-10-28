@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import { env } from './config/env.js';
 import { createAdminRoutes } from './http/routes/adminRoutes.js';
 import { createAiRoutes } from './http/routes/aiRoutes.js';
+import { createAppDoClienteDaLojaRoutes } from './http/routes/appDoClienteDaLojaRoutes.js';
 import { createBannersDaLojaRoutes } from './http/routes/bannersDaLojaRoutes.js';
 import { createEntregaDaLojaRoutes } from './http/routes/entregaDaLojaRoutes.js';
 import { createFormasDePagamentoRoutes } from './http/routes/formasDePagamentoRoutes.js';
@@ -190,6 +191,12 @@ export function createApp({
     '/api/loja/formas-de-pagamento',
     createFirebaseAuthMiddleware({ required: true }),
     createFormasDePagamentoRoutes({ formasDePagamento, requirePermission, accountForRequest }),
+  );
+  // Funcoes do app do cliente pela propria loja: so "Meus cupons fiscais" (cola RP-58).
+  app.use(
+    '/api/loja/app-do-cliente',
+    createFirebaseAuthMiddleware({ required: true }),
+    createAppDoClienteDaLojaRoutes({ appDoClienteDaLoja, requirePermission, accountForRequest }),
   );
   // Logo e capa da loja pelo painel: foto como sai do celular, convertida pelo Core.
   app.use(

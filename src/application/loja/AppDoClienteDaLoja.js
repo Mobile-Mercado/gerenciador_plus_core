@@ -4,8 +4,9 @@ import { aparenciaDaHome, funcoesDoApp } from '../../domain/loja/appDoCliente.js
 import { SUBCOLECAO_FORMAS, gravacaoDasFormas } from './FormasDePagamento.js';
 
 // Funcoes do app e aparencia da Home de cada loja (contrato da versao 55, itens 5 e 6; cola
-// RP-13). So o Admin grava: featureFlags.{retirada, substituicao, resumoDoMes, cuponsFiscais,
-// debito} e aparenciaHome.{topo, meio, fim, rodape, preposicaoBusca}. Cada chave e gravada sozinha
+// RP-13). O Admin grava: featureFlags.{retirada, substituicao, resumoDoMes, cuponsFiscais,
+// debito} e aparenciaHome.{topo, meio, fim, rodape, preposicaoBusca}; a propria loja grava so
+// featureFlags.cuponsFiscais (PATCH /api/loja/app-do-cliente, cola RP-58). Cada chave e gravada sozinha
 // (featureFlags.x, aparenciaHome.x), para nao apagar promotions, banners e allBannersTypes, que o
 // app Gerenciador le no mesmo mapa. Mudar featureFlags.debito liga ou desliga junto o item debito
 // do array paymentMethods[] e o documento debito da subcolecao (item 2 do contrato).
