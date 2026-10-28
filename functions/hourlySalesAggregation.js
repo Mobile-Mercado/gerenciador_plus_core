@@ -1,3 +1,5 @@
+const { arredondarCentavos, semRuido } = require('./centavos');
+
 const TIME_ZONE = 'America/Sao_Paulo';
 const AGGREGATION_VERSION = 1;
 
@@ -67,9 +69,11 @@ function nestedValue(source, paths) {
   return null;
 }
 
+// Cola RP-52, item 3.2: valor do item e total do pedido em centavos; o total sem campo proprio e
+// a soma dos itens ja arredondados.
 function itemTotal(item = {}) {
   const explicit = nestedValue(item, ['total', 'totalPrice', 'subtotal', 'amount']);
-  if (explicit !== null) return toNumber(explicit);
+  if (explicit !== null) return arredondarCentavos(toNumber(explicit));
   const quantity = toNumber(item.quantity) || 1;
   const price = toNumber(nestedValue(item, [
     'price',
@@ -78,7 +82,7 @@ function itemTotal(item = {}) {
     'product.price',
     'product.currentPrice',
   ]));
-  return quantity * price;
+  return arredondarCentavos(quantity * price);
 }
 
 function orderTotal(order = {}) {
@@ -94,14 +98,14 @@ function orderTotal(order = {}) {
     'payment.amount',
     'summary.total',
   ]);
-  if (explicit !== null) return toNumber(explicit);
+  if (explicit !== null) return arredondarCentavos(toNumber(explicit));
 
   const items = Array.isArray(order.productsCart)
     ? order.productsCart
     : Array.isArray(order.items)
       ? order.items
       : [];
-  return items.reduce((sum, item) => sum + itemTotal(item), 0);
+  return arredondarCentavos(items.reduce((sum, item) => sum + itemTotal(item), 0));
 }
 
 function orderChannel(order = {}) {
@@ -236,7 +240,8 @@ function appendDelta(targets, contribution, direction) {
       });
     }
     const target = targets.get(key);
-    target.fields.set(fieldPath, (target.fields.get(fieldPath) || 0) + delta);
+    // A contribuicao antiga sai como foi somada; so o ruido da subtracao sai (RP-52, item 3.2).
+    target.fields.set(fieldPath, semRuido((target.fields.get(fieldPath) || 0) + delta));
   }
 }
 

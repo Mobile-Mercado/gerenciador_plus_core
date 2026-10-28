@@ -27,7 +27,11 @@
 //
 // Arquivo puro: nao requer firebase-admin nem firebase-functions. Para gravar, recebe db e
 // o FieldValue de quem chamou.
+//
+// Cola RP-52, item 3.2: total e price gravados em centavos (o painel nao arredonda; aqui sim).
+// O valor de cada item e arredondado antes da soma; a soma, de novo.
 const { marcarMudanca } = require('./marcador');
+const { arredondarCentavos } = require('./centavos');
 
 const RESUMO_PEDIDOS_VERSION = 2;
 const RESUMO_PEDIDOS_COLLECTION = 'ResumoPedidos';
@@ -91,7 +95,7 @@ function getProductTotal(item) {
     'priceTotal',
   ]);
 
-  if (explicitTotal !== null) return toNumber(explicitTotal);
+  if (explicitTotal !== null) return arredondarCentavos(toNumber(explicitTotal));
 
   const quantity = toNumber(item.quantity) || 1;
   const price = toNumber(
@@ -105,7 +109,7 @@ function getProductTotal(item) {
     ]),
   );
 
-  return quantity * price;
+  return arredondarCentavos(quantity * price);
 }
 
 function getOrderTotal(data) {
@@ -122,10 +126,10 @@ function getOrderTotal(data) {
     'summary.total',
   ]);
 
-  if (directTotal !== null) return toNumber(directTotal);
+  if (directTotal !== null) return arredondarCentavos(toNumber(directTotal));
 
   if (Array.isArray(data.productsCart)) {
-    return data.productsCart.reduce((sum, item) => sum + getProductTotal(item), 0);
+    return arredondarCentavos(data.productsCart.reduce((sum, item) => sum + getProductTotal(item), 0));
   }
 
   return 0;
@@ -313,7 +317,7 @@ function formaDePagamento(data) {
 // Valor da venda pela regra unica (useEarningsBridge.js): o price do pedido, sem frete.
 function precoDaVenda(value) {
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return Number.isFinite(parsed) ? arredondarCentavos(parsed) : 0;
 }
 
 // ----- Resumo -----

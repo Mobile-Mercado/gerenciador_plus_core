@@ -19,6 +19,11 @@
 //
 // Arquivo puro nas contas (classificar, valor, montar); carregar le o Firestore com o db de quem
 // chamou.
+//
+// Centavos (cola RP-52, item 3.2): o valor de cada item e arredondado antes de somar no grupo, e o
+// grupo de novo ao gravar, com a protecao contra ruido do centavos.js.
+const { arredondarCentavos } = require('./centavos');
+
 const GRUPOS_VERSAO = 1;
 const GRUPOS = Object.freeze([
   'hortifruti',
@@ -179,9 +184,9 @@ function classificarPedido(pedido = {}, meta = {}) {
     const comNomes = categorias.map((categoriaId) => ({ nome: meta.categorias?.get(categoriaId) || '', prateleiras: nomesDasPrateleiras }));
     const grupo = grupoDoProduto(comNomes);
     gruposDosItens[idDoItem(item, indice)] = grupo;
-    resumoPorGrupo[grupo] += valorDoItem(item);
+    resumoPorGrupo[grupo] += arredondarCentavos(valorDoItem(item));
   });
-  Object.keys(resumoPorGrupo).forEach((grupo) => { resumoPorGrupo[grupo] = Math.round(resumoPorGrupo[grupo] * 100) / 100; });
+  Object.keys(resumoPorGrupo).forEach((grupo) => { resumoPorGrupo[grupo] = arredondarCentavos(resumoPorGrupo[grupo]); });
   return { gruposDosItens, resumoPorGrupo, gruposVersao: GRUPOS_VERSAO };
 }
 
