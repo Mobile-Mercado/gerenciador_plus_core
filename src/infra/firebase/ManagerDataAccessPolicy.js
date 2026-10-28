@@ -83,6 +83,12 @@ const CONFERENCIA_FIELDS = new Set([
   'ultimaEm',
   'ultimaPor',
 ]);
+// Mapas do documento da loja com a configuracao de pagamento (RP-60). A API mescla os dois
+// (safrapay_mobile_mercado__api, companyPaymentConfig.js, normalizeGatewayConfig).
+const MAPAS_DE_PAGAMENTO = ['paymentGateway', 'safrapay'];
+// Caminhos dentro de safrapay que o painel publicado grava pelo proxy. Leitura de 28/10/2026
+// (web origin/main 6c25a72): nenhum. Entra aqui so o que o painel passar a gravar.
+const SAFRAPAY_LIBERADO_AO_PAINEL = new Set();
 const USER_UPDATE_FIELDS = new Set(['segmento', 'isTestAccount']);
 const BOOLEAN_MUTATION_FIELDS = new Set(['isTest', 'isTestAccount']);
 const CHAT_UPDATE_FIELDS = new Set(['lastMessage', 'updatedAt']);
@@ -214,6 +220,7 @@ export class ManagerDataAccessPolicy {
     );
 
     if (isOwnEstablishmentPath(path, actor.establishmentId)) {
+      await this.assertPagamentoDaLoja(actor, mutation, pathParts(path));
       await this.assertCatalogoDaLoja(actor, mutation, pathParts(path));
       return;
     }
@@ -248,6 +255,29 @@ export class ManagerDataAccessPolicy {
     }
 
     throw forbidden();
+  }
+
+  // Pagamento da loja (RP-60, dossie 83): o proxy grava com o Admin SDK, que nao passa pela
+  // regra do Firestore. Pelo proxy o painel nao grava nada em paymentGateway nem em safrapay
+  // (credencial e escolha da credencial: merchantRef, merchantConfigId, useDefaultMerchant),
+  // nem com caminho pontuado nem com o mapa inteiro, e nao apaga esses mapas gravando o
+  // documento inteiro ou apagando o documento. O Admin da Mobile grava por fora do proxy, e o
+  // Admin da plataforma agindo na loja (X-Loja-Alvo) passa, como em assertCamposDoAdmin.
+  async assertPagamentoDaLoja(actor, mutation, parts) {
+    if (actor.porAdminDaPlataforma || parts.length !== 2) return;
+    if (mutation.operation !== 'delete') {
+      const tocados = caminhosDaEscritaNoPagamento(mutation.data, mutation.operation === 'set' && mutation.options?.merge === true);
+      if (tocados.some(caminhoDePagamentoBloqueado)) {
+        throw forbidden(undefined, 'campo_de_pagamento_so_admin');
+      }
+    }
+    const substituiTudo = mutation.operation === 'delete'
+      || (mutation.operation === 'set' && mutation.options?.merge !== true);
+    if (!substituiTudo) return;
+    const atual = (await this.firestore.doc(parts.join('/')).get()).data() || {};
+    if (MAPAS_DE_PAGAMENTO.some((mapa) => Object.hasOwn(atual, mapa))) {
+      throw forbidden(undefined, 'campo_de_pagamento_so_admin');
+    }
   }
 
   // Categoria e subcategoria da loja nascem so pelo Ativar do Core (copia da lista padrao),
@@ -631,6 +661,34 @@ const SUBCOLECOES_SO_DO_CORE = new Set(['entregadoresPrivado']);
 function isSoDoCore(path) {
   const parts = pathParts(path);
   return parts[0] === 'estabelecimentos' && SUBCOLECOES_SO_DO_CORE.has(parts[2]);
+}
+
+function ehMapaSimples(valor) {
+  return valor !== null && typeof valor === 'object' && Object.getPrototypeOf(valor) === Object.prototype;
+}
+
+// Caminhos que a escrita toca, para a trava de pagamento (RP-60). No update cada chave e um caminho pontuado e um mapa no valor
+// troca o mapa inteiro. No set com merge os mapas se mesclam, entao o caminho desce ate a folha.
+function caminhosDaEscritaNoPagamento(data, mesclando) {
+  const caminhos = [];
+  const descer = (valor, prefixo) => {
+    if (mesclando && ehMapaSimples(valor) && Object.keys(valor).length) {
+      Object.entries(valor).forEach(([chave, item]) => descer(item, `${prefixo}.${chave}`));
+      return;
+    }
+    caminhos.push(prefixo);
+  };
+  Object.entries(data || {}).forEach(([chave, valor]) => descer(valor, chave));
+  return caminhos;
+}
+
+function caminhoDePagamentoBloqueado(caminho) {
+  const [mapa, ...resto] = String(caminho).split('.').map((parte) => parte.replace(/`/g, ''));
+  if (mapa === 'paymentGateway') return true;
+  if (mapa !== 'safrapay') return false;
+  const dentro = resto.join('.');
+  return !dentro || ![...SAFRAPAY_LIBERADO_AO_PAINEL]
+    .some((liberado) => dentro === liberado || dentro.startsWith(`${liberado}.`));
 }
 
 function isOwnEstablishmentPath(path, establishmentId) {
