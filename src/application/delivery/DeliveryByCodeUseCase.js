@@ -224,7 +224,15 @@ function resumoDoPedido(pedido = {}, { gatewayEmProducao = false, loja = null } 
     troco: troco > 0 ? troco : null,
     paymentValue: troco > 0 && notaDoCliente > 0 ? notaDoCliente : null,
     pagoOnline: pagamentoOnlineConfirmado(pedido, gatewayEmProducao),
+    // Acerto da pesagem do pedido pago pelo app (cola RP-51, item 2.1). Inteiros em centavos,
+    // gravados so pelo servidor. Ausente, zero, negativo ou fora de inteiro vem nulo.
+    devolverAoCliente: centavosPositivos(pedido.devolverAoCliente),
+    receberDoCliente: centavosPositivos(pedido.receberDoCliente),
   };
+}
+
+function centavosPositivos(valor) {
+  return Number.isInteger(valor) && valor > 0 ? valor : null;
 }
 
 // Forma de pagamento nao diz se o dinheiro entrou: na Zero Grau, Pix e cartao sao

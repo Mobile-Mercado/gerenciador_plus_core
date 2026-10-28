@@ -150,6 +150,8 @@ test('codigo valido com pedido em rota devolve so o que a tela do entregador pre
     troco: 25.5,
     paymentValue: 100,
     pagoOnline: false,
+    devolverAoCliente: null,
+    receberDoCliente: null,
     etapa: 'em_rota',
   });
   const texto = JSON.stringify(body);
@@ -571,4 +573,31 @@ test('a coordenada tambem vem na resposta da gravacao, e o resto do retorno nao 
   assert.deepEqual(body.data.coordenada, { lat: -16.3285, lng: -48.9534 });
   assert.equal(body.data.status, 'entregue');
   assert.equal(typeof body.data.endereco, 'string');
+});
+
+test('devolverAoCliente e receberDoCliente vao a pagina em centavos; fora de inteiro positivo vem nulo (RP-51, item 2.1)', async () => {
+  const casos = [
+    ['devolver 490', { devolverAoCliente: 490 }, { devolverAoCliente: 490, receberDoCliente: null }],
+    ['receber 1235', { receberDoCliente: 1235 }, { devolverAoCliente: null, receberDoCliente: 1235 }],
+    ['ausentes', {}, { devolverAoCliente: null, receberDoCliente: null }],
+    ['zero', { devolverAoCliente: 0, receberDoCliente: 0 }, { devolverAoCliente: null, receberDoCliente: null }],
+    ['negativo', { devolverAoCliente: -10 }, { devolverAoCliente: null, receberDoCliente: null }],
+    ['quebrado', { receberDoCliente: 4.9 }, { devolverAoCliente: null, receberDoCliente: null }],
+    ['texto', { devolverAoCliente: '490' }, { devolverAoCliente: null, receberDoCliente: null }],
+  ];
+  for (const [rotulo, extra, esperado] of casos) {
+    const { app } = servidor({ p1: pedido(extra) });
+    const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+    assert.deepEqual(
+      { devolverAoCliente: body.data.devolverAoCliente, receberDoCliente: body.data.receberDoCliente },
+      esperado,
+      rotulo,
+    );
+  }
+
+  // Tambem nas respostas de "Iniciar rota" e "Entregue".
+  const rota = servidor({ p1: pedido({ currentPurchaseStatus: STATUS_DE_ESPERA, devolverAoCliente: 490 }) });
+  assert.equal((await chamar(rota.app, 'iniciar-rota', { codigo: 'A7K2Z9' })).body.data.devolverAoCliente, 490);
+  const entrega = servidor({ p1: pedido({ receberDoCliente: 1235 }) });
+  assert.equal((await chamar(entrega.app, 'entregue', { codigo: 'A7K2Z9' })).body.data.receberDoCliente, 1235);
 });
