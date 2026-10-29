@@ -54,11 +54,15 @@ function valorRest(valor) {
 const AUSENTE = Object.freeze({ _ausente: true });
 const ehAusente = (valor) => Boolean(valor && valor._ausente === true);
 
-// Comparacao de valores REST sem depender da ordem das chaves dos mapas.
+// Comparacao de valores REST sem depender da ordem das chaves dos mapas. A API devolve mapa e
+// lista vazios sem fields/values ({ mapValue: {} }): vale o mesmo que { mapValue: { fields: {} } }.
 function canonico(valor) {
   if (Array.isArray(valor)) return valor.map(canonico);
   if (valor && typeof valor === 'object') {
-    return Object.fromEntries(Object.keys(valor).sort().map((chave) => [chave, canonico(valor[chave])]));
+    const completo = { ...valor };
+    if (completo.mapValue && !completo.mapValue.fields) completo.mapValue = { fields: {} };
+    if (completo.arrayValue && !completo.arrayValue.values) completo.arrayValue = { values: [] };
+    return Object.fromEntries(Object.keys(completo).sort().map((chave) => [chave, canonico(completo[chave])]));
   }
   return valor;
 }

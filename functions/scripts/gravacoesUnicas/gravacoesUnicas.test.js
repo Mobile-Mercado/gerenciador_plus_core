@@ -16,6 +16,9 @@ test('valores REST: ida e volta, inteiro como integerValue, ordem dos mapas nao 
   assert.ok(iguais(valorRest({ a: 1, b: 2 }), valorRest({ b: 2, a: 1 })));
   assert.ok(!iguais(valorRest('1'), valorRest(1)));
   assert.ok(iguais(undefined, AUSENTE));
+  assert.ok(iguais({ mapValue: {} }, valorRest({})));
+  assert.ok(iguais({ arrayValue: {} }, valorRest([])));
+  assert.ok(!iguais({ mapValue: {} }, valorRest({ a: 1 })));
 });
 
 test('campo ausente fica so na mascara (apaga); caminho com caractere especial vai entre crases', () => {
@@ -75,4 +78,27 @@ test('cartao da G&S: so o nome que fala em debito muda, no array e na subcolecao
   assert.deepEqual(mudancas[1].depois, { name: { stringValue: 'Cartão de crédito' } });
   const jaCerta = { ...loja, campos: { paymentMethods: { arrayValue: { values: [item('credito', 'Cartão de crédito')] } } } };
   assert.equal(mudancasDoCartao(jaCerta, []).length, 0);
+});
+
+const { jaNaVersao, mudancaDoPedido, podeSerRecalculado } = require('./tarefas/gruposDosPedidos');
+
+test('grupos dos pedidos: pula o ja classificado; copia guarda os tres campos (ausente marcado)', () => {
+  assert.ok(jaNaVersao({ gruposVersao: 1, resumoPorGrupo: { mercearia: 0 } }));
+  assert.ok(!jaNaVersao({ gruposVersao: 1 }));
+  assert.ok(!jaNaVersao({ gruposVersao: 0, resumoPorGrupo: {} }));
+  const mudanca = mudancaDoPedido(
+    { caminho: 'PurchaseRequests/p', updateTime: 't', campos: { gruposVersao: valorRest(0) } },
+    { gruposDosItens: { i1: 'mercearia' }, resumoPorGrupo: { mercearia: 2.5 }, gruposVersao: 1 },
+  );
+  assert.deepEqual(mudanca.antes, { gruposDosItens: AUSENTE, resumoPorGrupo: AUSENTE, gruposVersao: { integerValue: '0' } });
+  assert.deepEqual(lerValor(mudanca.depois.resumoPorGrupo), { mercearia: 2.5 });
+  assert.deepEqual(mudanca.depois.gruposVersao, { integerValue: '1' });
+});
+
+test('grupos dos pedidos: conta o pedido que o onPurchaseSeparated da v55 pode refazer', () => {
+  const item = { product: { price: 1 }, quantity: 1 };
+  assert.ok(podeSerRecalculado({ currentPurchaseStatus: 'PurchaseStatus.completed', discountValue: 2, productsCart: [item] }));
+  assert.ok(podeSerRecalculado({ currentPurchaseStatus: 'PurchaseStatus.completed', productsCart: [{ ...item, separated: { hasRemoved: true } }] }));
+  assert.ok(!podeSerRecalculado({ currentPurchaseStatus: 'PurchaseStatus.completed', productsCart: [item] }));
+  assert.ok(!podeSerRecalculado({ currentPurchaseStatus: 'PurchaseStatus.canceled', discountValue: 2, productsCart: [item] }));
 });

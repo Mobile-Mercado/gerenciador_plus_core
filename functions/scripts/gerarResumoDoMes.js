@@ -6,6 +6,9 @@
 //   node scripts/gerarResumoDoMes.js --gravar        grava gruposDosItens, resumoPorGrupo e gruposVersao
 //   --loja ID                                       so os pedidos de uma loja
 //
+// Para o dia da publicacao (cola RP-76), use scripts/gravacoesUnicas/gravar.js --tarefa
+// grupos-dos-pedidos: a mesma conta, com copia do antes, conferencia pelo updateTime e desfazer.
+//
 // Usa as credenciais do ambiente (GOOGLE_APPLICATION_CREDENTIALS ou gcloud). Nao imprime nome,
 // telefone, endereco nem itens: so contagens e somas por grupo.
 const admin = require('firebase-admin');
