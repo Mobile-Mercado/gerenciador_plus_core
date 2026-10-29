@@ -222,6 +222,7 @@ export class ManagerDataAccessPolicy {
     if (isOwnEstablishmentPath(path, actor.establishmentId)) {
       await this.assertPagamentoDaLoja(actor, mutation, pathParts(path));
       await this.assertCatalogoDaLoja(actor, mutation, pathParts(path));
+      await this.assertCodigoDeBarras(mutation, pathParts(path));
       return;
     }
 
@@ -278,6 +279,30 @@ export class ManagerDataAccessPolicy {
     if (MAPAS_DE_PAGAMENTO.some((mapa) => Object.hasOwn(atual, mapa))) {
       throw forbidden(undefined, 'campo_de_pagamento_so_admin');
     }
+  }
+
+  // Codigo de barras repetido (contrato K6, cola RP-62, item E.4): gravar barCode nao vazio igual ao
+  // de outro produto da mesma loja (outro id, fora da lixeira: isTrashed diferente de true e sem
+  // deletedAt, o mesmo filtro da web) da 409 com o nome desse produto. Vale para quem grava pelo
+  // proxy, inclusive o Admin na loja.
+  async assertCodigoDeBarras(mutation, parts) {
+    if (parts.length !== 4 || parts[2] !== 'Products') return;
+    if (mutation.operation !== 'set' && mutation.operation !== 'update') return;
+    if (!mutation.data || !Object.hasOwn(mutation.data, 'barCode')) return;
+    const valor = mutation.data.barCode;
+    const texto = typeof valor === 'string' ? valor.trim() : (Number.isFinite(valor) ? String(valor) : '');
+    if (!texto) return;
+    const produtos = this.firestore.collection(parts.slice(0, 3).join('/'));
+    const procurados = [...new Set([valor, texto])];
+    const achados = await Promise.all(procurados.map((codigo) => produtos.where('barCode', '==', codigo).get()));
+    const outro = achados.flatMap((snapshot) => snapshot.docs)
+      .find((documento) => documento.id !== parts[3] && produtoNaLoja(documento.data()));
+    if (!outro) return;
+    const nome = String(outro.data()?.name || '').trim();
+    throw new AppError(`Já existe um produto com este código de barras: ${nome}.`, {
+      statusCode: 409,
+      code: 'codigo_de_barras_repetido',
+    });
   }
 
   // Categoria e subcategoria da loja nascem so pelo Ativar do Core (copia da lista padrao),
@@ -689,6 +714,10 @@ function caminhoDePagamentoBloqueado(caminho) {
   const dentro = resto.join('.');
   return !dentro || ![...SAFRAPAY_LIBERADO_AO_PAINEL]
     .some((liberado) => dentro === liberado || dentro.startsWith(`${liberado}.`));
+}
+
+function produtoNaLoja(produto = {}) {
+  return produto?.isTrashed !== true && !produto?.deletedAt;
 }
 
 function isOwnEstablishmentPath(path, establishmentId) {
