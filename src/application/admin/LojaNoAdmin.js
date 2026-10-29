@@ -66,11 +66,54 @@ export class LojaNoAdmin {
     return contas.sort((a, b) => (ordem[a.papel] - ordem[b.papel]) || String(a.email).localeCompare(String(b.email)));
   }
 
-  // Conta dona: a do Users apontado em userReference da loja.
+  // Conta dona: a do Users apontado em userReference da loja, so quando o caminho do dono do
+  // Core (findAccountByUid) chega nesta loja (RP-67, B.2). userReference para o Users de outra
+  // loja nao faz do dono daquela loja o dono desta.
   async uidDoDono(loja) {
+    const referencia = await this.referenciaDoDono(loja);
+    return referencia.estado === 'certo' ? referencia.uid : null;
+  }
+
+  // userReference da loja: 'ausente', 'inexistente' (Users que nao existe ou sem userAuthId),
+  // 'outra_loja' (o Core acha outra loja para essa conta) ou 'certo'.
+  async referenciaDoDono(loja) {
     const referencia = loja.data()?.userReference;
-    const usuario = referencia ? await referencia.get() : null;
-    return usuario?.exists ? usuario.data()?.userAuthId || null : null;
+    if (!referencia) return { estado: 'ausente', caminho: null, usuario: null, uid: null };
+    if (typeof referencia.get !== 'function') return { estado: 'inexistente', caminho: String(referencia), usuario: null, uid: null };
+    const usuario = await referencia.get();
+    const uid = usuario.exists ? usuario.data()?.userAuthId || null : null;
+    if (!uid) return { estado: 'inexistente', caminho: referencia.path, usuario: usuario.exists ? usuario : null, uid: null };
+    const conta = await this.accessRepository.findAccountByUid(uid);
+    return { estado: conta?.establishmentId === loja.id ? 'certo' : 'outra_loja', caminho: referencia.path, usuario, uid };
+  }
+
+  // "O Users do dono" quando o userReference esta errado (RP-67, B.2): o Users com id = id da
+  // loja e userType empresa, como o cadastro antigo gravava (o mesmo Users.id que contas() mostra
+  // como "sem vinculo"). Mais de um ou nenhum: nao ha como escolher, e vale a conta nova por
+  // e-mail (B.1).
+  async usuariosDoDono(loja) {
+    const porId = await this.firestore.collection('Users').where('id', '==', loja.id).get();
+    return porId.docs.filter((documento) => documento.data()?.userType === 'UserType.empresa' && documento.data()?.userAuthId);
+  }
+
+  async registroOuNada(uid) {
+    if (!uid) return null;
+    try {
+      return await this.auth.getUser(uid);
+    } catch (error) {
+      if (error?.code === 'auth/user-not-found') return null;
+      throw error;
+    }
+  }
+
+  // Claims de dono: adminOf passa a ser a loja; groupId so fica se o grupo existe nesta loja.
+  async claimsDeDono(loja, claimsAntigas) {
+    const claimsNovas = { ...claimsAntigas, adminOf: loja.id };
+    if (claimsNovas.groupId) {
+      const grupo = await loja.ref.collection('PermissionGroups').doc(String(claimsNovas.groupId)).get();
+      if (!grupo.exists) delete claimsNovas.groupId;
+    }
+    return claimsNovas;
   }
 
   async conta(loja, uid, papel) {
@@ -119,13 +162,13 @@ export class LojaNoAdmin {
     if (!uid || uid !== await this.uidDoDono(loja)) {
       throw new AppError('Corrigir acesso é só para a conta dona da loja.', { statusCode: 403, code: 'acesso_so_do_dono' });
     }
-    const registro = await this.auth.getUser(uid);
-    const claimsAntigas = { ...(registro.customClaims || {}) };
-    const claimsNovas = { ...claimsAntigas, adminOf: loja.id };
-    if (claimsNovas.groupId) {
-      const grupo = await loja.ref.collection('PermissionGroups').doc(String(claimsNovas.groupId)).get();
-      if (!grupo.exists) delete claimsNovas.groupId;
+    // Conta apagada no login: nao ha claim para trocar; o caminho e a conta nova (B.1).
+    const registro = await this.registroOuNada(uid);
+    if (!registro) {
+      throw new AppError('A conta não existe mais no login.', { statusCode: 409, code: 'conta_do_dono_apagada' });
     }
+    const claimsAntigas = { ...(registro.customClaims || {}) };
+    const claimsNovas = await this.claimsDeDono(loja, claimsAntigas);
     const antes = await this.conta(loja, uid, 'dono');
     return { uid, email: registro.email || null, claimsAntigas, claimsNovas, entraHoje: antes.entra, motivoHoje: antes.motivo };
   }
@@ -135,6 +178,120 @@ export class LojaNoAdmin {
     await this.auth.setCustomUserClaims(uid, previa.claimsNovas);
     const loja = await this.loja(lojaId);
     const depois = await this.conta(loja, uid, 'dono');
+    return { ...previa, entraDepois: depois.entra, motivoDepois: depois.motivo };
+  }
+
+  // ===== Dono da loja (RP-67, B.1 e B.2) =====
+
+  // O que a tela do Admin precisa para escolher o caminho: userReference certo com a conta no
+  // login (nada aqui; "Corrigir acesso" cuida da claim), userReference errado com um unico Users
+  // do dono (B.2, pela conta candidata) ou conta nova por e-mail (B.1: conta apagada, ou
+  // userReference errado sem um unico Users do dono).
+  async situacaoDoDono(lojaId) {
+    const loja = await this.loja(lojaId);
+    const referencia = await this.referenciaDoDono(loja);
+    if (referencia.estado === 'certo') {
+      const apagada = !(await this.registroOuNada(referencia.uid));
+      return { lojaId: loja.id, userReference: 'certo', contaApagada: apagada, candidatoUid: null, pedeEmail: apagada };
+    }
+    const candidato = await this.candidatoADono(loja, referencia);
+    return {
+      lojaId: loja.id, userReference: referencia.estado, contaApagada: false, candidatoUid: candidato?.data()?.userAuthId || null, pedeEmail: !candidato,
+    };
+  }
+
+  async candidatoADono(loja, referencia) {
+    const candidatos = await this.usuariosDoDono(loja);
+    return candidatos.length === 1 && candidatos[0].ref.path !== referencia.caminho ? candidatos[0] : null;
+  }
+
+  // Previa do dono: sem e-mail, B.2 (userReference para o Users do dono, sem mexer em claim);
+  // com e-mail, B.1 (conta nova: userReference para o Users dela e a claim adminOf da loja,
+  // mantendo as outras claims). Nada do dono antigo e apagado.
+  async previaDoDono(lojaId, { email } = {}) {
+    const loja = await this.loja(lojaId);
+    const referencia = await this.referenciaDoDono(loja);
+    const contaNova = email !== undefined;
+    let uid;
+    let userId;
+    let registro;
+    if (contaNova) {
+      registro = await this.contaPeloEmail(email);
+      // Mesmo Users que o caminho do dono do Core usa para esta conta.
+      const conta = await this.accessRepository.findAccountByUid(registro.uid);
+      if (!conta?.userId) {
+        throw new AppError('A conta não tem documento em Users nem acesso de funcionário.', { statusCode: 409, code: 'conta_sem_users' });
+      }
+      // Conta que ja e dona de outra loja: trocar a claim dela tiraria o acesso la.
+      if (conta.hasEstablishment && conta.establishmentId !== loja.id) {
+        throw new AppError(`O painel acha a loja ${conta.establishmentId} para esta conta.`, { statusCode: 409, code: 'conta_dona_de_outra_loja' });
+      }
+      ({ uid } = registro);
+      ({ userId } = conta);
+    } else {
+      if (referencia.estado === 'certo') {
+        return {
+          lojaId: loja.id, tipo: 'userReference', uid: referencia.uid, uidAntigo: referencia.uid, userReferenceAntes: referencia.caminho, userReferenceDepois: referencia.caminho, diferencas: [],
+        };
+      }
+      const candidato = await this.candidatoADono(loja, referencia);
+      if (!candidato) throw new AppError('Nenhuma conta ligada a esta loja.', { statusCode: 409, code: 'dono_sem_users_da_loja' });
+      uid = candidato.data().userAuthId;
+      userId = candidato.id;
+      registro = await this.registroOuNada(uid);
+    }
+    const userReferenceDepois = this.firestore.collection('Users').doc(userId).path;
+    const diferencas = [];
+    if (referencia.uid !== uid) {
+      diferencas.push({ campo: 'dono', antes: await this.rotuloDaConta(referencia.uid, referencia.usuario), depois: { uid, email: registro?.email || null } });
+    }
+    if (referencia.caminho !== userReferenceDepois) diferencas.push({ campo: 'userReference', antes: referencia.caminho, depois: userReferenceDepois });
+    const resultado = {
+      lojaId: loja.id, tipo: contaNova ? 'contaNova' : 'userReference', uid, uidAntigo: referencia.uid, userReferenceAntes: referencia.caminho, userReferenceDepois,
+    };
+    if (contaNova) {
+      resultado.claimsAntigas = { ...(registro.customClaims || {}) };
+      resultado.claimsNovas = await this.claimsDeDono(loja, resultado.claimsAntigas);
+      if (resultado.claimsAntigas.adminOf !== loja.id) diferencas.push({ campo: 'adminOf', antes: resultado.claimsAntigas.adminOf ?? null, depois: loja.id });
+    }
+    return { ...resultado, diferencas };
+  }
+
+  async contaPeloEmail(email) {
+    try {
+      return await this.auth.getUserByEmail(String(email || '').trim());
+    } catch (error) {
+      if (['auth/user-not-found', 'auth/invalid-email', 'auth/argument-error'].includes(error?.code)) {
+        throw new AppError('Nenhuma conta com este e-mail.', { statusCode: 404, code: 'conta_nao_encontrada' });
+      }
+      throw error;
+    }
+  }
+
+  async rotuloDaConta(uid, usuario) {
+    if (!uid) return null;
+    const registro = await this.registroOuNada(uid);
+    return { uid, email: registro?.email || usuario?.data()?.email || null };
+  }
+
+  // Salvar: claim primeiro (so na conta nova); se a gravacao do userReference falhar, a claim
+  // antiga volta.
+  async ligarDono(lojaId, entrada = {}) {
+    const previa = await this.previaDoDono(lojaId, entrada);
+    const loja = await this.loja(lojaId);
+    const mudaClaim = Boolean(previa.claimsNovas) && JSON.stringify(previa.claimsNovas) !== JSON.stringify(previa.claimsAntigas);
+    const mudaReferencia = previa.userReferenceDepois !== previa.userReferenceAntes;
+    if (mudaClaim) await this.auth.setCustomUserClaims(previa.uid, previa.claimsNovas);
+    try {
+      if (mudaReferencia) {
+        const userId = previa.userReferenceDepois.split('/').pop();
+        await loja.ref.update({ userReference: this.firestore.collection('Users').doc(userId), updatedAt: this.serverTimestamp() });
+      }
+    } catch (error) {
+      if (mudaClaim) await this.auth.setCustomUserClaims(previa.uid, previa.claimsAntigas);
+      throw error;
+    }
+    const depois = await this.conta(await this.loja(lojaId), previa.uid, 'dono');
     return { ...previa, entraDepois: depois.entra, motivoDepois: depois.motivo };
   }
 

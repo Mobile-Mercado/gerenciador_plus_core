@@ -53,6 +53,9 @@ const jornadaDeEntradaSchema = z.object({
   uf: z.string().length(2).optional(),
 });
 const emConversaSchema = z.object({ emConversa: z.boolean() });
+// Dono da loja (RP-67, B.1 e B.2): sem e-mail, userReference para o Users do dono; com e-mail,
+// a conta nova. O e-mail vai no corpo, nunca na rota, e nao entra no registro do Admin.
+const donoSchema = z.object({ email: z.string().trim().min(1).max(320).optional() }).strict();
 const edicaoLojaSchema = z.object({
   name: z.string().max(200).optional(),
   phone: z.string().max(40).optional(),
@@ -225,18 +228,51 @@ export function createAdminRoutes({
     response.json({ data: await lojaNoAdmin.contas(request.params.lojaId) });
   }));
 
+  // Corrigir acesso (RP-67, B.4): registro do Admin so com uid, loja e o que mudou (sem e-mail).
   router.post('/estabelecimentos/:lojaId/contas/:uid/acesso/previa', asyncHandler(async (request, response) => {
+    response.locals.auditoria = { acao: 'previa_do_acesso', email: null };
     response.json({ data: await lojaNoAdmin.previaDoAcesso(request.params.lojaId, request.params.uid) });
   }));
 
   // Corrigir acesso: a claim antiga fica guardada no adminAuditLogs.
   router.post('/estabelecimentos/:lojaId/contas/:uid/acesso', asyncHandler(async (request, response) => {
+    response.locals.auditoria = { acao: 'corrigir_acesso', email: null };
     const resultado = await lojaNoAdmin.corrigirAcesso(request.params.lojaId, request.params.uid);
     response.locals.auditoria = {
       acao: 'corrigir_acesso',
+      email: null,
       uidConta: request.params.uid,
       claimsAntigas: resultado.claimsAntigas,
       claimsNovas: resultado.claimsNovas,
+    };
+    response.json({ data: resultado });
+  }));
+
+  // Dono da loja (RP-67, B.1 e B.2). Registro do Admin so com uid, loja e o que mudou: sem o
+  // e-mail digitado e sem o e-mail de quem agiu (email: null por cima do adminAudit).
+  router.get('/estabelecimentos/:lojaId/dono', asyncHandler(async (request, response) => {
+    response.json({ data: await lojaNoAdmin.situacaoDoDono(request.params.lojaId) });
+  }));
+
+  router.post('/estabelecimentos/:lojaId/dono/previa', asyncHandler(async (request, response) => {
+    response.locals.auditoria = { acao: 'previa_do_dono', email: null };
+    const entrada = donoSchema.parse(request.body || {});
+    response.json({ data: await lojaNoAdmin.previaDoDono(request.params.lojaId, entrada) });
+  }));
+
+  router.post('/estabelecimentos/:lojaId/dono', asyncHandler(async (request, response) => {
+    const acao = request.body?.email !== undefined ? 'ligar_conta_nova_do_dono' : 'corrigir_user_reference';
+    response.locals.auditoria = { acao, email: null };
+    const entrada = donoSchema.parse(request.body || {});
+    const resultado = await lojaNoAdmin.ligarDono(request.params.lojaId, entrada);
+    response.locals.auditoria = {
+      acao,
+      email: null,
+      uidConta: resultado.uid,
+      uidAntigo: resultado.uidAntigo,
+      userReferenceAntes: resultado.userReferenceAntes,
+      userReferenceDepois: resultado.userReferenceDepois,
+      ...(resultado.claimsNovas ? { claimsAntigas: resultado.claimsAntigas, claimsNovas: resultado.claimsNovas } : {}),
     };
     response.json({ data: resultado });
   }));
