@@ -81,3 +81,58 @@ test('K6: o Admin da plataforma agindo na loja tambem recebe o 409', async () =>
     repetido('Feijão Preto 1kg'),
   );
 });
+
+// RP-65, item B.1: a repeticao so e conferida ao criar o produto ou quando o barCode muda em relacao
+// ao do documento atual. Produto que ja esta repetido salva normalmente sem trocar o codigo.
+test('B.1: criar produto com codigo repetido recusa', async () => {
+  const { firestore, gateway } = montar({
+    [`${PRODUTOS}/repA`]: { name: 'Leite A', barCode: '7899999999999', isTrashed: false },
+    [`${PRODUTOS}/repB`]: { name: 'Leite B', barCode: '7899999999999', isTrashed: false },
+  });
+  await assert.rejects(gravar(gateway, 'set', `${PRODUTOS}/novo`, { name: 'Leite C', barCode: '7899999999999' }), repetido('Leite A'));
+  await assert.rejects(gravar(gateway, 'set', `${PRODUTOS}/novo`, { name: 'Leite C', barCode: '7891234567890' }, { merge: true }), repetido('Arroz Tio João 5kg'));
+  assert.equal((await firestore.doc(`${PRODUTOS}/novo`).get()).exists, false);
+});
+
+test('B.1: trocar o codigo para um repetido recusa, inclusive no produto que ja era repetido', async () => {
+  const { firestore, gateway } = montar({
+    [`${PRODUTOS}/repA`]: { name: 'Leite A', barCode: '7899999999999', isTrashed: false },
+    [`${PRODUTOS}/repB`]: { name: 'Leite B', barCode: '7899999999999', isTrashed: false },
+  });
+  await assert.rejects(gravar(gateway, 'update', `${PRODUTOS}/feijao`, { name: 'Feijão', barCode: '7899999999999' }), repetido('Leite A'));
+  await assert.rejects(gravar(gateway, 'set', `${PRODUTOS}/feijao`, { name: 'Feijão', barCode: '7891234567890' }, { merge: true }), repetido('Arroz Tio João 5kg'));
+  await assert.rejects(gravar(gateway, 'update', `${PRODUTOS}/repA`, { barCode: '7891234567890' }), repetido('Arroz Tio João 5kg'));
+  assert.equal((await firestore.doc(`${PRODUTOS}/feijao`).get()).data().barCode, '7890000000001');
+  assert.equal((await firestore.doc(`${PRODUTOS}/repA`).get()).data().barCode, '7899999999999');
+  // Trocar o repetido para um codigo livre passa.
+  await gravar(gateway, 'update', `${PRODUTOS}/repB`, { barCode: '7898888888888' });
+  assert.equal((await firestore.doc(`${PRODUTOS}/repB`).get()).data().barCode, '7898888888888');
+});
+
+test('B.1: editar outro campo de produto ja repetido, mandando o mesmo codigo, salva normalmente', async () => {
+  const { firestore, gateway } = montar({
+    [`${PRODUTOS}/repA`]: { name: 'Leite A', barCode: '7899999999999', price: 5, isTrashed: false },
+    [`${PRODUTOS}/repB`]: { name: 'Leite B', barCode: '7899999999999', price: 6, isTrashed: false },
+    [`${PRODUTOS}/repNum`]: { name: 'Leite N', barCode: 7899999999999, isTrashed: false },
+  });
+  await gravar(gateway, 'update', `${PRODUTOS}/repA`, { price: 5.5, barCode: '7899999999999' });
+  await gravar(gateway, 'set', `${PRODUTOS}/repB`, { price: 6.5, barCode: ' 7899999999999 ' }, { merge: true });
+  await gravar(gateway, 'set', `${PRODUTOS}/repA`, { name: 'Leite A 1L', barCode: '7899999999999', price: 5.5, isTrashed: false });
+  // O mesmo codigo gravado como numero e mandado como texto nao e troca.
+  await gravar(gateway, 'update', `${PRODUTOS}/repNum`, { name: 'Leite N 1L', barCode: '7899999999999' });
+  // No lote tambem.
+  await gateway.mutate({
+    actor: dono,
+    request: {
+      operation: 'batch',
+      operations: [
+        { operation: 'update', target: { path: `${PRODUTOS}/repA` }, data: { price: 5.9, barCode: '7899999999999' } },
+        { operation: 'update', target: { path: `${PRODUTOS}/repB` }, data: { price: 6.9, barCode: '7899999999999' } },
+      ],
+    },
+  });
+  assert.equal((await firestore.doc(`${PRODUTOS}/repA`).get()).data().price, 5.9);
+  assert.equal((await firestore.doc(`${PRODUTOS}/repB`).get()).data().price, 6.9);
+  assert.equal((await firestore.doc(`${PRODUTOS}/repA`).get()).data().name, 'Leite A 1L');
+  assert.equal((await firestore.doc(`${PRODUTOS}/repNum`).get()).data().name, 'Leite N 1L');
+});

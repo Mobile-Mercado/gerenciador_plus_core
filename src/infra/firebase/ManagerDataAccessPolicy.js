@@ -284,14 +284,18 @@ export class ManagerDataAccessPolicy {
   // Codigo de barras repetido (contrato K6, cola RP-62, item E.4): gravar barCode nao vazio igual ao
   // de outro produto da mesma loja (outro id, fora da lixeira: isTrashed diferente de true e sem
   // deletedAt, o mesmo filtro da web) da 409 com o nome desse produto. Vale para quem grava pelo
-  // proxy, inclusive o Admin na loja.
+  // proxy, inclusive o Admin na loja. So confere ao criar o produto ou quando o barCode gravado muda
+  // em relacao ao do documento atual (RP-65, B.1): produto que ja esta repetido salva normalmente
+  // quando o codigo nao muda.
   async assertCodigoDeBarras(mutation, parts) {
     if (parts.length !== 4 || parts[2] !== 'Products') return;
     if (mutation.operation !== 'set' && mutation.operation !== 'update') return;
     if (!mutation.data || !Object.hasOwn(mutation.data, 'barCode')) return;
     const valor = mutation.data.barCode;
-    const texto = typeof valor === 'string' ? valor.trim() : (Number.isFinite(valor) ? String(valor) : '');
+    const texto = textoDoCodigoDeBarras(valor);
     if (!texto) return;
+    const atual = await this.firestore.doc(parts.join('/')).get();
+    if (atual.exists && textoDoCodigoDeBarras(atual.data()?.barCode) === texto) return;
     const produtos = this.firestore.collection(parts.slice(0, 3).join('/'));
     const procurados = [...new Set([valor, texto])];
     const achados = await Promise.all(procurados.map((codigo) => produtos.where('barCode', '==', codigo).get()));
@@ -718,6 +722,12 @@ function caminhoDePagamentoBloqueado(caminho) {
 
 function produtoNaLoja(produto = {}) {
   return produto?.isTrashed !== true && !produto?.deletedAt;
+}
+
+// barCode como texto (sem espacos nas pontas; numero vira texto); vazio ou de outro tipo, ''.
+function textoDoCodigoDeBarras(valor) {
+  if (typeof valor === 'string') return valor.trim();
+  return Number.isFinite(valor) ? String(valor) : '';
 }
 
 function isOwnEstablishmentPath(path, establishmentId) {
