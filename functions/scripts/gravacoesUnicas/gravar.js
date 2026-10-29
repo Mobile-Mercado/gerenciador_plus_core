@@ -21,6 +21,7 @@ const TAREFAS = {
   cupons: require('./tarefas/cupons'),
   'cartao-gs': require('./tarefas/cartaoGs'),
   'grupos-dos-pedidos': require('./tarefas/gruposDosPedidos'),
+  'unidades-gs': require('./tarefas/unidadesGs'),
 };
 
 async function principal() {

@@ -102,3 +102,26 @@ test('grupos dos pedidos: conta o pedido que o onPurchaseSeparated da v55 pode r
   assert.ok(!podeSerRecalculado({ currentPurchaseStatus: 'PurchaseStatus.completed', productsCart: [item] }));
   assert.ok(!podeSerRecalculado({ currentPurchaseStatus: 'PurchaseStatus.canceled', discountValue: 2, productsCart: [item] }));
 });
+
+const { mudancasDoLote } = require('./tarefas/unidadesGs');
+
+test('unidades da G&S: cada lote pega so os seus e grava so unitType', () => {
+  const produto = (id, campos) => ({ caminho: `estabelecimentos/G/Products/${id}`, id, updateTime: 't', campos: Object.fromEntries(Object.entries(campos).map(([k, v]) => [k, valorRest(v)])) });
+  const documentos = [
+    produto('lt', { unitType: 'LT', unityType: 'LT', unitQuantity: 24 }),
+    produto('kgPacote', { unitType: 'KG', unityType: 'un', unitQuantity: 4 }),
+    produto('kg', { unitType: 'KG', unityType: 'un', unitQuantity: 1 }),
+    produto('pc1', { unitType: 'PC' }), produto('pc2', { unitType: 'Pc' }), produto('pc3', { unitType: 'pc' }),
+    produto('peca', { unitType: 'Peça' }), produto('un', { unitType: 'UN' }), produto('semTipo', { unityType: 'LT' }),
+  ];
+  const ids = (lote) => mudancasDoLote(lote, documentos).mudancas.map((mudanca) => mudanca.caminho.split('/').pop());
+  assert.deepEqual(ids('lata'), ['lt']);
+  assert.deepEqual(ids('kg-pacote'), ['kgPacote']);
+  assert.deepEqual(ids('pc'), ['pc1', 'pc2', 'pc3']);
+  const { mudancas, aindaEmLt } = mudancasDoLote('lata', documentos);
+  assert.equal(aindaEmLt, 1);
+  assert.deepEqual(Object.keys(mudancas[0].depois), ['unitType']);
+  assert.deepEqual(mudancas[0].antes, { unitType: { stringValue: 'LT' } });
+  assert.deepEqual(mudancas[0].depois, { unitType: { stringValue: 'ProductUnitType.lata' } });
+  assert.deepEqual(mudancasDoLote('pc', documentos).mudancas[0].depois, { unitType: { stringValue: 'ProductUnitType.unidade' } });
+});
