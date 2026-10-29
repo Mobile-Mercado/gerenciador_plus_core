@@ -9,12 +9,16 @@
 //                                                                   grava (so no dia, com o ok do Thay)
 //   --projeto ID       outro projeto (padrao: appmobileprod-19505)
 //   --copias PASTA     pasta das copias (padrao: ambiente-local-rp44/seguranca-v55/gravacoes-unicas)
+//   --por-chamada N    documentos por chamada do batchWrite, de 1 a 500 (padrao: 400)
+//   --pausa-ms MS      pausa entre uma chamada e a proxima, em ms (padrao: 0). Ex.: os 376 pedidos
+//                      em lotes de 50 com 5 s: --por-chamada 50 --pausa-ms 5000 (RP-76, respostas 2)
 //
 // Tarefas: veja TAREFAS abaixo. Acesso: FIRESTORE_TOKEN (gcloud auth print-access-token) ou
 // FIRESTORE_EMULATOR_HOST. Para desfazer: desfazer.js --copia ARQUIVO (mesma chave para gravar).
 const { criarFirestore } = require('./firestoreRest');
 const {
-  PASTA_DAS_COPIAS, argumento, carimbo, ehPedido, modoDeGravacao, mostrarMudancas, projetoEmUso, salvarJson,
+  PASTA_DAS_COPIAS, argumento, carimbo, ehPedido, modoDeGravacao, mostrarChamada, mostrarMudancas, planoDaGravacao,
+  projetoEmUso, ritmoDosArgumentos, salvarJson,
 } = require('./comum');
 
 const TAREFAS = {
@@ -30,7 +34,8 @@ async function principal() {
   if (!tarefa) throw new Error(`Use --tarefa ${Object.keys(TAREFAS).join(' | ')}`);
   const projeto = projetoEmUso();
   const gravar = modoDeGravacao(projeto);
-  const firestore = criarFirestore({ projeto, permitirGravacao: gravar });
+  const ritmo = ritmoDosArgumentos();
+  const firestore = criarFirestore({ projeto, permitirGravacao: gravar, ...ritmo });
   const lote = argumento('lote');
 
   const { lidos, mudancas, avisos = [], bloqueio = null, sufixo = '' } = await tarefa.executar({ firestore, gravar, lote });
@@ -57,6 +62,7 @@ async function principal() {
   }
 
   if (!gravar) {
+    if (mudancas.length) console.log(`com --gravar: ${planoDaGravacao(mudancas.length, firestore.ritmo)}`);
     console.log('Previa: nada foi gravado.');
     return;
   }
@@ -65,9 +71,13 @@ async function principal() {
     console.log('Nada a gravar.');
     return;
   }
-  const resultado = await firestore.gravar(mudancas.map(({ caminho, depois, updateTime }) => ({ caminho, valores: depois, updateTime })));
+  console.log(`gravando ${planoDaGravacao(mudancas.length, firestore.ritmo)}`);
+  const resultado = await firestore.gravar(
+    mudancas.map(({ caminho, depois, updateTime }) => ({ caminho, valores: depois, updateTime })),
+    { aoTerminarChamada: mostrarChamada },
+  );
   const falhas = resultado.filter((item) => !item.ok);
-  const arquivo = salvarJson(argumento('copias') || PASTA_DAS_COPIAS, `${rotulo}-${carimbo()}-resultado.json`, { projeto, tarefa: nome, lote: lote || null, resultado });
+  const arquivo = salvarJson(argumento('copias') || PASTA_DAS_COPIAS, `${rotulo}-${carimbo()}-resultado.json`, { projeto, tarefa: nome, lote: lote || null, ritmo: firestore.ritmo, resultado });
   console.log(`gravados: ${resultado.length - falhas.length} | falhas: ${falhas.length} | resultado: ${arquivo}`);
   falhas.filter((falha) => !ehPedido(falha.caminho)).forEach((falha) => console.log(`  falha ${falha.caminho}: ${falha.erro}`));
   if (falhas.length) {

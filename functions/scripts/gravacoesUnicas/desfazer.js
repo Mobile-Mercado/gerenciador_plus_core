@@ -9,11 +9,13 @@
 //   node scripts/gravacoesUnicas/desfazer.js --copia ARQUIVO
 //   node scripts/gravacoesUnicas/desfazer.js --copia ARQUIVO --gravar --confirmar appmobileprod-19505
 //   --projeto ID     outro projeto (padrao: o da copia)
+//   --por-chamada N  documentos por chamada, de 1 a 500 (padrao: 400); --pausa-ms MS entre elas (padrao: 0)
 const fs = require('node:fs');
 const path = require('node:path');
 const { AUSENTE, criarFirestore, iguais, valorNoCaminho } = require('./firestoreRest');
 const {
-  argumento, carimbo, ehPedido, modoDeGravacao, mostrarMudancas, salvarJson,
+  argumento, carimbo, ehPedido, modoDeGravacao, mostrarChamada, mostrarMudancas, planoDaGravacao, ritmoDosArgumentos,
+  salvarJson,
 } = require('./comum');
 
 async function principal() {
@@ -23,7 +25,8 @@ async function principal() {
   if (!Array.isArray(copia.documentos)) throw new Error('Copia sem a lista de documentos.');
   const projeto = argumento('projeto') || copia.projeto;
   const gravar = modoDeGravacao(projeto);
-  const firestore = criarFirestore({ projeto, permitirGravacao: gravar });
+  const ritmo = ritmoDosArgumentos();
+  const firestore = criarFirestore({ projeto, permitirGravacao: gravar, ...ritmo });
 
   const campos = [...new Set(copia.documentos.flatMap((documento) => Object.keys(documento.antes)))];
   const atuais = await firestore.obter(copia.documentos.map((documento) => documento.caminho), campos);
@@ -69,7 +72,11 @@ async function principal() {
     console.log('Nada a desfazer.');
     return;
   }
-  const resultado = await firestore.gravar(restaurar.map(({ caminho, depois, updateTime }) => ({ caminho, valores: depois, updateTime })));
+  console.log(`desfazendo ${planoDaGravacao(restaurar.length, firestore.ritmo)}`);
+  const resultado = await firestore.gravar(
+    restaurar.map(({ caminho, depois, updateTime }) => ({ caminho, valores: depois, updateTime })),
+    { aoTerminarChamada: mostrarChamada },
+  );
   const falhas = resultado.filter((item) => !item.ok);
   const nome = `${path.basename(arquivoDaCopia, '.json')}-desfeito-${carimbo()}.json`;
   const arquivo = salvarJson(path.dirname(path.resolve(arquivoDaCopia)), nome, { projeto, copia: path.basename(arquivoDaCopia), resultado, mexidos, sumidos });

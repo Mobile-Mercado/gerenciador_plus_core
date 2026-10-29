@@ -3,9 +3,51 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  AUSENTE, caminhoDeCampo, camposDoUpdate, criarFirestore, iguais, lerValor, valorNoCaminho, valorRest,
+  AUSENTE, caminhoDeCampo, camposDoUpdate, criarFirestore, iguais, lerValor, ritmoDaGravacao, valorNoCaminho, valorRest,
 } = require('./firestoreRest');
+const { planoDaGravacao } = require('./comum');
 const { mudancasDosCupons } = require('./tarefas/cupons');
+
+test('ritmo da gravacao: padrao 400 sem pausa; numero fora da faixa para antes de gravar', () => {
+  assert.deepEqual(ritmoDaGravacao(), { porChamada: 400, pausaMs: 0 });
+  assert.deepEqual(ritmoDaGravacao({ porChamada: '50', pausaMs: '5000' }), { porChamada: 50, pausaMs: 5000 });
+  ['0', '501', '2.5', 'abc', '-1'].forEach((valor) => {
+    assert.throws(() => ritmoDaGravacao({ porChamada: valor }), /--por-chamada.*Nada foi gravado/);
+  });
+  ['-1', '1.5', 'x', '600001'].forEach((valor) => {
+    assert.throws(() => ritmoDaGravacao({ pausaMs: valor }), /--pausa-ms.*Nada foi gravado/);
+  });
+  assert.match(planoDaGravacao(376, { porChamada: 50, pausaMs: 5000 }), /376 documentos em 8 chamada\(s\) de ate 50, pausa de 5000 ms entre elas \(35 s/);
+  assert.match(planoDaGravacao(376, { porChamada: 400, pausaMs: 0 }), /em 1 chamada\(s\)/);
+});
+
+test('gravar em lotes: 5 escritas de 2 em 2 viram 3 chamadas, com a pausa so entre elas', async () => {
+  process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:1';
+  const fetchOriginal = globalThis.fetch;
+  const chamadas = [];
+  globalThis.fetch = async (url, { body }) => {
+    const { writes } = JSON.parse(body);
+    chamadas.push({ url, quando: Date.now(), tamanho: writes.length });
+    return { ok: true, text: async () => JSON.stringify({ status: writes.map(() => ({})) }) };
+  };
+  try {
+    const firestore = criarFirestore({ projeto: 'demo-teste', permitirGravacao: true, porChamada: 2, pausaMs: 40 });
+    const vistas = [];
+    const escritas = [1, 2, 3, 4, 5].map((n) => ({ caminho: `Coupons/c${n}`, valores: { tipo: valorRest('todos') } }));
+    const inicio = Date.now();
+    const resultado = await firestore.gravar(escritas, { aoTerminarChamada: (passo) => vistas.push(passo) });
+    assert.deepEqual(chamadas.map((chamada) => chamada.tamanho), [2, 2, 1]);
+    assert.ok(chamadas.every((chamada) => chamada.url.endsWith(':batchWrite')));
+    assert.ok(chamadas[0].quando - inicio < 30, 'a primeira chamada nao espera');
+    assert.ok(chamadas[1].quando - chamadas[0].quando >= 35 && chamadas[2].quando - chamadas[1].quando >= 35, 'pausa entre as chamadas');
+    assert.deepEqual(vistas.map(({ chamada, chamadas: total, gravados }) => [chamada, total, gravados]), [[1, 3, 2], [2, 3, 4], [3, 3, 5]]);
+    assert.equal(resultado.length, 5);
+    assert.ok(resultado.every((item) => item.ok));
+  } finally {
+    globalThis.fetch = fetchOriginal;
+    delete process.env.FIRESTORE_EMULATOR_HOST;
+  }
+});
 
 const documento = (id, campos) => ({ caminho: `Coupons/${id}`, id, campos, updateTime: '2026-10-29T00:00:00Z' });
 

@@ -14,6 +14,28 @@ const PROJETO_PRODUCAO = 'appmobileprod-19505';
 const POR_PAGINA = 300;
 const POR_LEITURA = 100;
 const POR_GRAVACAO = 400;
+const MAXIMO_POR_GRAVACAO = 500; // limite do batchWrite
+const MAXIMO_DE_PAUSA_MS = 600000;
+
+// Ritmo da gravacao: quantos documentos por chamada do batchWrite e a pausa entre uma chamada e a
+// proxima (nao depois da ultima). Sem nada, o padrao de sempre: 400 por chamada, sem pausa.
+// Numero invalido para tudo antes de qualquer leitura ou gravacao.
+function ritmoDaGravacao({ porChamada, pausaMs } = {}) {
+  const inteiro = (valor, nome, minimo, maximo, padrao) => {
+    if (valor === undefined || valor === null || valor === '') return padrao;
+    const numero = Number(valor);
+    if (!Number.isInteger(numero) || numero < minimo || numero > maximo) {
+      throw new Error(`--${nome} precisa ser um numero inteiro de ${minimo} a ${maximo} (veio ${valor}). Nada foi gravado.`);
+    }
+    return numero;
+  };
+  return {
+    porChamada: inteiro(porChamada, 'por-chamada', 1, MAXIMO_POR_GRAVACAO, POR_GRAVACAO),
+    pausaMs: inteiro(pausaMs, 'pausa-ms', 0, MAXIMO_DE_PAUSA_MS, 0),
+  };
+}
+
+const esperar = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 // Valores do Firestore (formato REST) -> JavaScript, so para a logica e a tela da previa.
 // A copia guarda o formato REST como veio, para o desfazer voltar o tipo exato.
@@ -100,7 +122,8 @@ function camposDoUpdate(valores) {
   return raiz;
 }
 
-function criarFirestore({ projeto = PROJETO_PRODUCAO, permitirGravacao = false } = {}) {
+function criarFirestore({ projeto = PROJETO_PRODUCAO, permitirGravacao = false, porChamada, pausaMs } = {}) {
+  const ritmo = ritmoDaGravacao({ porChamada, pausaMs });
   const emulador = process.env.FIRESTORE_EMULATOR_HOST || '';
   const token = emulador ? 'owner' : (process.env.FIRESTORE_TOKEN || '');
   if (!token) {
@@ -166,12 +189,15 @@ function criarFirestore({ projeto = PROJETO_PRODUCAO, permitirGravacao = false }
 
   // escritas: [{ caminho, valores: { campo: valorRest | AUSENTE }, updateTime }]. Update so dos
   // campos (nunca set), com a conferencia pelo updateTime. Nao atomico: cada documento volta com
-  // ok ou com o erro (ex.: mudou depois da leitura).
-  async function gravar(escritas) {
+  // ok ou com o erro (ex.: mudou depois da leitura). Vai em chamadas de ritmo.porChamada, com
+  // ritmo.pausaMs entre elas; aoTerminarChamada({ chamada, chamadas, gravados, total }) a cada uma.
+  async function gravar(escritas, { aoTerminarChamada } = {}) {
     if (!permitirGravacao) throw new Error('Gravacao bloqueada: este acesso e so de leitura.');
     const resultado = [];
-    for (let inicio = 0; inicio < escritas.length; inicio += POR_GRAVACAO) {
-      const lote = escritas.slice(inicio, inicio + POR_GRAVACAO);
+    const chamadas = Math.ceil(escritas.length / ritmo.porChamada);
+    for (let inicio = 0; inicio < escritas.length; inicio += ritmo.porChamada) {
+      if (inicio > 0 && ritmo.pausaMs > 0) await esperar(ritmo.pausaMs);
+      const lote = escritas.slice(inicio, inicio + ritmo.porChamada);
       const corpo = {
         writes: lote.map(({ caminho, valores, updateTime }) => ({
           update: { name: `${raiz}/${caminho}`, fields: camposDoUpdate(valores) },
@@ -184,6 +210,9 @@ function criarFirestore({ projeto = PROJETO_PRODUCAO, permitirGravacao = false }
         const status = resposta.status?.[indice] || {};
         resultado.push({ caminho: escrita.caminho, ok: !status.code, erro: status.code ? (status.message || `codigo ${status.code}`) : null });
       });
+      if (aoTerminarChamada) {
+        aoTerminarChamada({ chamada: inicio / ritmo.porChamada + 1, chamadas, gravados: resultado.length, total: escritas.length });
+      }
     }
     return resultado;
   }
@@ -212,7 +241,7 @@ function criarFirestore({ projeto = PROJETO_PRODUCAO, permitirGravacao = false }
     };
   }
 
-  return { projeto, emulador: Boolean(emulador), permitirGravacao, listar, obter, gravar, comoAdmin };
+  return { projeto, emulador: Boolean(emulador), permitirGravacao, ritmo, listar, obter, gravar, comoAdmin };
 }
 
 module.exports = {
@@ -225,6 +254,7 @@ module.exports = {
   iguais,
   lerCampos,
   lerValor,
+  ritmoDaGravacao,
   valorNoCaminho,
   valorRest,
 };

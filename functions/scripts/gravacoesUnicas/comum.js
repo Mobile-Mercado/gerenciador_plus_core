@@ -1,7 +1,7 @@
 // Partes comuns da gravacao e do desfazer: argumentos, a chave de gravar e as copias.
 const fs = require('node:fs');
 const path = require('node:path');
-const { PROJETO_PRODUCAO, ehAusente, lerValor } = require('./firestoreRest');
+const { PROJETO_PRODUCAO, ehAusente, lerValor, ritmoDaGravacao } = require('./firestoreRest');
 
 const argumento = (nome) => {
   const indice = process.argv.indexOf(`--${nome}`);
@@ -25,6 +25,18 @@ function modoDeGravacao(projeto) {
 }
 
 const projetoEmUso = () => argumento('projeto') || PROJETO_PRODUCAO;
+
+// --por-chamada N e --pausa-ms MS (padrao: 400 por chamada, sem pausa). Valida antes de ler.
+const ritmoDosArgumentos = () => ritmoDaGravacao({ porChamada: argumento('por-chamada'), pausaMs: argumento('pausa-ms') });
+
+// Linha do plano da gravacao, para a tela: quantas chamadas e quanto tempo de pausa ao todo.
+function planoDaGravacao(total, { porChamada, pausaMs }) {
+  const chamadas = Math.ceil(total / porChamada);
+  const pausaTotal = Math.max(chamadas - 1, 0) * pausaMs;
+  return `${total} documentos em ${chamadas} chamada(s) de ate ${porChamada}, pausa de ${pausaMs} ms entre elas (${Math.round(pausaTotal / 1000)} s de pausa ao todo)`;
+}
+
+const mostrarChamada = ({ chamada, chamadas, gravados, total }) => console.log(`  chamada ${chamada} de ${chamadas}: ${gravados} de ${total}`);
 const carimbo = () => new Date().toISOString().replace(/[:.]/g, '-');
 
 function salvarJson(pasta, nome, conteudo) {
@@ -59,8 +71,11 @@ module.exports = {
   ehPedido,
   legivel,
   modoDeGravacao,
+  mostrarChamada,
   mostrarMudancas,
+  planoDaGravacao,
   projetoEmUso,
+  ritmoDosArgumentos,
   salvarJson,
   temChave,
 };
