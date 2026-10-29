@@ -10,9 +10,38 @@ export class FirestoreCouponRepository extends CouponRepository {
     return this.firestore.collection('Coupons');
   }
 
-  async create(coupon) {
-    const docRef = await this.collection.add(coupon);
+  // Objetivo e quem criou ficam fora do Coupons/{id} (o app do cliente le esse documento). A
+  // colecao fica fechada pela regra padrao do Firestore: so o Core (Admin SDK) le.
+  get bastidores() {
+    return this.firestore.collection('CuponsBastidores');
+  }
+
+  objetivosDaLoja(establishmentId) {
+    return this.firestore.collection('estabelecimentos').doc(String(establishmentId)).collection('ObjetivosDeCupom');
+  }
+
+  async create(coupon, bastidores = null) {
+    const docRef = this.collection.doc();
+    const lote = this.firestore.batch();
+    lote.set(docRef, coupon);
+    if (bastidores) lote.set(this.bastidores.doc(docRef.id), bastidores);
+    await lote.commit();
     return { id: docRef.id, ...coupon };
+  }
+
+  async findBastidores(couponIds = []) {
+    const ids = [...new Set(couponIds.filter(Boolean).map(String))];
+    if (ids.length === 0) return new Map();
+    const docs = await this.firestore.getAll(...ids.map((id) => this.bastidores.doc(id)));
+    return new Map(docs.filter((doc) => doc.exists).map((doc) => [doc.id, doc.data()]));
+  }
+
+  async listObjetivosDaLoja(establishmentId) {
+    const snapshot = await this.objetivosDaLoja(establishmentId).get();
+    return snapshot.docs
+      .map((doc) => ({ id: doc.id, nome: String(doc.data()?.nome || '') }))
+      .filter((objetivo) => objetivo.nome)
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
   }
 
   async list() {
@@ -26,12 +55,18 @@ export class FirestoreCouponRepository extends CouponRepository {
     return { id: doc.id, ...doc.data() };
   }
 
-  async update(couponId, patch) {
-    await this.collection.doc(couponId).update(patch);
+  async update(couponId, patch, bastidores = null) {
+    const lote = this.firestore.batch();
+    if (Object.keys(patch || {}).length > 0) lote.update(this.collection.doc(couponId), patch);
+    if (bastidores) lote.set(this.bastidores.doc(couponId), bastidores, { merge: true });
+    await lote.commit();
   }
 
   async delete(couponId) {
-    await this.collection.doc(couponId).delete();
+    const lote = this.firestore.batch();
+    lote.delete(this.collection.doc(couponId));
+    lote.delete(this.bastidores.doc(couponId));
+    await lote.commit();
   }
 
   // Clientes da loja para escolher o destinatario do cupom pessoal: { userId, nome, telefone }.

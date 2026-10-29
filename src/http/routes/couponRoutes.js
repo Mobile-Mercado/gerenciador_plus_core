@@ -42,7 +42,12 @@ const ruleSchema = z.union([
 const temFrete = (rules = []) => rules.some((rule) => rule.type === 'freight');
 const temLeveN = (rules = []) => rules.some((rule) => rule.type === 'bundle');
 
+// Objetivo do cupom (RP-62, D.1): texto de 1 a 40 letras, obrigatorio ao criar e ao editar. Vai
+// para CuponsBastidores/{id}, nunca para o Coupons/{id}.
+const objetivoSchema = z.string().trim().min(1).max(40);
+
 const createCouponSchema = z.object({
+  objetivo: objetivoSchema,
   code: z.string().min(3).max(30),
   description: z.string().min(1).max(200),
   termsText: z.string().max(2000).optional(),
@@ -75,6 +80,7 @@ const couponIdParamsSchema = z.object({
 });
 
 const updateCouponSchema = z.object({
+  objetivo: objetivoSchema,
   code: z.string().min(3).max(30).optional(),
   description: z.string().min(1).max(200).optional(),
   termsText: z.string().max(2000).optional(),
@@ -116,6 +122,23 @@ export function createCouponRoutes({ manageCoupons, requirePermission, accountFo
     asyncHandler(async (request, response) => {
       const { busca } = buscaClientesSchema.parse(request.query);
       response.json({ data: await manageCoupons.buscarClientes({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request), busca }) });
+    }),
+  );
+
+  // Chips do "Objetivo do cupom" (RP-62, D.1): { padrao: [...], daLoja: [{ id, nome }] }.
+  router.get(
+    '/objetivos',
+    asyncHandler(async (request, response) => {
+      response.json({ data: await manageCoupons.listObjetivos({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request) }) });
+    }),
+  );
+
+  // Um cupom da loja, com o objetivo (o Editar cupom abre por aqui).
+  router.get(
+    '/:couponId',
+    asyncHandler(async (request, response) => {
+      const { couponId } = couponIdParamsSchema.parse(request.params);
+      response.json({ data: await manageCoupons.getCoupon({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request), couponId }) });
     }),
   );
 

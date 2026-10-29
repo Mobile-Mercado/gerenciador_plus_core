@@ -5,6 +5,25 @@ export const TIPO_TODOS = 'todos';
 export const TIPO_CLIENTE = 'cliente';
 const LIMITE_DA_BUSCA = 20;
 
+// Objetivo do cupom (RP-62, D.1): os cinco padrao valem para toda loja e a loja pode ter os dela
+// (ObjetivosDeCupom). O objetivo nao vai no Coupons/{id}, que o app do cliente le
+// (checkout_confirmation_controller.dart): fica em CuponsBastidores/{couponId}, que so o Core le.
+export const OBJETIVOS_PADRAO = Object.freeze([
+  'Atrair clientes novos',
+  'Trazer de volta quem sumiu',
+  'Aumentar o valor da compra',
+  'Vender produto parado',
+  'Data comemorativa',
+]);
+
+// O que a web recebe de cada cupom: o documento do Coupons mais o que esta nos bastidores.
+export function cupomComBastidores(coupon, bastidores = null) {
+  return {
+    ...coupon,
+    objetivo: bastidores?.objetivo || null,
+  };
+}
+
 function semAcento(texto) {
   return String(texto || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 }
@@ -35,7 +54,7 @@ export class ManageCoupons {
   async createCoupon({
     actorUid, establishmentId, code, description, termsText, scopeName, firstPurchaseOnly, rules, discount,
     startAt, endAt, perCustomerLimit, totalUsageLimit, stackable, targetClientId = null, campaignId = null,
-    tipo = null,
+    tipo = null, objetivo,
   }) {
     const account = await this.requireEstablishment(actorUid, establishmentId);
     const tipoDoCupom = tipo || (targetClientId ? TIPO_CLIENTE : TIPO_TODOS);
@@ -82,7 +101,9 @@ export class ManageCoupons {
       createdAt: Timestamp.fromDate(this.clock()),
     };
 
-    return this.couponRepository.create(coupon);
+    const bastidores = { objetivo: String(objetivo || '').trim() };
+    const criado = await this.couponRepository.create(coupon, bastidores);
+    return cupomComBastidores(criado, bastidores);
   }
 
   // Busca de clientes da loja na criacao do cupom pessoal (cola RP-14 A.2): nome, telefone
@@ -116,7 +137,24 @@ export class ManageCoupons {
   async listCoupons({ actorUid, establishmentId }) {
     const account = await this.requireEstablishment(actorUid, establishmentId);
     const coupons = await this.couponRepository.list();
-    return coupons.filter((coupon) => coupon.establishmentIds?.includes(account.establishmentId));
+    const daLoja = coupons.filter((coupon) => coupon.establishmentIds?.includes(account.establishmentId));
+    const bastidores = await this.couponRepository.findBastidores(daLoja.map((coupon) => coupon.id));
+    return daLoja.map((coupon) => cupomComBastidores(coupon, bastidores.get(coupon.id)));
+  }
+
+  async getCoupon({ actorUid, establishmentId, couponId }) {
+    const account = await this.requireEstablishment(actorUid, establishmentId);
+    const coupon = await this.requireCoupon(couponId);
+    this.assertOwnership(coupon, account.establishmentId);
+    const bastidores = await this.couponRepository.findBastidores([coupon.id]);
+    return cupomComBastidores(coupon, bastidores.get(coupon.id));
+  }
+
+  // Chips do "Objetivo do cupom": os padrao e os da loja.
+  async listObjetivos({ actorUid, establishmentId }) {
+    const account = await this.requireEstablishment(actorUid, establishmentId);
+    const daLoja = await this.couponRepository.listObjetivosDaLoja(account.establishmentId);
+    return { padrao: [...OBJETIVOS_PADRAO], daLoja };
   }
 
   async updateCoupon({ actorUid, establishmentId, couponId, patch }) {
@@ -124,7 +162,8 @@ export class ManageCoupons {
     const coupon = await this.requireCoupon(couponId);
     this.assertOwnership(coupon, account.establishmentId);
 
-    const normalizedPatch = { ...patch };
+    // O objetivo vai para os bastidores, nunca para o Coupons/{id}.
+    const { objetivo, ...normalizedPatch } = patch;
     // Cupom pessoal e de uso unico: os limites nao mudam.
     if (coupon.tipo === TIPO_CLIENTE && ['perCustomerLimit', 'totalUsageLimit'].some((campo) => campo in normalizedPatch && normalizedPatch[campo] !== 1)) {
       throw new AppError('Cupom de um cliente vale uma vez só.', { statusCode: 400, code: 'coupon_pessoal_uso_unico' });
@@ -143,7 +182,8 @@ export class ManageCoupons {
       normalizedPatch.endAt = Timestamp.fromDate(new Date(normalizedPatch.endAt));
     }
 
-    await this.couponRepository.update(couponId, normalizedPatch);
+    const bastidores = objetivo === undefined ? null : { objetivo: String(objetivo).trim() };
+    await this.couponRepository.update(couponId, normalizedPatch, bastidores);
   }
 
   async deactivateCoupon({ actorUid, establishmentId, couponId }) {

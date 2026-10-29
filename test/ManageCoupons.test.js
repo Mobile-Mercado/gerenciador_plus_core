@@ -4,6 +4,7 @@ import { Timestamp } from 'firebase-admin/firestore';
 import { ManageCoupons } from '../src/application/coupons/ManageCoupons.js';
 
 const validPayload = {
+  objetivo: 'Atrair clientes novos',
   code: 'PROMO10',
   description: '10% em bebidas',
   termsText: 'Válido uma vez por CPF, não cumulativo com outras promoções.',
@@ -282,17 +283,23 @@ function createManager({
   deleted = [],
   coupons = [],
   clientes = { 'cliente-9': 'uid-cliente-9' },
+  bastidores = new Map(),
+  objetivosDaLoja = [],
 } = {}) {
   return new ManageCoupons({
     couponRepository: {
-      create: async (coupon) => {
+      create: async (coupon, dosBastidores) => {
         created.push(coupon);
-        return { id: 'novo-id', ...coupon };
+        bastidores.set(`novo-${created.length}`, dosBastidores);
+        return { id: `novo-${created.length}`, ...coupon };
       },
       list: async () => coupons,
       findById: async (id) => coupons.find((coupon) => coupon.id === id) || null,
-      update: async (id, patch) => {
+      findBastidores: async (ids) => new Map(ids.filter((id) => bastidores.has(id)).map((id) => [id, bastidores.get(id)])),
+      listObjetivosDaLoja: async () => objetivosDaLoja,
+      update: async (id, patch, dosBastidores) => {
         updated.push({ id, patch });
+        if (dosBastidores) bastidores.set(id, { ...bastidores.get(id), ...dosBastidores });
       },
       delete: async (id) => {
         deleted.push(id);
@@ -322,6 +329,7 @@ test('C5.2: funcionario com coupons.manage (adminOf) usa a loja da conta da requ
       create: async (coupon) => { created.push(coupon); return { id: 'novo', ...coupon }; },
       list: async () => coupons,
       findById: async (id) => coupons.find((coupon) => coupon.id === id) || null,
+      findBastidores: async () => new Map(),
       update: async (id, patch) => { updated.push({ id, patch }); },
       delete: async () => {},
     },
@@ -347,9 +355,9 @@ test('C5.2: funcionario com coupons.manage (adminOf) usa a loja da conta da requ
     const criado = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(validPayload) });
     assert.equal(criado.status, 201);
     assert.deepEqual(created[0].establishmentIds, ['loja-func']);
-    const editado = await fetch(`${base}/c1`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: 'Nova' }) });
+    const editado = await fetch(`${base}/c1`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ objetivo: 'Data comemorativa', description: 'Nova' }) });
     assert.equal(editado.status, 200);
-    const alheio = await fetch(`${base}/c2`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: 'X' }) });
+    const alheio = await fetch(`${base}/c2`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ objetivo: 'Data comemorativa', description: 'X' }) });
     assert.equal(alheio.status, 403);
     assert.deepEqual(updated, [{ id: 'c1', patch: { description: 'Nova' } }]);
   } finally {
