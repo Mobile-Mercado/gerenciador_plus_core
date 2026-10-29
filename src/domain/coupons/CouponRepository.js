@@ -15,6 +15,11 @@ export class CouponRepository {
     throw new Error('CouponRepository.listObjetivosDaLoja nao implementado.');
   }
 
+  // Grava um objetivo da loja ({ nome, criadoPorUid, criadoEm }) e devolve { id, nome }.
+  async createObjetivoDaLoja(_establishmentId, _objetivo) {
+    throw new Error('CouponRepository.createObjetivoDaLoja nao implementado.');
+  }
+
   async list() {
     throw new Error('CouponRepository.list nao implementado.');
   }

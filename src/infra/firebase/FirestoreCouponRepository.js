@@ -44,6 +44,11 @@ export class FirestoreCouponRepository extends CouponRepository {
       .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
   }
 
+  async createObjetivoDaLoja(establishmentId, objetivo) {
+    const docRef = await this.objetivosDaLoja(establishmentId).add(objetivo);
+    return { id: docRef.id, nome: objetivo.nome };
+  }
+
   async list() {
     const snapshot = await this.collection.get();
     return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));

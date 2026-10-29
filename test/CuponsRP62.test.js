@@ -5,6 +5,7 @@ import { ManageCoupons, OBJETIVOS_PADRAO } from '../src/application/coupons/Mana
 import { FirestoreCouponRepository } from '../src/infra/firebase/FirestoreCouponRepository.js';
 import { createCouponRoutes } from '../src/http/routes/couponRoutes.js';
 import { errorHandler } from '../src/http/middlewares/errorHandler.js';
+import { AppError } from '../src/domain/errors/AppError.js';
 import { FirestoreEmMemoria } from './apoio/firestoreEmMemoria.js';
 
 // Cadastro de cupom da RP-62 (contrato K5), pela rota, com o repositorio de verdade sobre o banco
@@ -23,7 +24,7 @@ const cupomValido = {
   endAt: '2026-11-30T23:59:59.000Z',
 };
 
-async function subirRota({ banco = new FirestoreEmMemoria({ [`estabelecimentos/${LOJA}`]: { name: 'Loja 1' } }), auth = { uid: 'uid-dono' }, conta = {} } = {}) {
+async function subirRota({ banco = new FirestoreEmMemoria({ [`estabelecimentos/${LOJA}`]: { name: 'Loja 1' } }), auth = { uid: 'uid-dono' }, conta = {}, chaves = null } = {}) {
   const manageCoupons = new ManageCoupons({
     couponRepository: new FirestoreCouponRepository({ firestore: banco }),
     accessRepository: { findAccountByUid: async () => null },
@@ -34,7 +35,10 @@ async function subirRota({ banco = new FirestoreEmMemoria({ [`estabelecimentos/$
   app.use((request, _response, next) => { request.auth = auth; next(); });
   app.use('/api/coupons', createCouponRoutes({
     manageCoupons,
-    requirePermission: () => (_request, _response, next) => next(),
+    // Sem `chaves`, tudo passa; com elas, so a chave da lista.
+    requirePermission: (chave) => (_request, _response, next) => next(
+      !chaves || chaves.includes(chave) ? undefined : new AppError('sem', { statusCode: 403, code: 'permission_denied' }),
+    ),
     accountForRequest: async () => ({ establishmentId: LOJA, hasEstablishment: true, ...conta }),
   }));
   app.use(errorHandler);
@@ -146,6 +150,48 @@ test('D.1: excluir o cupom apaga tambem os bastidores', async () => {
     assert.equal((await rota.chamar(`/${id}`, { method: 'DELETE' })).status, 200);
     assert.equal(rota.banco.dados(`Coupons/${id}`), undefined);
     assert.equal(rota.banco.dados(`CuponsBastidores/${id}`), undefined);
+  } finally {
+    rota.fechar();
+  }
+});
+
+test('D.2: "+ Novo objetivo" grava na loja (ate 40 letras), aparece na lista e vale no cupom', async () => {
+  const rota = await subirRota();
+  try {
+    assert.equal((await rota.chamar('/objetivos', { method: 'POST', body: { nome: 'x'.repeat(41) } })).status, 400);
+    assert.equal((await rota.chamar('/objetivos', { method: 'POST', body: { nome: '  ' } })).status, 400);
+    assert.equal((await rota.chamar('/objetivos', { method: 'POST', body: {} })).status, 400);
+
+    const novo = await rota.chamar('/objetivos', { method: 'POST', body: { nome: '  Aniversário da loja ' } });
+    assert.equal(novo.status, 201);
+    assert.deepEqual(Object.keys(novo.corpo.data).sort(), ['id', 'nome']);
+    assert.equal(novo.corpo.data.nome, 'Aniversário da loja');
+    const gravado = rota.banco.dados(`estabelecimentos/${LOJA}/ObjetivosDeCupom/${novo.corpo.data.id}`);
+    assert.equal(gravado.nome, 'Aniversário da loja');
+    assert.equal(gravado.criadoPorUid, 'uid-dono');
+
+    // O mesmo nome de novo (sem acento, outra caixa) devolve o que ja existe.
+    const repetido = await rota.chamar('/objetivos', { method: 'POST', body: { nome: 'aniversario DA loja' } });
+    assert.deepEqual(repetido.corpo.data, novo.corpo.data);
+    assert.equal(docsDe(rota.banco, `estabelecimentos/${LOJA}/ObjetivosDeCupom`).length, 1);
+
+    const lista = await rota.chamar('/objetivos');
+    assert.deepEqual(lista.corpo.data.daLoja, [novo.corpo.data]);
+
+    const cupom = await rota.chamar('', { method: 'POST', body: { ...cupomValido, objetivo: novo.corpo.data.nome } });
+    assert.equal(cupom.status, 201);
+    assert.equal(rota.banco.dados(`CuponsBastidores/${cupom.corpo.data.id}`).objetivo, 'Aniversário da loja');
+  } finally {
+    rota.fechar();
+  }
+});
+
+test('D.2: criar objetivo pede coupons.manage; ver os objetivos, nao', async () => {
+  const rota = await subirRota({ chaves: ['coupons.view'] });
+  try {
+    assert.equal((await rota.chamar('/objetivos', { method: 'POST', body: { nome: 'Black Friday' } })).status, 403);
+    assert.equal(docsDe(rota.banco, `estabelecimentos/${LOJA}/ObjetivosDeCupom`).length, 0);
+    assert.equal((await rota.chamar('/objetivos')).status, 200);
   } finally {
     rota.fechar();
   }

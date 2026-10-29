@@ -157,6 +157,21 @@ export class ManageCoupons {
     return { padrao: [...OBJETIVOS_PADRAO], daLoja };
   }
 
+  // "+ Novo objetivo" (RP-62, D.2): fica salvo na loja para os proximos cupons. Mesmo nome de um
+  // que a loja ja tem (sem diferenca de acento e de maiuscula) devolve o que ja existe.
+  async createObjetivo({ actorUid, establishmentId, nome }) {
+    const account = await this.requireEstablishment(actorUid, establishmentId);
+    const limpo = String(nome || '').trim();
+    const existentes = await this.couponRepository.listObjetivosDaLoja(account.establishmentId);
+    const igual = existentes.find((objetivo) => semAcento(objetivo.nome) === semAcento(limpo));
+    if (igual) return igual;
+    return this.couponRepository.createObjetivoDaLoja(account.establishmentId, {
+      nome: limpo,
+      criadoPorUid: actorUid || null,
+      criadoEm: Timestamp.fromDate(this.clock()),
+    });
+  }
+
   async updateCoupon({ actorUid, establishmentId, couponId, patch }) {
     const account = await this.requireEstablishment(actorUid, establishmentId);
     const coupon = await this.requireCoupon(couponId);

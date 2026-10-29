@@ -45,6 +45,7 @@ const temLeveN = (rules = []) => rules.some((rule) => rule.type === 'bundle');
 // Objetivo do cupom (RP-62, D.1): texto de 1 a 40 letras, obrigatorio ao criar e ao editar. Vai
 // para CuponsBastidores/{id}, nunca para o Coupons/{id}.
 const objetivoSchema = z.string().trim().min(1).max(40);
+const novoObjetivoSchema = z.object({ nome: objetivoSchema });
 
 const createCouponSchema = z.object({
   objetivo: objetivoSchema,
@@ -130,6 +131,17 @@ export function createCouponRoutes({ manageCoupons, requirePermission, accountFo
     '/objetivos',
     asyncHandler(async (request, response) => {
       response.json({ data: await manageCoupons.listObjetivos({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request) }) });
+    }),
+  );
+
+  // "+ Novo objetivo" (RP-62, D.2): { nome } com ate 40 letras; devolve { id, nome }.
+  router.post(
+    '/objetivos',
+    requirePermission('coupons.manage'),
+    asyncHandler(async (request, response) => {
+      const { nome } = novoObjetivoSchema.parse(request.body);
+      const result = await manageCoupons.createObjetivo({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request), nome });
+      response.status(201).json({ data: result });
     }),
   );
 
