@@ -134,10 +134,44 @@ export function gatewayDasFormas(loja, formas) {
   return { ...metodos, [`safrapay.methods.${CAMPO_DO_DEBITO_NO_GATEWAY}`]: false };
 }
 
+// Contrato K4 (cola RP-62, item A.2): campos de safrapayMerchants/{loja} que o Admin grava. A API
+// le (companyPaymentConfig.js, findMerchantConfig e merchantConfigFromData): enabled, env (ou
+// environment), merchantId (ou safrapayMerchantId), merchantToken (ou safrapayMerchantToken ou
+// token), gatewayUrl e portalUrl (ou safrapay*), cardSource, pixSource, requestTimeoutMs e
+// antifraudEnabled. O Admin grava enabled, env, merchantId e merchantToken. Os apelidos e as URLs
+// saem: a API tira as URLs do env, e URL de outro ambiente seria recusada. cardSource, pixSource,
+// requestTimeoutMs e antifraudEnabled ficam como estao; ausentes, valem os padroes da API.
+export const AMBIENTES_DA_SAFRA = Object.freeze(['prod', 'hml']);
+const CAMPOS_QUE_SAEM_DA_CREDENCIAL = Object.freeze([
+  'environment', 'safrapayMerchantId', 'safrapayMerchantToken', 'token',
+  'gatewayUrl', 'safrapayGatewayUrl', 'portalUrl', 'safrapayPortalUrl',
+]);
+
+function emIso(valor) {
+  if (!valor) return null;
+  if (typeof valor.toDate === 'function') return valor.toDate().toISOString();
+  if (valor instanceof Date) return valor.toISOString();
+  return null;
+}
+
+// Corpo do GET do Admin (K4): nunca traz merchantId nem merchantToken.
+export function credencialParaOAdmin(loja = {}, credencial = null) {
+  const ambiente = credencial ? (credencial.env || credencial.environment) : null;
+  return {
+    gateway: 'safrapay',
+    temCredencial: credencialPronta(credencial),
+    ambiente: AMBIENTES_DA_SAFRA.includes(ambiente) ? ambiente : null,
+    salvoEm: emIso(credencial?.salvoEm),
+    salvoPor: typeof credencial?.salvoPorNome === 'string' && credencial.salvoPorNome ? credencial.salvoPorNome : null,
+    ligadaNaLoja: safraLigada(loja),
+  };
+}
+
 export class FormasDePagamento {
-  constructor({ firestore, serverTimestamp = () => FieldValue.serverTimestamp() }) {
+  constructor({ firestore, serverTimestamp = () => FieldValue.serverTimestamp(), apagarCampo = () => FieldValue.delete() }) {
     this.firestore = firestore;
     this.serverTimestamp = serverTimestamp;
+    this.apagarCampo = apagarCampo;
   }
 
   lojaRef(lojaId) {
@@ -216,6 +250,49 @@ export class FormasDePagamento {
       transacao.update(ref, { ...gravacaoDaSafra(loja.data() || {}, documentos, ligada), updatedAt: this.serverTimestamp() });
     });
     return this.ler(lojaId);
+  }
+
+  // ----- Admin da plataforma (contrato K4) -----
+  async credencialNoAdmin(lojaId) {
+    const loja = await this.lojaRef(lojaId).get();
+    if (!loja.exists) throw recusa('Loja não encontrada.', 'loja_nao_encontrada', 404);
+    return credencialParaOAdmin(loja.data() || {}, await this.lerCredencial(loja.id));
+  }
+
+  // `entrada`: { ambiente, merchantId, merchantToken }, ja conferida pela rota. `ator`: { uid, nome }.
+  // Grava a credencial e liga a Safra na loja, na mesma transacao.
+  async salvarCredencial(lojaId, { ambiente, merchantId, merchantToken }, ator = {}) {
+    const ref = this.lojaRef(lojaId);
+    await this.firestore.runTransaction(async (transacao) => {
+      const loja = await transacao.get(ref);
+      if (!loja.exists) throw recusa('Loja não encontrada.', 'loja_nao_encontrada', 404);
+      const documentos = await this.lerDocumentos(ref, transacao);
+      const credencial = {
+        enabled: true,
+        env: ambiente,
+        merchantId,
+        merchantToken,
+        salvoEm: this.serverTimestamp(),
+        salvoPorUid: ator.uid || null,
+        salvoPorNome: ator.nome || null,
+        ...Object.fromEntries(CAMPOS_QUE_SAEM_DA_CREDENCIAL.map((campo) => [campo, this.apagarCampo()])),
+      };
+      transacao.set(this.credencialRef(loja.id), credencial, { merge: true });
+      transacao.update(ref, { ...gravacaoDaSafra(loja.data() || {}, documentos, true), updatedAt: this.serverTimestamp() });
+    });
+    return this.credencialNoAdmin(lojaId);
+  }
+
+  // Apaga a credencial e desliga a Safra na loja, na mesma transacao.
+  async apagarCredencial(lojaId) {
+    const ref = this.lojaRef(lojaId);
+    await this.firestore.runTransaction(async (transacao) => {
+      const loja = await transacao.get(ref);
+      if (!loja.exists) throw recusa('Loja não encontrada.', 'loja_nao_encontrada', 404);
+      transacao.delete(this.credencialRef(loja.id));
+      transacao.update(ref, { ...gravacaoDaSafra(loja.data() || {}, new Map(), false), updatedAt: this.serverTimestamp() });
+    });
+    return this.credencialNoAdmin(lojaId);
   }
 }
 

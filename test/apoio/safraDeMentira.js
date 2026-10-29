@@ -26,9 +26,11 @@ export function montar(loja = {}, extras = {}) {
   return { banco, formas: new FormasDePagamento({ firestore: banco, serverTimestamp: () => new Date('2026-10-28T22:00:00Z') }) };
 }
 
-export const semValorDeCredencial = (corpo) => {
+// `nomes`: confere tambem que o nome dos campos nao aparece (corpo de sucesso e auditoria). No 400
+// da validacao, o Zod cita o nome do campo errado, nunca o valor.
+export const semValorDeCredencial = (corpo, { nomes = true } = {}) => {
   const texto = JSON.stringify(corpo);
   assert.equal(texto.includes(MERCHANT_ID), false, 'merchantId nao sai');
   assert.equal(texto.includes(MERCHANT_TOKEN), false, 'merchantToken nao sai');
-  assert.equal(/merchantId|merchantToken/.test(texto), false, 'nem o nome dos campos');
+  if (nomes) assert.equal(/merchantId|merchantToken/.test(texto), false, 'nem o nome dos campos');
 };

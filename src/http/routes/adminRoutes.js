@@ -5,12 +5,19 @@ import { asyncHandler } from '../middlewares/asyncHandler.js';
 import { corpoDeImagem } from '../middlewares/corpoDeImagem.js';
 import { appDoClienteSchema, formasDePagamentoSchema } from './appDoClienteSchema.js';
 import { entregaSchema } from './entregaSchema.js';
+import { AMBIENTES_DA_SAFRA } from '../../application/loja/FormasDePagamento.js';
 
 // Rotas do Admin da plataforma. A barreira (requirePlatformAdmin) e o registro de quem agiu
 // (adminAudit) entram em app.js, antes deste roteador. Nao existe rota de excluir: item
 // retirado da lista padrao e arquivado.
 
 const tipoSchema = z.enum(['categorias', 'subcategorias']);
+// Contrato K4 (cola RP-62, item A.2): credencial da Safrapay da loja, gravada pelo Admin.
+const credencialDaSafraSchema = z.object({
+  ambiente: z.enum(AMBIENTES_DA_SAFRA),
+  merchantId: z.string().trim().min(1).max(200),
+  merchantToken: z.string().trim().min(1).max(4096),
+}).strict();
 const criarSchema = z.object({
   nome: z.string().min(1).max(80),
   categoriaId: z.string().min(1).max(120).optional(),
@@ -318,6 +325,25 @@ export function createAdminRoutes({
     const { formas } = formasDePagamentoSchema.parse(request.body);
     response.locals.auditoria = { acao: 'formas_de_pagamento', campos: Object.keys(formas) };
     response.json({ data: await formasDePagamento.salvar(request.params.lojaId, formas) });
+  }));
+
+  // ===== Credencial da Safrapay (contrato K4, cola RP-62, item A.2) =====
+  // Salvar liga a Safra na loja e apagar desliga. A resposta e a auditoria nunca levam merchantId
+  // nem merchantToken: so gateway, ambiente, quando e quem salvou.
+  router.get('/estabelecimentos/:lojaId/safrapay', asyncHandler(async (request, response) => {
+    response.json({ data: await formasDePagamento.credencialNoAdmin(request.params.lojaId) });
+  }));
+
+  router.put('/estabelecimentos/:lojaId/safrapay', asyncHandler(async (request, response) => {
+    const entrada = credencialDaSafraSchema.parse(request.body);
+    const ator = { uid: request.auth?.uid || null, nome: request.auth?.name || request.auth?.email || null };
+    response.locals.auditoria = { acao: 'credencial_safrapay_salva', ambiente: entrada.ambiente };
+    response.json({ data: await formasDePagamento.salvarCredencial(request.params.lojaId, entrada, ator) });
+  }));
+
+  router.delete('/estabelecimentos/:lojaId/safrapay', asyncHandler(async (request, response) => {
+    response.locals.auditoria = { acao: 'credencial_safrapay_apagada' };
+    response.json({ data: await formasDePagamento.apagarCredencial(request.params.lojaId) });
   }));
 
   router.get('/estabelecimentos/:lojaId/agendamento', asyncHandler(async (request, response) => {
