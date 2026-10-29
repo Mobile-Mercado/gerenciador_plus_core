@@ -69,6 +69,8 @@ export function createPermissionGuard({ accessRepository, clock = () => Date.now
       establishmentId: account.establishmentId,
       hasEstablishment: account.hasEstablishment,
       permissions,
+      // Nome de quem chama (dono: Users; funcionario: AdminUsers), para o "Criado por" do cupom.
+      nome: account.userDocument?.nome || account.userDocument?.name || null,
     };
     if (chave) cache.set(chave, { account: resumo, expiresAt: expiresAt(request) });
     return resumo;

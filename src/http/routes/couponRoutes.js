@@ -42,7 +42,13 @@ const ruleSchema = z.union([
 const temFrete = (rules = []) => rules.some((rule) => rule.type === 'freight');
 const temLeveN = (rules = []) => rules.some((rule) => rule.type === 'bundle');
 
+// Objetivo do cupom (RP-62, D.1): texto de 1 a 40 letras, obrigatorio ao criar e ao editar. Vai
+// para CuponsBastidores/{id}, nunca para o Coupons/{id}.
+const objetivoSchema = z.string().trim().min(1).max(40);
+const novoObjetivoSchema = z.object({ nome: objetivoSchema });
+
 const createCouponSchema = z.object({
+  objetivo: objetivoSchema,
   code: z.string().min(3).max(30),
   description: z.string().min(1).max(200),
   termsText: z.string().max(2000).optional(),
@@ -75,6 +81,7 @@ const couponIdParamsSchema = z.object({
 });
 
 const updateCouponSchema = z.object({
+  objetivo: objetivoSchema,
   code: z.string().min(3).max(30).optional(),
   description: z.string().min(1).max(200).optional(),
   termsText: z.string().max(2000).optional(),
@@ -119,12 +126,47 @@ export function createCouponRoutes({ manageCoupons, requirePermission, accountFo
     }),
   );
 
+  // Chips do "Objetivo do cupom" (RP-62, D.1): { padrao: [...], daLoja: [{ id, nome }] }.
+  router.get(
+    '/objetivos',
+    asyncHandler(async (request, response) => {
+      response.json({ data: await manageCoupons.listObjetivos({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request) }) });
+    }),
+  );
+
+  // "+ Novo objetivo" (RP-62, D.2): { nome } com ate 40 letras; devolve { id, nome }.
+  router.post(
+    '/objetivos',
+    requirePermission('coupons.manage'),
+    asyncHandler(async (request, response) => {
+      const { nome } = novoObjetivoSchema.parse(request.body);
+      const result = await manageCoupons.createObjetivo({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request), nome });
+      response.status(201).json({ data: result });
+    }),
+  );
+
+  // Um cupom da loja, com o objetivo (o Editar cupom abre por aqui).
+  router.get(
+    '/:couponId',
+    asyncHandler(async (request, response) => {
+      const { couponId } = couponIdParamsSchema.parse(request.params);
+      response.json({ data: await manageCoupons.getCoupon({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request), couponId }) });
+    }),
+  );
+
   router.post(
     '/',
     requirePermission('coupons.manage'),
     asyncHandler(async (request, response) => {
       const payload = createCouponSchema.parse(request.body);
-      const result = await manageCoupons.createCoupon({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request), ...payload });
+      // Quem criou (RP-62, D.4): o nome vem da conta da requisicao, nunca do corpo.
+      const conta = await accountForRequest(request);
+      const result = await manageCoupons.createCoupon({
+        ...payload,
+        actorUid: request.auth.uid,
+        actorNome: conta.nome || request.auth?.name || null,
+        establishmentId: conta.establishmentId,
+      });
       response.status(201).json({ data: result });
     }),
   );

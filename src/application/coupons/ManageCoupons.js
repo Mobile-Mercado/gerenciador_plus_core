@@ -5,6 +5,54 @@ export const TIPO_TODOS = 'todos';
 export const TIPO_CLIENTE = 'cliente';
 const LIMITE_DA_BUSCA = 20;
 
+// Objetivo do cupom (RP-62, D.1): os cinco padrao valem para toda loja e a loja pode ter os dela
+// (ObjetivosDeCupom). O objetivo nao vai no Coupons/{id}, que o app do cliente le
+// (checkout_confirmation_controller.dart): fica em CuponsBastidores/{couponId}, que so o Core le.
+export const OBJETIVOS_PADRAO = Object.freeze([
+  'Atrair clientes novos',
+  'Trazer de volta quem sumiu',
+  'Aumentar o valor da compra',
+  'Vender produto parado',
+  'Data comemorativa',
+]);
+
+// Regra 3 (RP-62, D.3): o cupom precisa de pelo menos uma regra (primeiro pedido, valor minimo,
+// faixa de quantidade ou frete) ou do texto das regras da promocao. A duracao nao conta.
+const TIPOS_DE_REGRA = new Set(['minValue', 'quantityRange', 'freight']);
+export const MENSAGEM_CUPOM_SEM_REGRA = 'Marque pelo menos uma regra acima ou escreva as regras da promoção.';
+
+export function cupomTemRegra({ firstPurchaseOnly, rules, termsText } = {}) {
+  return firstPurchaseOnly === true
+    || (Array.isArray(rules) && rules.some((rule) => TIPOS_DE_REGRA.has(rule?.type)))
+    || String(termsText || '').trim().length > 0;
+}
+
+function assertCupomTemRegra(cupom) {
+  if (cupomTemRegra(cupom)) return;
+  throw new AppError(MENSAGEM_CUPOM_SEM_REGRA, { statusCode: 400, code: 'cupom_sem_regra' });
+}
+
+// O que a web recebe de cada cupom: o documento do Coupons mais o que esta nos bastidores.
+export function cupomComBastidores(coupon, bastidores = null) {
+  const nome = String(bastidores?.criadoPorNome || '').trim();
+  return {
+    ...coupon,
+    objetivo: bastidores?.objetivo || null,
+    // Cupom sem o dado (de antes da RP-62) sai sem "Criado por".
+    criadoPor: nome ? { nome } : null,
+    criadoEm: emIso(bastidores?.criadoEm),
+  };
+}
+
+function emIso(valor) {
+  if (!valor) return null;
+  const segundos = valor.seconds ?? valor._seconds;
+  const data = typeof valor.toDate === 'function' ? valor.toDate()
+    : Number.isFinite(segundos) ? new Date(segundos * 1000)
+      : new Date(valor);
+  return Number.isNaN(data.getTime()) ? null : data.toISOString();
+}
+
 function semAcento(texto) {
   return String(texto || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 }
@@ -35,7 +83,7 @@ export class ManageCoupons {
   async createCoupon({
     actorUid, establishmentId, code, description, termsText, scopeName, firstPurchaseOnly, rules, discount,
     startAt, endAt, perCustomerLimit, totalUsageLimit, stackable, targetClientId = null, campaignId = null,
-    tipo = null,
+    tipo = null, objetivo, actorNome = null,
   }) {
     const account = await this.requireEstablishment(actorUid, establishmentId);
     const tipoDoCupom = tipo || (targetClientId ? TIPO_CLIENTE : TIPO_TODOS);
@@ -52,6 +100,8 @@ export class ManageCoupons {
         throw new AppError('Este cliente ainda não comprou nesta loja.', { statusCode: 400, code: 'coupon_destinatario_invalido' });
       }
     }
+
+    assertCupomTemRegra({ firstPurchaseOnly, rules, termsText });
 
     const normalizedCode = String(code || '').trim().toUpperCase();
     await this.assertCodeNotActive(normalizedCode, account.establishmentId);
@@ -82,7 +132,15 @@ export class ManageCoupons {
       createdAt: Timestamp.fromDate(this.clock()),
     };
 
-    return this.couponRepository.create(coupon);
+    // Quem criou e quando (RP-62, D.4): gravado so ao criar; editar mescla so o objetivo.
+    const bastidores = {
+      objetivo: String(objetivo || '').trim(),
+      criadoPorUid: actorUid || null,
+      criadoPorNome: String(actorNome || '').trim() || null,
+      criadoEm: coupon.createdAt,
+    };
+    const criado = await this.couponRepository.create(coupon, bastidores);
+    return cupomComBastidores(criado, bastidores);
   }
 
   // Busca de clientes da loja na criacao do cupom pessoal (cola RP-14 A.2): nome, telefone
@@ -116,7 +174,39 @@ export class ManageCoupons {
   async listCoupons({ actorUid, establishmentId }) {
     const account = await this.requireEstablishment(actorUid, establishmentId);
     const coupons = await this.couponRepository.list();
-    return coupons.filter((coupon) => coupon.establishmentIds?.includes(account.establishmentId));
+    const daLoja = coupons.filter((coupon) => coupon.establishmentIds?.includes(account.establishmentId));
+    const bastidores = await this.couponRepository.findBastidores(daLoja.map((coupon) => coupon.id));
+    return daLoja.map((coupon) => cupomComBastidores(coupon, bastidores.get(coupon.id)));
+  }
+
+  async getCoupon({ actorUid, establishmentId, couponId }) {
+    const account = await this.requireEstablishment(actorUid, establishmentId);
+    const coupon = await this.requireCoupon(couponId);
+    this.assertOwnership(coupon, account.establishmentId);
+    const bastidores = await this.couponRepository.findBastidores([coupon.id]);
+    return cupomComBastidores(coupon, bastidores.get(coupon.id));
+  }
+
+  // Chips do "Objetivo do cupom": os padrao e os da loja.
+  async listObjetivos({ actorUid, establishmentId }) {
+    const account = await this.requireEstablishment(actorUid, establishmentId);
+    const daLoja = await this.couponRepository.listObjetivosDaLoja(account.establishmentId);
+    return { padrao: [...OBJETIVOS_PADRAO], daLoja };
+  }
+
+  // "+ Novo objetivo" (RP-62, D.2): fica salvo na loja para os proximos cupons. Mesmo nome de um
+  // que a loja ja tem (sem diferenca de acento e de maiuscula) devolve o que ja existe.
+  async createObjetivo({ actorUid, establishmentId, nome }) {
+    const account = await this.requireEstablishment(actorUid, establishmentId);
+    const limpo = String(nome || '').trim();
+    const existentes = await this.couponRepository.listObjetivosDaLoja(account.establishmentId);
+    const igual = existentes.find((objetivo) => semAcento(objetivo.nome) === semAcento(limpo));
+    if (igual) return igual;
+    return this.couponRepository.createObjetivoDaLoja(account.establishmentId, {
+      nome: limpo,
+      criadoPorUid: actorUid || null,
+      criadoEm: Timestamp.fromDate(this.clock()),
+    });
   }
 
   async updateCoupon({ actorUid, establishmentId, couponId, patch }) {
@@ -124,7 +214,8 @@ export class ManageCoupons {
     const coupon = await this.requireCoupon(couponId);
     this.assertOwnership(coupon, account.establishmentId);
 
-    const normalizedPatch = { ...patch };
+    // O objetivo vai para os bastidores, nunca para o Coupons/{id}.
+    const { objetivo, ...normalizedPatch } = patch;
     // Cupom pessoal e de uso unico: os limites nao mudam.
     if (coupon.tipo === TIPO_CLIENTE && ['perCustomerLimit', 'totalUsageLimit'].some((campo) => campo in normalizedPatch && normalizedPatch[campo] !== 1)) {
       throw new AppError('Cupom de um cliente vale uma vez só.', { statusCode: 400, code: 'coupon_pessoal_uso_unico' });
@@ -136,6 +227,10 @@ export class ManageCoupons {
       }
       normalizedPatch.code = normalizedCode;
     }
+    // Regra 3 na edicao: quando o PATCH mexe nas regras, o cupom como fica precisa ter uma.
+    if (['firstPurchaseOnly', 'rules', 'termsText'].some((campo) => campo in normalizedPatch)) {
+      assertCupomTemRegra({ ...coupon, ...normalizedPatch });
+    }
     if (normalizedPatch.startAt != null) {
       normalizedPatch.startAt = Timestamp.fromDate(new Date(normalizedPatch.startAt));
     }
@@ -143,7 +238,8 @@ export class ManageCoupons {
       normalizedPatch.endAt = Timestamp.fromDate(new Date(normalizedPatch.endAt));
     }
 
-    await this.couponRepository.update(couponId, normalizedPatch);
+    const bastidores = objetivo === undefined ? null : { objetivo: String(objetivo).trim() };
+    await this.couponRepository.update(couponId, normalizedPatch, bastidores);
   }
 
   async deactivateCoupon({ actorUid, establishmentId, couponId }) {
