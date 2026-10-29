@@ -255,3 +255,78 @@ test('D.3: na edicao, o PATCH que mexe nas regras nao deixa o cupom sem regra', 
     rota.fechar();
   }
 });
+
+test('D.4: ao criar, os bastidores guardam quem criou e quando; editar nao muda; a resposta traz so o nome', async () => {
+  const banco = new FirestoreEmMemoria({
+    [`estabelecimentos/${LOJA}`]: { name: 'Loja 1' },
+    'Coupons/antigo': { code: 'ANTIGO', establishmentIds: [LOJA], active: true, firstPurchaseOnly: true },
+  });
+  const daAna = await subirRota({ banco, auth: { uid: 'uid-ana' }, conta: { nome: 'Ana Souza' } });
+  const daBia = await subirRota({ banco, auth: { uid: 'uid-bia' }, conta: { nome: 'Bia Lima' } });
+  try {
+    const criado = await daAna.chamar('', { method: 'POST', body: { ...cupomValido, criadoPorNome: 'Outro', actorNome: 'Outro' } });
+    assert.equal(criado.status, 201);
+    const { id } = criado.corpo.data;
+    assert.deepEqual(criado.corpo.data.criadoPor, { nome: 'Ana Souza' });
+    assert.equal(criado.corpo.data.criadoEm, '2026-10-28T17:32:00.000Z');
+
+    const bastidores = banco.dados(`CuponsBastidores/${id}`);
+    assert.equal(bastidores.criadoPorUid, 'uid-ana');
+    assert.equal(bastidores.criadoPorNome, 'Ana Souza');
+    // Gravado como Timestamp (o banco em memoria guarda os segundos).
+    assert.equal(new Date(bastidores.criadoEm._seconds * 1000).toISOString(), '2026-10-28T17:32:00.000Z');
+    // Nada disso no documento que o app do cliente le.
+    const doCliente = banco.dados(`Coupons/${id}`);
+    ['objetivo', 'criadoPorUid', 'criadoPorNome', 'criadoEm', 'criadoPor'].forEach((campo) => assert.ok(!(campo in doCliente), campo));
+
+    // A Bia edita: quem criou continua a Ana.
+    assert.equal((await daBia.chamar(`/${id}`, { method: 'PATCH', body: { objetivo: 'Data comemorativa', description: 'Editado' } })).status, 200);
+    const depois = banco.dados(`CuponsBastidores/${id}`);
+    assert.equal(depois.criadoPorUid, 'uid-ana');
+    assert.equal(depois.criadoPorNome, 'Ana Souza');
+    assert.equal(depois.objetivo, 'Data comemorativa');
+
+    const um = (await daBia.chamar(`/${id}`)).corpo.data;
+    assert.deepEqual([um.criadoPor, um.criadoEm], [{ nome: 'Ana Souza' }, '2026-10-28T17:32:00.000Z']);
+    const lista = (await daBia.chamar('')).corpo.data;
+    const antigo = lista.find((cupom) => cupom.id === 'antigo');
+    assert.deepEqual([antigo.criadoPor, antigo.criadoEm], [null, null], 'cupom sem o dado fica sem a linha');
+    assert.ok(!JSON.stringify(lista).includes('uid-ana'), 'o uid de quem criou nao sai');
+
+    // Editar um cupom antigo nao inventa quem criou.
+    assert.equal((await daBia.chamar('/antigo', { method: 'PATCH', body: { objetivo: 'Data comemorativa', description: 'X' } })).status, 200);
+    assert.deepEqual(banco.dados('CuponsBastidores/antigo'), { objetivo: 'Data comemorativa' });
+    assert.equal((await daBia.chamar('/antigo')).corpo.data.criadoPor, null);
+  } finally {
+    daAna.fechar();
+    daBia.fechar();
+  }
+});
+
+test('D.4: sem nome na conta, vale o nome do token; sem nenhum, criadoPor null', async () => {
+  const doToken = await subirRota({ auth: { uid: 'uid-1', name: 'Caio Prado' } });
+  const semNome = await subirRota({ auth: { uid: 'uid-2' } });
+  try {
+    assert.deepEqual((await doToken.chamar('', { method: 'POST', body: cupomValido })).corpo.data.criadoPor, { nome: 'Caio Prado' });
+    const criado = (await semNome.chamar('', { method: 'POST', body: cupomValido })).corpo.data;
+    assert.equal(criado.criadoPor, null);
+    assert.equal(criado.criadoEm, '2026-10-28T17:32:00.000Z');
+  } finally {
+    doToken.fechar();
+    semNome.fechar();
+  }
+});
+
+test('D.4: a conta da requisicao traz o nome do dono (Users) e do funcionario (AdminUsers)', async () => {
+  const { createPermissionGuard } = await import('../src/http/middlewares/requirePermission.js');
+  const contas = {
+    dono: { establishmentId: LOJA, hasEstablishment: true, userDocument: { name: 'Dono da Loja', nome: null } },
+    func: { establishmentId: LOJA, hasEstablishment: true, userDocument: { name: 'Ana Souza', nome: 'Ana Souza' }, permissions: { isAdmin: false, keys: [] } },
+    semNome: { establishmentId: LOJA, hasEstablishment: true, userDocument: null },
+  };
+  const { accountForRequest } = createPermissionGuard({ accessRepository: { findAccountByClaims: async ({ uid }) => contas[uid] } });
+  const nomeDe = async (uid) => (await accountForRequest({ headers: {}, auth: { uid } })).nome;
+  assert.equal(await nomeDe('dono'), 'Dono da Loja');
+  assert.equal(await nomeDe('func'), 'Ana Souza');
+  assert.equal(await nomeDe('semNome'), null);
+});

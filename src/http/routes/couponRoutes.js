@@ -159,7 +159,14 @@ export function createCouponRoutes({ manageCoupons, requirePermission, accountFo
     requirePermission('coupons.manage'),
     asyncHandler(async (request, response) => {
       const payload = createCouponSchema.parse(request.body);
-      const result = await manageCoupons.createCoupon({ actorUid: request.auth.uid, establishmentId: await lojaDaRequisicao(request), ...payload });
+      // Quem criou (RP-62, D.4): o nome vem da conta da requisicao, nunca do corpo.
+      const conta = await accountForRequest(request);
+      const result = await manageCoupons.createCoupon({
+        ...payload,
+        actorUid: request.auth.uid,
+        actorNome: conta.nome || request.auth?.name || null,
+        establishmentId: conta.establishmentId,
+      });
       response.status(201).json({ data: result });
     }),
   );

@@ -34,10 +34,23 @@ function assertCupomTemRegra(cupom) {
 
 // O que a web recebe de cada cupom: o documento do Coupons mais o que esta nos bastidores.
 export function cupomComBastidores(coupon, bastidores = null) {
+  const nome = String(bastidores?.criadoPorNome || '').trim();
   return {
     ...coupon,
     objetivo: bastidores?.objetivo || null,
+    // Cupom sem o dado (de antes da RP-62) sai sem "Criado por".
+    criadoPor: nome ? { nome } : null,
+    criadoEm: emIso(bastidores?.criadoEm),
   };
+}
+
+function emIso(valor) {
+  if (!valor) return null;
+  const segundos = valor.seconds ?? valor._seconds;
+  const data = typeof valor.toDate === 'function' ? valor.toDate()
+    : Number.isFinite(segundos) ? new Date(segundos * 1000)
+      : new Date(valor);
+  return Number.isNaN(data.getTime()) ? null : data.toISOString();
 }
 
 function semAcento(texto) {
@@ -70,7 +83,7 @@ export class ManageCoupons {
   async createCoupon({
     actorUid, establishmentId, code, description, termsText, scopeName, firstPurchaseOnly, rules, discount,
     startAt, endAt, perCustomerLimit, totalUsageLimit, stackable, targetClientId = null, campaignId = null,
-    tipo = null, objetivo,
+    tipo = null, objetivo, actorNome = null,
   }) {
     const account = await this.requireEstablishment(actorUid, establishmentId);
     const tipoDoCupom = tipo || (targetClientId ? TIPO_CLIENTE : TIPO_TODOS);
@@ -119,7 +132,13 @@ export class ManageCoupons {
       createdAt: Timestamp.fromDate(this.clock()),
     };
 
-    const bastidores = { objetivo: String(objetivo || '').trim() };
+    // Quem criou e quando (RP-62, D.4): gravado so ao criar; editar mescla so o objetivo.
+    const bastidores = {
+      objetivo: String(objetivo || '').trim(),
+      criadoPorUid: actorUid || null,
+      criadoPorNome: String(actorNome || '').trim() || null,
+      criadoEm: coupon.createdAt,
+    };
     const criado = await this.couponRepository.create(coupon, bastidores);
     return cupomComBastidores(criado, bastidores);
   }
