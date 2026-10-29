@@ -44,6 +44,8 @@ const CAMPOS_DA_LOJA_SO_ADMIN = [
   // Contrato da versao 55 (cola RP-13): interruptores do app e blocos da Home, so pelo Admin
   // (PATCH /api/admin/estabelecimentos/:lojaId/app-do-cliente).
   'featureFlags', 'aparenciaHome',
+  // Dono da loja (RP-68, A.1): userReference so muda pelo Admin ("Corrigir acesso"), como na regra.
+  'userReference',
 ];
 // Campos da loja que so mudam pela rota do Core que valida: a retirada vai por /api/loja/entrega.
 const CAMPOS_DA_LOJA_SO_PELA_ROTA = ['retirada'];

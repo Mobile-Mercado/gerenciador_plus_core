@@ -70,6 +70,9 @@ test('politica: lojista nao grava status, offerColor nem o contrato; scheduling.
   await assert.rejects(mutar('loja-antiga', { isActive: false }), (erro) => erro.code === 'campo_so_admin');
   await assert.rejects(mutar('loja-antiga', { 'scheduling.contracted': true }), (erro) => erro.code === 'campo_so_admin');
   await assert.rejects(mutar('loja-antiga', { scheduling: { contracted: true } }, 'set', { merge: true }), (erro) => erro.code === 'campo_so_admin');
+  await assert.rejects(mutar('loja-antiga', { userReference: 'Users/outro' }), (erro) => erro.code === 'campo_so_admin');
+  await assert.rejects(mutar('loja-antiga', { userReference: null }), (erro) => erro.code === 'campo_so_admin');
+  await assert.rejects(mutar('loja-antiga', { userReference: 'Users/outro' }, 'set', { merge: true }), (erro) => erro.code === 'campo_so_admin');
   await assert.rejects(mutar('loja-antiga', { 'scheduling.enabled': true }), (erro) => erro.code === 'agendamento_nao_contratado');
   await mutar('loja-contratada', { 'scheduling.enabled': true });
   await mutar('loja-antiga', { paymentMethods: [], updatedAt: { __managerDataType: 'serverTimestamp' } });
@@ -81,6 +84,10 @@ test('politica: lojista nao grava status, offerColor nem o contrato; scheduling.
   await politica.assertMutation({
     actor: { ...dono('loja-antiga'), porAdminDaPlataforma: true },
     mutation: { operation: 'update', target: { path: 'estabelecimentos/loja-antiga' }, data: { offerColor: '#FFF4D1' } },
+  });
+  await politica.assertMutation({
+    actor: { ...dono('loja-antiga'), porAdminDaPlataforma: true },
+    mutation: { operation: 'update', target: { path: 'estabelecimentos/loja-antiga' }, data: { userReference: 'Users/outro' } },
   });
 });
 
