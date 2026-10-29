@@ -282,6 +282,80 @@ test('D.3: na edicao, o PATCH que mexe nas regras nao deixa o cupom sem regra', 
   }
 });
 
+// RP-65, A.2: "Leve N pague M" (regra bundle) e o cupom "para um cliente" (tipo 'cliente', com o
+// targetClientId do Users) contam como regra.
+function bancoComCliente() {
+  const banco = new FirestoreEmMemoria({
+    [`estabelecimentos/${LOJA}`]: { name: 'Loja 1' },
+    'Users/u-ana': { userAuthId: 'uid-ana' },
+  });
+  banco.docs.set('PurchaseRequests/p1', { clientId: 'u-ana', companyReference: banco.collection('estabelecimentos').doc(LOJA) });
+  return banco;
+}
+
+const cupomSemRegra = {
+  code: 'SEMREGRA',
+  description: 'Cupom especial',
+  firstPurchaseOnly: false,
+  rules: [],
+  discount: { kind: 'percentage', value: 15 },
+  startAt: '2026-10-29T00:00:00.000Z',
+  endAt: null,
+};
+const leveN = { type: 'bundle', productId: 'p1', quantity: 3, payQuantity: 2, bundlePrice: null, repeat: false };
+
+test('RP-65 A.2: ao criar, "Leve N pague M" e cupom para um cliente contam como regra; sem nada, continua a recusa', async () => {
+  const rota = await subirRota({ banco: bancoComCliente() });
+  try {
+    const recusa = await rota.chamar('', { method: 'POST', body: cupomSemRegra });
+    assert.equal(recusa.status, 400);
+    assert.equal(recusa.corpo.error.code, 'cupom_sem_regra');
+    // Para todos, explicito, tambem recusa.
+    assert.equal((await rota.chamar('', { method: 'POST', body: { ...cupomSemRegra, tipo: 'todos' } })).corpo.error.code, 'cupom_sem_regra');
+    assert.equal(docsDe(rota.banco, 'Coupons').length, 0, 'recusa nao grava');
+
+    // So o "Leve N pague M" (criador do Marketing e formulario), sem desconto.
+    const leve = await rota.chamar('', { method: 'POST', body: { ...cupomSemRegra, code: 'LEVE3', discount: null, rules: [leveN] } });
+    assert.equal(leve.status, 201);
+    assert.deepEqual(rota.banco.dados(`Coupons/${leve.corpo.data.id}`).rules, [leveN]);
+
+    // Para um cliente pelo tipo (formulario) e so pelo targetClientId (chat e campanhas: cupomParaOCore).
+    const pessoal = await rota.chamar('', { method: 'POST', body: { ...cupomSemRegra, code: 'SOANA', tipo: 'cliente', targetClientId: 'u-ana' } });
+    assert.equal(pessoal.status, 201);
+    const doChat = await rota.chamar('', { method: 'POST', body: { ...cupomSemRegra, code: 'VIPFD42', targetClientId: 'u-ana', totalUsageLimit: 1 } });
+    assert.equal(doChat.status, 201);
+    assert.equal(rota.banco.dados(`Coupons/${doChat.corpo.data.id}`).tipo, 'cliente');
+    // Produto e categoria sozinhos continuam nao sendo regra.
+    const soProduto = await rota.chamar('', { method: 'POST', body: { ...cupomSemRegra, code: 'PROD1', rules: [{ type: 'product', productIds: ['p1'] }] } });
+    assert.equal(soProduto.corpo.error.code, 'cupom_sem_regra');
+  } finally {
+    rota.fechar();
+  }
+});
+
+test('RP-65 A.2: na edicao, cupom para um cliente e cupom com "Leve N" podem ficar sem as outras regras', async () => {
+  const banco = new FirestoreEmMemoria({
+    [`estabelecimentos/${LOJA}`]: { name: 'Loja 1' },
+    'Coupons/pessoal': { code: 'SOANA', establishmentIds: [LOJA], active: true, tipo: 'cliente', targetClientId: 'u-ana', firstPurchaseOnly: true, rules: [] },
+    // Cupom pessoal de antes do tipo (D6): so o targetClientId.
+    'Coupons/pessoalAntigo': { code: 'SOBIA', establishmentIds: [LOJA], active: true, targetClientId: 'u-bia', firstPurchaseOnly: true, rules: [] },
+    'Coupons/todos': { code: 'TODOS', establishmentIds: [LOJA], active: true, tipo: 'todos', targetClientId: null, firstPurchaseOnly: true, rules: [] },
+  });
+  const rota = await subirRota({ banco });
+  try {
+    const tirar = { firstPurchaseOnly: false, rules: [], termsText: '' };
+    assert.equal((await rota.chamar('/pessoal', { method: 'PATCH', body: tirar })).status, 200);
+    assert.equal(rota.banco.dados('Coupons/pessoal').firstPurchaseOnly, false);
+    assert.equal((await rota.chamar('/pessoalAntigo', { method: 'PATCH', body: tirar })).status, 200);
+    const recusa = await rota.chamar('/todos', { method: 'PATCH', body: tirar });
+    assert.equal(recusa.corpo.error.code, 'cupom_sem_regra');
+    assert.equal((await rota.chamar('/todos', { method: 'PATCH', body: { ...tirar, rules: [leveN] } })).status, 200);
+    assert.deepEqual(rota.banco.dados('Coupons/todos').rules, [leveN]);
+  } finally {
+    rota.fechar();
+  }
+});
+
 test('D.4: ao criar, os bastidores guardam quem criou e quando; editar nao muda; a resposta traz so o nome', async () => {
   const banco = new FirestoreEmMemoria({
     [`estabelecimentos/${LOJA}`]: { name: 'Loja 1' },

@@ -17,13 +17,18 @@ export const OBJETIVOS_PADRAO = Object.freeze([
 ]);
 
 // Regra 3 (RP-62, D.3): o cupom precisa de pelo menos uma regra (primeiro pedido, valor minimo,
-// faixa de quantidade ou frete) ou do texto das regras da promocao. A duracao nao conta.
-const TIPOS_DE_REGRA = new Set(['minValue', 'quantityRange', 'freight']);
+// faixa de quantidade, frete, "Leve N pague M" ou cupom "para um cliente") ou do texto das regras da
+// promocao. A duracao nao conta. "Leve N pague M" e a regra bundle; "para um cliente" e o tipo
+// 'cliente' (no cupom gravado, tipo 'cliente' ou o targetClientId dos cupons de antes do tipo)
+// (RP-65, A.2).
+const TIPOS_DE_REGRA = new Set(['minValue', 'quantityRange', 'freight', 'bundle']);
 export const MENSAGEM_CUPOM_SEM_REGRA = 'Marque pelo menos uma regra acima ou escreva as regras da promoção.';
 
-export function cupomTemRegra({ firstPurchaseOnly, rules, termsText } = {}) {
+export function cupomTemRegra({ firstPurchaseOnly, rules, termsText, tipo, targetClientId } = {}) {
   return firstPurchaseOnly === true
     || (Array.isArray(rules) && rules.some((rule) => TIPOS_DE_REGRA.has(rule?.type)))
+    || tipo === TIPO_CLIENTE
+    || Boolean(targetClientId)
     || String(termsText || '').trim().length > 0;
 }
 
@@ -101,7 +106,7 @@ export class ManageCoupons {
       }
     }
 
-    assertCupomTemRegra({ firstPurchaseOnly, rules, termsText });
+    assertCupomTemRegra({ firstPurchaseOnly, rules, termsText, tipo: tipoDoCupom });
 
     const normalizedCode = String(code || '').trim().toUpperCase();
     await this.assertCodeNotActive(normalizedCode, account.establishmentId);
