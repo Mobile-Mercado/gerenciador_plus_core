@@ -8,6 +8,7 @@ import { createAppDoClienteDaLojaRoutes } from './http/routes/appDoClienteDaLoja
 import { createBannersDaLojaRoutes } from './http/routes/bannersDaLojaRoutes.js';
 import { createEntregaDaLojaRoutes } from './http/routes/entregaDaLojaRoutes.js';
 import { createFormasDePagamentoRoutes } from './http/routes/formasDePagamentoRoutes.js';
+import { createSafrapayDaLojaRoutes } from './http/routes/safrapayDaLojaRoutes.js';
 import { createEntregadoresDaLojaRoutes } from './http/routes/entregadoresDaLojaRoutes.js';
 import { createCadastroRoutes } from './http/routes/cadastroRoutes.js';
 import { createCatalogoRoutes } from './http/routes/catalogoRoutes.js';
@@ -191,6 +192,12 @@ export function createApp({
     '/api/loja/formas-de-pagamento',
     createFirebaseAuthMiddleware({ required: true }),
     createFormasDePagamentoRoutes({ formasDePagamento, requirePermission, accountForRequest }),
+  );
+  // Chave da Safra pela propria loja, so com a credencial da Mobile (cola RP-62, contrato K3).
+  app.use(
+    '/api/loja/safrapay',
+    createFirebaseAuthMiddleware({ required: true }),
+    createSafrapayDaLojaRoutes({ formasDePagamento, requirePermission, accountForRequest }),
   );
   // Funcoes do app do cliente pela propria loja: so "Meus cupons fiscais" (cola RP-58).
   app.use(

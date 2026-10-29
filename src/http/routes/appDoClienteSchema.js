@@ -20,6 +20,9 @@ export const cuponsFiscaisDaLojaSchema = z.object({
   featureFlags: z.object({ cuponsFiscais: z.boolean() }).strict(),
 }).strict();
 
+// Contrato K3 (cola RP-62): o lojista liga e desliga a Safra.
+export const safraDaLojaSchema = z.object({ ligada: z.boolean() }).strict();
+
 // Item 2: formas de pagamento, cada uma com ativa e onde e cobrada.
 const formaSchema = z.object({ ativa: z.boolean().optional(), cobradoEm: z.enum(COBRADO_EM).optional() }).strict();
 export const formasDePagamentoSchema = z.object({

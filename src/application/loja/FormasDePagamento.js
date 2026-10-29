@@ -198,4 +198,37 @@ export class FormasDePagamento {
     });
     return this.ler(lojaId);
   }
+
+  // Contrato K3 (cola RP-62, item A.3): o lojista liga e desliga a Safra, so com a credencial da
+  // Mobile pronta em safrapayMerchants/{loja}. safrapay.enabled e paymentGateway.safrapay.enabled
+  // vao sempre com o mesmo valor, na mesma escrita. Ao ligar, safrapay.methods sai das formas como
+  // estao (a mesma conta de salvar com a Safra ligada). Desligar nao passa pela regra 10.
+  async ligarSafra(lojaId, ligada) {
+    const ref = this.lojaRef(lojaId);
+    await this.firestore.runTransaction(async (transacao) => {
+      const loja = await transacao.get(ref);
+      if (!loja.exists) throw recusa('Loja não encontrada.', 'loja_nao_encontrada', 404);
+      const credencial = await this.lerCredencial(loja.id, transacao);
+      if (!credencialPronta(credencial)) {
+        throw recusa('Fale com a Móbile para ligar um gateway.', 'safra_sem_credencial', 409);
+      }
+      const documentos = await this.lerDocumentos(ref, transacao);
+      transacao.update(ref, { ...gravacaoDaSafra(loja.data() || {}, documentos, ligada), updatedAt: this.serverTimestamp() });
+    });
+    return this.ler(lojaId);
+  }
+}
+
+// Os dois enabled com o mesmo valor (K3 e K4). Ligando, safrapay.methods a partir das formas como
+// ficam com a Safra ligada.
+export function gravacaoDaSafra(loja, documentos, ligada) {
+  const valor = ligada === true;
+  const gravacao = { 'safrapay.enabled': valor, 'paymentGateway.safrapay.enabled': valor };
+  if (!valor) return gravacao;
+  const comSafra = {
+    ...loja,
+    safrapay: { ...(loja.safrapay || {}), enabled: true },
+    paymentGateway: { ...(loja.paymentGateway || {}), safrapay: { ...(loja.paymentGateway?.safrapay || {}), enabled: true } },
+  };
+  return { ...gravacao, ...gatewayDasFormas(comSafra, formasDaLoja(comSafra, documentos).formas) };
 }
