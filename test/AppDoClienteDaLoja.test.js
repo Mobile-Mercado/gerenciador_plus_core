@@ -88,6 +88,10 @@ test('formas de pagamento: le o array e a subcolecao; credito e debito sem docum
       debito: { ativa: false, cobradoEm: 'entrega' },
       dinheiro: { ativa: true, cobradoEm: 'entrega' },
     },
+    safra: { credencialPronta: false, ligada: false },
+    mercadoPago: { credencialPronta: false, ligada: false },
+    entrega: true,
+    retirada: false,
   });
 });
 

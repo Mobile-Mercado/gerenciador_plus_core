@@ -27,8 +27,32 @@ const FORMAS = Object.keys(FORMAS_DE_PAGAMENTO);
 export const COBRADO_PELO_GATEWAY = Object.freeze({ pix: 'pix', credito: 'creditcard' });
 const CAMPO_DO_DEBITO_NO_GATEWAY = 'debitcard';
 
+// Credencial da Safrapay que a API usa (safrapay_mobile_mercado__api, companyPaymentConfig.js,
+// findMerchantConfig e merchantConfigFromData): safrapayMerchants/{loja}, com enabled e com
+// merchantId e merchantToken (e os apelidos que a API le). Daqui nunca sai valor de credencial.
+export const COLECAO_DE_CREDENCIAIS = 'safrapayMerchants';
+
+// Mesmo teste de "ligado" da API (companyPaymentConfig.js, isEnabled).
+function habilitado(valor) {
+  return valor === true || valor === 'true' || valor === 1;
+}
+
+// Contrato K1 (cola RP-62): a mesma conta da API, sem devolver nenhum valor.
+export function credencialPronta(credencial) {
+  if (!credencial || typeof credencial !== 'object' || !habilitado(credencial.enabled)) return false;
+  const merchantId = credencial.merchantId || credencial.safrapayMerchantId;
+  const merchantToken = credencial.merchantToken || credencial.safrapayMerchantToken || credencial.token;
+  return Boolean(merchantId) && Boolean(merchantToken);
+}
+
+// Contrato K1: a Safra esta ligada com safrapay.enabled === true e paymentGateway.safrapay.enabled
+// diferente de false (a API le os dois; o Core grava os dois juntos, K3 e K4).
+export function safraLigada(loja = {}) {
+  return loja?.safrapay?.enabled === true && loja?.paymentGateway?.safrapay?.enabled !== false;
+}
+
 export function gatewayLigado(loja = {}) {
-  return loja?.safrapay?.enabled === true;
+  return safraLigada(loja);
 }
 
 export function cobraNoApp(loja, forma) {
@@ -58,6 +82,20 @@ export function formasDaLoja(loja = {}, documentos = new Map()) {
     return [forma, { ativa, cobradoEm: forma === 'dinheiro' || forma === 'debito' ? 'entrega' : cobradoEm }];
   }));
   return { formas };
+}
+
+// Corpo do GET (contrato K1 da cola RP-62). entrega: featureFlags.entrega ausente vale ligada;
+// retirada: so com featureFlags.retirada === true. Mercado Pago ainda nao existe.
+export function formasParaATela(lojaId, loja = {}, documentos = new Map(), credencial = null) {
+  const flags = loja.featureFlags && typeof loja.featureFlags === 'object' ? loja.featureFlags : {};
+  return {
+    lojaId,
+    formas: formasDaLoja(loja, documentos).formas,
+    safra: { credencialPronta: credencialPronta(credencial), ligada: safraLigada(loja) },
+    mercadoPago: { credencialPronta: false, ligada: false },
+    entrega: flags.entrega !== false,
+    retirada: flags.retirada === true,
+  };
 }
 
 // Gravacao das formas, ja conferidas. Devolve o array novo e os documentos da subcolecao a gravar.
@@ -112,11 +150,22 @@ export class FormasDePagamento {
     return new Map(snapshot.docs.map((documento) => [documento.id, documento.data() || {}]));
   }
 
+  credencialRef(lojaId) {
+    return this.firestore.collection(COLECAO_DE_CREDENCIAIS).doc(String(lojaId || ''));
+  }
+
+  async lerCredencial(lojaId, transacao = null) {
+    const ref = this.credencialRef(lojaId);
+    const snapshot = transacao ? await transacao.get(ref) : await ref.get();
+    return snapshot.exists ? (snapshot.data() || {}) : null;
+  }
+
   async ler(lojaId) {
     const ref = this.lojaRef(lojaId);
     const loja = await ref.get();
     if (!loja.exists) throw recusa('Loja não encontrada.', 'loja_nao_encontrada', 404);
-    return { lojaId: loja.id, ...formasDaLoja(loja.data() || {}, await this.lerDocumentos(ref)) };
+    const [documentos, credencial] = await Promise.all([this.lerDocumentos(ref), this.lerCredencial(loja.id)]);
+    return formasParaATela(loja.id, loja.data() || {}, documentos, credencial);
   }
 
   // `formas`: { pix?, credito?, debito?, dinheiro? }, cada uma { ativa?, cobradoEm? }.
