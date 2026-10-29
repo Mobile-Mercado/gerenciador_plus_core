@@ -52,3 +52,27 @@ test('cupons: sem tipo (ausente, nulo ou vazio) ganha todos; com tipo ou com cli
   assert.deepEqual(mudancas[0].depois, { tipo: { stringValue: 'todos' } });
   assert.equal(avisos.length, 2);
 });
+
+const { mudancasDoCartao } = require('./tarefas/cartaoGs');
+
+test('cartao da G&S: so o nome que fala em debito muda, no array e na subcolecao', () => {
+  const item = (id, name) => valorRest({ id, name, isActive: true, order: 1, icon: null });
+  const loja = {
+    caminho: 'estabelecimentos/GkFYWdOBKD1vbzYoem9K', updateTime: 't',
+    campos: { paymentMethods: { arrayValue: { values: [item('cartao', 'Cartão de crédito/débito'), item('pix', 'Pix')] } } },
+  };
+  const formas = [
+    { caminho: `${loja.caminho}/paymentMethods/cartao`, id: 'cartao', campos: { name: valorRest('Cartão de crédito/débito') } },
+    { caminho: `${loja.caminho}/paymentMethods/pix`, id: 'pix', campos: { name: valorRest('PIX') } },
+  ];
+  const mudancas = mudancasDoCartao(loja, formas);
+  assert.equal(mudancas.length, 2);
+  assert.deepEqual(lerValor(mudancas[0].depois.paymentMethods), [
+    { id: 'cartao', name: 'Cartão de crédito', isActive: true, order: 1, icon: null },
+    { id: 'pix', name: 'Pix', isActive: true, order: 1, icon: null },
+  ]);
+  assert.equal(mudancas[1].caminho, `${loja.caminho}/paymentMethods/cartao`);
+  assert.deepEqual(mudancas[1].depois, { name: { stringValue: 'Cartão de crédito' } });
+  const jaCerta = { ...loja, campos: { paymentMethods: { arrayValue: { values: [item('credito', 'Cartão de crédito')] } } } };
+  assert.equal(mudancasDoCartao(jaCerta, []).length, 0);
+});

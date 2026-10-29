@@ -19,6 +19,7 @@ const {
 
 const TAREFAS = {
   cupons: require('./tarefas/cupons'),
+  'cartao-gs': require('./tarefas/cartaoGs'),
 };
 
 async function principal() {
