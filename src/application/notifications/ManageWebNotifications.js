@@ -1,4 +1,5 @@
 import { AppError } from '../../domain/errors/AppError.js';
+import { assertLojaLiberada } from '../../domain/cadastro/lojaLiberada.js';
 
 const MAX_TOKENS_PER_MESSAGE = 500;
 const INVALID_TOKEN_CODES = new Set([
@@ -23,7 +24,10 @@ export class ManageWebNotifications {
     this.clock = clock;
   }
 
-  async registerToken({ actorUid, token, userAgent }) {
+  // Qualquer conta da loja registra o aviso de pedido (RP-62, E.9, contrato K7): o dono pelo Users
+  // e o funcionario pela claim adminOf (AdminUsers), sem pedir settings.edit. A loja vem da conta,
+  // nunca do corpo.
+  async registerToken({ actorUid, claims = {}, token, userAgent }) {
     const safeToken = String(token || '').trim();
     if (safeToken.length < 20 || safeToken.length > 4096) {
       throw new AppError('Token de notificacao invalido.', {
@@ -32,13 +36,19 @@ export class ManageWebNotifications {
       });
     }
 
-    const account = await this.accessRepository.findAccountByUid(actorUid);
+    const account = await this.accessRepository.findAccountByClaims({
+      uid: actorUid,
+      adminOf: claims?.adminOf,
+      groupId: claims?.groupId,
+    });
     if (!account?.hasEstablishment) {
       throw new AppError('Conta sem estabelecimento ativo.', {
         statusCode: 403,
         code: 'notification_establishment_forbidden',
       });
     }
+    // Loja do cadastro novo ainda em analise ou recusada nao recebe aviso (como antes, pela barreira).
+    assertLojaLiberada(account);
 
     await this.tokenRepository.upsert({
       establishmentId: account.establishmentId,

@@ -17,13 +17,15 @@ const registerTokenSchema = z.object({
 export function createNotificationRoutes({ manageWebNotifications, requirePermission }) {
   const router = Router();
 
+  // Aviso de pedido novo no navegador (RP-62, E.9, contrato K7): qualquer conta da loja registra o
+  // token, sem settings.edit. Nao ha rota de descadastro: o token invalido e desativado no envio.
   router.post(
     '/web/register',
-    requirePermission('settings.edit'),
     asyncHandler(async (request, response) => {
       const payload = registerTokenSchema.parse(request.body);
       const result = await manageWebNotifications.registerToken({
         actorUid: request.auth.uid,
+        claims: request.auth,
         token: payload.token,
         userAgent: payload.userAgent || request.headers['user-agent'],
       });
