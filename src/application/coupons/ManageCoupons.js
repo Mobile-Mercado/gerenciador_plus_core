@@ -132,9 +132,10 @@ export class ManageCoupons {
       createdAt: Timestamp.fromDate(this.clock()),
     };
 
-    // Quem criou e quando (RP-62, D.4): gravado so ao criar; editar mescla so o objetivo.
+    // Quem criou e quando (RP-62, D.4): gravado so ao criar; editar mescla so o objetivo. Cupom sem
+    // objetivo (chat, Marketing e campanhas; RP-65, A.1) fica com objetivo null nos bastidores.
     const bastidores = {
-      objetivo: String(objetivo || '').trim(),
+      objetivo: String(objetivo || '').trim() || null,
       criadoPorUid: actorUid || null,
       criadoPorNome: String(actorNome || '').trim() || null,
       criadoEm: coupon.createdAt,

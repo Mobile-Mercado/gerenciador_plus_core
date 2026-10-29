@@ -61,11 +61,9 @@ async function subirRota({ banco = new FirestoreEmMemoria({ [`estabelecimentos/$
 
 const docsDe = (banco, colecao) => [...banco.docs.keys()].filter((caminho) => caminho.startsWith(`${colecao}/`));
 
-test('D.1: objetivo obrigatorio (1 a 40 letras) ao criar e ao editar, gravado so nos bastidores', async () => {
+test('D.1: objetivo, quando vem, de 1 a 40 letras ao criar e ao editar, gravado so nos bastidores', async () => {
   const rota = await subirRota();
   try {
-    const { objetivo, ...semObjetivo } = cupomValido;
-    assert.equal((await rota.chamar('', { method: 'POST', body: semObjetivo })).status, 400);
     assert.equal((await rota.chamar('', { method: 'POST', body: { ...cupomValido, objetivo: '   ' } })).status, 400);
     assert.equal((await rota.chamar('', { method: 'POST', body: { ...cupomValido, objetivo: 'x'.repeat(41) } })).status, 400);
     assert.equal(docsDe(rota.banco, 'Coupons').length, 0, 'recusa nao grava');
@@ -81,8 +79,10 @@ test('D.1: objetivo obrigatorio (1 a 40 letras) ao criar e ao editar, gravado so
     assert.ok(!('objetivo' in doCliente));
     assert.equal(rota.banco.dados(`CuponsBastidores/${id}`).objetivo, 'a'.repeat(40));
 
-    // Editar: sem objetivo, recusa; com objetivo, troca nos bastidores e nada dele no Coupons.
-    assert.equal((await rota.chamar(`/${id}`, { method: 'PATCH', body: { description: 'Outra' } })).status, 400);
+    // Editar: objetivo invalido recusa; com objetivo, troca nos bastidores e nada dele no Coupons.
+    assert.equal((await rota.chamar(`/${id}`, { method: 'PATCH', body: { objetivo: '', description: 'Outra' } })).status, 400);
+    assert.equal((await rota.chamar(`/${id}`, { method: 'PATCH', body: { objetivo: 'x'.repeat(41) } })).status, 400);
+    assert.equal(rota.banco.dados(`Coupons/${id}`).description, '10% na primeira compra', 'recusa nao grava');
     const editado = await rota.chamar(`/${id}`, { method: 'PATCH', body: { objetivo: 'Data comemorativa', description: 'Outra' } });
     assert.equal(editado.status, 200);
     assert.equal(rota.banco.dados(`CuponsBastidores/${id}`).objetivo, 'Data comemorativa');
@@ -100,6 +100,32 @@ test('D.1: objetivo obrigatorio (1 a 40 letras) ao criar e ao editar, gravado so
     assert.equal(um.status, 200);
     assert.equal(um.corpo.data.objetivo, 'Vender produto parado');
     assert.equal(um.corpo.data.code, 'BEMVINDO');
+  } finally {
+    rota.fechar();
+  }
+});
+
+test('RP-65 A.1: sem objetivo (chat, Marketing e campanhas) o cupom e criado e editado; bastidores com objetivo null e quem criou', async () => {
+  const rota = await subirRota({ auth: { uid: 'uid-ana' }, conta: { nome: 'Ana Souza' } });
+  try {
+    const { objetivo, ...semObjetivo } = cupomValido;
+    const criado = await rota.chamar('', { method: 'POST', body: semObjetivo });
+    assert.equal(criado.status, 201);
+    const { id } = criado.corpo.data;
+    assert.equal(criado.corpo.data.objetivo, null);
+    assert.deepEqual(criado.corpo.data.criadoPor, { nome: 'Ana Souza' });
+    const bastidores = rota.banco.dados(`CuponsBastidores/${id}`);
+    assert.equal(bastidores.objetivo, null);
+    assert.equal(bastidores.criadoPorUid, 'uid-ana');
+    assert.ok(!('objetivo' in rota.banco.dados(`Coupons/${id}`)));
+
+    // Editar sem objetivo nao mexe nos bastidores.
+    const escritasAntes = rota.banco.escritas.length;
+    assert.equal((await rota.chamar(`/${id}`, { method: 'PATCH', body: { description: 'Outra' } })).status, 200);
+    assert.deepEqual(rota.banco.escritas.slice(escritasAntes).map((escrita) => escrita.caminho), [`Coupons/${id}`]);
+    assert.equal(rota.banco.dados(`Coupons/${id}`).description, 'Outra');
+    assert.equal(rota.banco.dados(`CuponsBastidores/${id}`).objetivo, null);
+    assert.equal((await rota.chamar(`/${id}`)).corpo.data.objetivo, null);
   } finally {
     rota.fechar();
   }

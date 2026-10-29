@@ -42,13 +42,15 @@ const ruleSchema = z.union([
 const temFrete = (rules = []) => rules.some((rule) => rule.type === 'freight');
 const temLeveN = (rules = []) => rules.some((rule) => rule.type === 'bundle');
 
-// Objetivo do cupom (RP-62, D.1): texto de 1 a 40 letras, obrigatorio ao criar e ao editar. Vai
-// para CuponsBastidores/{id}, nunca para o Coupons/{id}.
+// Objetivo do cupom (RP-62, D.1): texto de 1 a 40 letras, gravado em CuponsBastidores/{id}, nunca
+// no Coupons/{id}. Opcional no Core (RP-65, A.1): so o formulario da tela Cupons exige (radio
+// `required` em CouponForm.jsx); chat, Marketing e campanhas criam sem objetivo. Quando vem, vale a
+// mesma validacao.
 const objetivoSchema = z.string().trim().min(1).max(40);
 const novoObjetivoSchema = z.object({ nome: objetivoSchema });
 
 const createCouponSchema = z.object({
-  objetivo: objetivoSchema,
+  objetivo: objetivoSchema.optional(),
   code: z.string().min(3).max(30),
   description: z.string().min(1).max(200),
   termsText: z.string().max(2000).optional(),
@@ -81,7 +83,7 @@ const couponIdParamsSchema = z.object({
 });
 
 const updateCouponSchema = z.object({
-  objetivo: objetivoSchema,
+  objetivo: objetivoSchema.optional(),
   code: z.string().min(3).max(30).optional(),
   description: z.string().min(1).max(200).optional(),
   termsText: z.string().max(2000).optional(),
