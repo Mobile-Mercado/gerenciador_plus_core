@@ -4,7 +4,7 @@ import { formasDePagamentoSchema } from './appDoClienteSchema.js';
 
 // Formas de pagamento da loja da sessao (contrato da versao 55, item 2; cola RP-13): credito e
 // debito separados, cada forma com onde e cobrada. Ler nao pede chave (como as leituras do BFF);
-// gravar pede settings.edit, a mesma da entrega. Debito so liga depois de liberado pelo Admin.
+// gravar pede settings.edit, a mesma da entrega. O debito nao pede liberacao (cola RP-62, B.6).
 export function createFormasDePagamentoRoutes({ formasDePagamento, requirePermission, accountForRequest }) {
   const router = Router();
 

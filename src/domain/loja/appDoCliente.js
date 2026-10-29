@@ -4,13 +4,13 @@
 
 // Item 5: interruptores por loja das funcoes do app, sempre booleanos, dentro de featureFlags (o
 // mapa que o app Gerenciador ja le com promotions, banners e allBannersTypes). Padrao: so o
-// Resumo do mes ligado (decisao do Thay).
+// Resumo do mes ligado (decisao do Thay). O debito saiu daqui: nao pede mais liberacao do Admin
+// (regra de pagamento 1; cola RP-62, item B.6).
 export const FUNCOES_DO_APP = Object.freeze({
   retirada: false,
   substituicao: false,
   resumoDoMes: true,
   cuponsFiscais: false,
-  debito: false,
 });
 
 // Item 6: blocos da Home por loja. Valor ausente ou fora da faixa vale o padrao.

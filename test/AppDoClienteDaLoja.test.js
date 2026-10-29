@@ -38,7 +38,7 @@ test('app do cliente: padroes do contrato (so Resumo do mes ligado; Home 2, 2, 2
   const { app } = montar({ aparenciaHome: { topo: 9, meio: 3, fim: '4', preposicaoBusca: 'pelo' }, featureFlags: { retirada: 'sim', cuponsFiscais: true } });
   assert.deepEqual(await app.ler('loja-1'), {
     lojaId: 'loja-1',
-    featureFlags: { retirada: false, substituicao: false, resumoDoMes: true, cuponsFiscais: true, debito: false },
+    featureFlags: { retirada: false, substituicao: false, resumoDoMes: true, cuponsFiscais: true },
     aparenciaHome: { topo: 2, meio: 3, fim: 2, rodape: 2, preposicaoBusca: 'no' },
   });
 });
@@ -54,29 +54,34 @@ test('app do cliente: cada chave gravada sozinha; promotions, banners e allBanne
     'featureFlags.retirada': false, 'featureFlags.resumoDoMes': true, 'aparenciaHome.fim': 2, 'aparenciaHome.rodape': 2, 'aparenciaHome.preposicaoBusca': 'no',
   });
   await assert.rejects(app.salvar('loja-1', {}), (erro) => erro.code === 'app_do_cliente_sem_mudancas');
-  await assert.rejects(app.salvar('nao-existe', { featureFlags: { debito: true } }), (erro) => erro.code === 'loja_nao_encontrada');
+  await assert.rejects(app.salvar('nao-existe', { featureFlags: { retirada: true } }), (erro) => erro.code === 'loja_nao_encontrada');
 });
 
-test('debito: o Admin liberar liga o item debito do array e o documento debito; desliberar desliga os dois', async () => {
-  const { banco, app } = montar();
-  await app.salvar('loja-1', { featureFlags: { debito: true } });
+test('debito sem liberacao (RP-62, B.6): a loja liga e desliga o item debito do array e o documento debito; featureFlags.debito nao conta', async () => {
+  const { banco, formas, app } = montar();
+  const ligado = await formas.salvar('loja-1', { debito: { ativa: true } });
+  assert.deepEqual(ligado.formas.debito, { ativa: true, cobradoEm: 'entrega' });
+  assert.equal('debitoLiberado' in ligado, false, 'debitoLiberado saiu da resposta');
   let loja = banco.dados(LOJA);
   const debito = loja.paymentMethods.find((item) => item?.id === 'debito');
   assert.deepEqual(debito, { id: 'debito', name: 'Cartão de débito', isActive: true, order: 5, icon: null });
   assert.equal(loja.paymentMethods.length, 5, 'os outros itens ficam como estavam');
   assert.deepEqual(banco.dados(`${LOJA}/paymentMethods/debito`), { name: 'Cartão de débito', isActive: true, cobradoEm: 'entrega' });
-  await app.salvar('loja-1', { featureFlags: { debito: false } });
+  assert.equal(loja.featureFlags.debito, undefined, 'nada gravado em featureFlags.debito');
+  await formas.salvar('loja-1', { debito: { ativa: false } });
   loja = banco.dados(LOJA);
   assert.equal(loja.paymentMethods.find((item) => item?.id === 'debito').isActive, false);
   assert.equal(banco.dados(`${LOJA}/paymentMethods/debito`).isActive, false);
-  assert.equal(loja.featureFlags.debito, false);
+  // featureFlags.debito sai das funcoes do app; gravado antigo nao muda nada.
+  assert.equal('debito' in (await app.ler('loja-1')).featureFlags, false);
+  const antigo = montar({ featureFlags: { debito: false } });
+  assert.equal((await antigo.formas.salvar('loja-1', { debito: { ativa: true } })).formas.debito.ativa, true);
 });
 
 test('formas de pagamento: le o array e a subcolecao; credito e debito sem documento proprio caem no cartao de antes', async () => {
   const { formas } = montar();
   assert.deepEqual(await formas.ler('loja-1'), {
     lojaId: 'loja-1',
-    debitoLiberado: false,
     formas: {
       pix: { ativa: false, cobradoEm: 'entrega' },
       credito: { ativa: true, cobradoEm: 'entrega' },
@@ -98,16 +103,13 @@ test('formas de pagamento: grava o array e a subcolecao juntos, com o espelho ca
   assert.deepEqual(banco.dados(`${LOJA}/paymentMethods/cartao`), { name: 'Cartão de crédito', isActive: true, cobradoEm: 'ambos' }, 'espelho para o app 54');
   assert.deepEqual(banco.dados(`${LOJA}/paymentMethods/pix`), { name: 'Pix', isActive: true, cobradoEm: 'app' });
 
-  await assert.rejects(formas.salvar('loja-1', { debito: { ativa: true } }), (erro) => erro.code === 'debito_nao_liberado' && erro.statusCode === 409);
   await assert.rejects(formas.salvar('loja-1', { dinheiro: { cobradoEm: 'app' } }), (erro) => erro.code === 'forma_cobranca_invalida');
   await assert.rejects(formas.salvar('loja-1', {}), (erro) => erro.code === 'formas_sem_mudancas');
 
-  // Liberado pelo Admin, a loja liga e escolhe onde cobra.
-  const liberada = montar({ featureFlags: { debito: true } });
-  const comDebito = await liberada.formas.salvar('loja-1', { debito: { ativa: true, cobradoEm: 'entrega' } });
+  // Debito sem liberacao: a loja liga e escolhe onde cobra (RP-62, B.6).
+  const comDebito = await formas.salvar('loja-1', { debito: { ativa: true, cobradoEm: 'entrega' } });
   assert.deepEqual(comDebito.formas.debito, { ativa: true, cobradoEm: 'entrega' });
-  assert.equal(comDebito.debitoLiberado, true);
-  assert.equal(liberada.banco.dados(LOJA).paymentMethods.find((item) => item?.id === 'debito').isActive, true);
+  assert.equal(banco.dados(LOJA).paymentMethods.find((item) => item?.id === 'debito').isActive, true);
 });
 
 // Horarios da retirada no formato de weekDaysDelivery, em HH:mm na tela.
@@ -200,6 +202,7 @@ test('rota do Admin /app-do-cliente: so booleanos nos interruptores e os blocos 
     const caminho = '/api/admin/estabelecimentos/loja-1/app-do-cliente';
     assert.equal((await chamar('PATCH', caminho, null, { featureFlags: { retirada: 'true' } })).status, 400);
     assert.equal((await chamar('PATCH', caminho, null, { featureFlags: { promotions: false } })).status, 400, 'so as chaves do contrato');
+    assert.equal((await chamar('PATCH', caminho, null, { featureFlags: { debito: true } })).status, 400, 'debito saiu das funcoes do app (RP-62, B.6)');
     assert.equal((await chamar('PATCH', caminho, null, { aparenciaHome: { topo: 4 } })).status, 400);
     assert.equal((await chamar('PATCH', caminho, null, { aparenciaHome: { fim: 5 } })).status, 400);
     assert.equal((await chamar('PATCH', caminho, null, { aparenciaHome: { rodape: 3 } })).status, 400);
@@ -212,12 +215,12 @@ test('rota do Admin /app-do-cliente: so booleanos nos interruptores e os blocos 
   });
 });
 
-test('rotas da loja: a loja grava formas e retirada, mas nao liga a retirada nem o debito; outra loja so a dela', async () => {
+test('rotas da loja: a loja grava formas (debito sem liberacao) e retirada, mas nao liga a retirada; outra loja so a dela', async () => {
   await comRotas(async ({ chamar, banco }) => {
     // Formas de pagamento
     assert.equal((await chamar('PATCH', '/api/loja/formas-de-pagamento', 'uid-func', { formas: { pix: { ativa: true } } })).status, 403);
     assert.equal((await chamar('PATCH', '/api/loja/formas-de-pagamento', 'uid-dono', { formas: { boleto: { ativa: true } } })).status, 400);
-    assert.equal((await chamar('PATCH', '/api/loja/formas-de-pagamento', 'uid-dono', { formas: { debito: { ativa: true } } })).status, 409);
+    assert.equal((await chamar('PATCH', '/api/loja/formas-de-pagamento', 'uid-dono', { formas: { debito: { ativa: true } } })).status, 200);
     const semGateway = await chamar('PATCH', '/api/loja/formas-de-pagamento', 'uid-dono', { formas: { pix: { ativa: true, cobradoEm: 'app' } } });
     assert.equal(semGateway.status, 400);
     assert.equal((await semGateway.json()).error.code, 'forma_sem_gateway');
@@ -227,7 +230,7 @@ test('rotas da loja: a loja grava formas e retirada, mas nao liga a retirada nem
     assert.equal((await (await chamar('GET', '/api/loja/formas-de-pagamento', 'uid-func')).json()).data.formas.pix.ativa, true, 'ler nao pede chave');
     await chamar('PATCH', '/api/loja/formas-de-pagamento', 'uid-outra', { formas: { pix: { ativa: true } } });
     assert.equal(banco.dados('estabelecimentos/loja-2').paymentMethods[0].id, 'pix');
-    assert.equal(banco.dados(LOJA).paymentMethods.length, 4, 'a loja-1 fica como estava');
+    assert.equal(banco.dados(LOJA).paymentMethods.length, 5, 'a loja-1 so com o debito novo');
 
     // Retirada pela rota da entrega: dados sim, interruptor nao.
     const dados = await chamar('PATCH', '/api/loja/entrega', 'uid-dono', { retirada: { instrucoes: 'Portão azul', tempoPreparoMin: 20, horarios: horarios() } });
@@ -291,7 +294,7 @@ test('RP-33: recusa "app" e "ambos" sem gateway, e no debito sempre', async () =
     // eslint-disable-next-line no-await-in-loop
     await assert.rejects(semGateway.formas.salvar('loja-1', { pix: { cobradoEm } }), (erro) => erro.code === 'forma_sem_gateway' && erro.statusCode === 400);
   }
-  const comGateway = montar({ ...GATEWAY_LIGADO, featureFlags: { debito: true } });
+  const comGateway = montar(GATEWAY_LIGADO);
   for (const cobradoEm of ['app', 'ambos']) {
     // eslint-disable-next-line no-await-in-loop
     await assert.rejects(comGateway.formas.salvar('loja-1', { debito: { ativa: true, cobradoEm } }), (erro) => erro.code === 'debito_so_presencial' && erro.statusCode === 400);

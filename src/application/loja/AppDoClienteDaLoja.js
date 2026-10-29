@@ -1,15 +1,14 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 import { aparenciaDaHome, funcoesDoApp } from '../../domain/loja/appDoCliente.js';
-import { SUBCOLECAO_FORMAS, gravacaoDasFormas } from './FormasDePagamento.js';
 
 // Funcoes do app e aparencia da Home de cada loja (contrato da versao 55, itens 5 e 6; cola
-// RP-13). O Admin grava: featureFlags.{retirada, substituicao, resumoDoMes, cuponsFiscais,
-// debito} e aparenciaHome.{topo, meio, fim, rodape, preposicaoBusca}; a propria loja grava so
+// RP-13). O Admin grava: featureFlags.{retirada, substituicao, resumoDoMes, cuponsFiscais}
+// e aparenciaHome.{topo, meio, fim, rodape, preposicaoBusca}; a propria loja grava so
 // featureFlags.cuponsFiscais (PATCH /api/loja/app-do-cliente, cola RP-58). Cada chave e gravada sozinha
 // (featureFlags.x, aparenciaHome.x), para nao apagar promotions, banners e allBannersTypes, que o
-// app Gerenciador le no mesmo mapa. Mudar featureFlags.debito liga ou desliga junto o item debito
-// do array paymentMethods[] e o documento debito da subcolecao (item 2 do contrato).
+// app Gerenciador le no mesmo mapa. O debito nao passa mais por aqui: a loja liga e desliga nas
+// formas de pagamento, sem liberacao (cola RP-62, item B.6).
 function recusa(mensagem, code, statusCode = 400) {
   return new AppError(mensagem, { statusCode, code });
 }
@@ -51,19 +50,7 @@ export class AppDoClienteDaLoja {
       });
       if (!Object.keys(mudancas).length) throw recusa('Nada para gravar.', 'app_do_cliente_sem_mudancas');
 
-      const debito = entrada.featureFlags?.debito;
-      const documentosDasFormas = {};
-      if (typeof debito === 'boolean' && debito !== funcoesAntes.debito) {
-        const consulta = ref.collection(SUBCOLECAO_FORMAS);
-        const documentos = new Map((await transacao.get(consulta)).docs.map((documento) => [documento.id, documento.data() || {}]));
-        const gravacao = gravacaoDasFormas(atual, documentos, { debito: { ativa: debito } });
-        mudancas.paymentMethods = gravacao.paymentMethods;
-        Object.assign(documentosDasFormas, gravacao.documentos);
-      }
       transacao.update(ref, { ...mudancas, updatedAt: this.serverTimestamp() });
-      Object.entries(documentosDasFormas).forEach(([forma, documento]) => {
-        transacao.set(ref.collection(SUBCOLECAO_FORMAS).doc(forma), documento, { merge: true });
-      });
       return { antes, campos: Object.keys(mudancas) };
     });
     return { ...resultado, app: await this.ler(lojaId) };

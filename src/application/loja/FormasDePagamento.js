@@ -1,7 +1,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 import {
-  COBRADO_EM, COBRADO_EM_PADRAO, FORMAS_DE_PAGAMENTO, funcoesDoApp,
+  COBRADO_EM, COBRADO_EM_PADRAO, FORMAS_DE_PAGAMENTO,
 } from '../../domain/loja/appDoCliente.js';
 
 // Formas de pagamento da loja (contrato da versao 55, item 2; cola RP-13). Duas fontes que os apps
@@ -13,7 +13,7 @@ import {
 // Credito e debito sao separados. O documento cartao continua como espelho do credito, porque o
 // app do cliente da versao 54 so le pix e cartao. Item do array que nao e uma das quatro formas
 // (ids antigos, como cartao) fica como esta.
-// Debito so liga com featureFlags.debito, que so o Admin muda (AppDoClienteDaLoja).
+// Debito: a loja liga e desliga, sem liberacao do Admin (regra de pagamento 1; cola RP-62, B.6).
 // Regra do Thay de 22/10 (cola RP-33): o lojista decide onde cada forma e cobrada e o app obedece.
 // "app" e "ambos" so com o gateway da loja ligado e para as formas que ele cobra; debito nunca e
 // cobrado pelo app. Com o gateway ligado, safrapay.methods (o que liga a cobranca no app) e gravado
@@ -57,7 +57,7 @@ export function formasDaLoja(loja = {}, documentos = new Map()) {
     const cobradoEm = COBRADO_EM.includes(documento?.cobradoEm) ? documento.cobradoEm : padrao;
     return [forma, { ativa, cobradoEm: forma === 'dinheiro' || forma === 'debito' ? 'entrega' : cobradoEm }];
   }));
-  return { formas, debitoLiberado: funcoesDoApp(loja.featureFlags).debito };
+  return { formas };
 }
 
 // Gravacao das formas, ja conferidas. Devolve o array novo e os documentos da subcolecao a gravar.
@@ -134,9 +134,6 @@ export class FormasDePagamento {
       const loja = await transacao.get(ref);
       if (!loja.exists) throw recusa('Loja não encontrada.', 'loja_nao_encontrada', 404);
       const dados = loja.data() || {};
-      if (mudancas.debito?.ativa === true && !funcoesDoApp(dados.featureFlags).debito) {
-        throw recusa('O cartão de débito ainda não foi liberado para esta loja.', 'debito_nao_liberado', 409);
-      }
       // "No app" e "Nos dois" so com o gateway ligado e nas formas que ele cobra.
       const semGateway = Object.entries(mudancas)
         .find(([forma, valor]) => valor.cobradoEm && valor.cobradoEm !== 'entrega' && !cobraNoApp(dados, forma));
