@@ -123,6 +123,19 @@ export function gravacaoDasFormas(loja, documentos, mudancas) {
   return { paymentMethods: lista, documentos: docs, formas: final, gateway: gatewayDasFormas(loja, final) };
 }
 
+// Regra de pagamento 10 (contrato K2, cola RP-62, item B.5): a forma esta disponivel ao cliente
+// quando esta ativa e e presencial ("entrega" ou "ambos"), ou quando e pelo app ("app" ou "ambos")
+// com a Safra ligada.
+export function formaDisponivel(loja, forma = {}) {
+  if (forma?.ativa !== true) return false;
+  if (forma.cobradoEm === 'entrega' || forma.cobradoEm === 'ambos') return true;
+  return (forma.cobradoEm === 'app' || forma.cobradoEm === 'ambos') && safraLigada(loja);
+}
+
+export function temFormaDisponivel(loja, formas = {}) {
+  return Object.values(formas).some((forma) => formaDisponivel(loja, forma));
+}
+
 // safrapay.methods a partir das formas como ficaram: ligada e cobrada no app (ou nos dois). So com o
 // gateway ligado; sem ele, nada e gravado.
 export function gatewayDasFormas(loja, formas) {
@@ -236,6 +249,9 @@ export class FormasDePagamento {
       }
       const documentos = await this.lerDocumentos(ref, transacao);
       const gravacao = gravacaoDasFormas(dados, documentos, mudancas);
+      if (!temFormaDisponivel(dados, gravacao.formas)) {
+        throw recusa('Deixe pelo menos uma forma de pagamento ligada.', 'sem_forma_de_pagamento', 409);
+      }
       transacao.update(ref, { paymentMethods: gravacao.paymentMethods, ...gravacao.gateway, ...daEntrega, updatedAt: this.serverTimestamp() });
       Object.entries(gravacao.documentos).forEach(([forma, documento]) => {
         transacao.set(ref.collection(SUBCOLECAO_FORMAS).doc(forma), documento, { merge: true });
