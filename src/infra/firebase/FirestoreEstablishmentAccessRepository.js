@@ -1,5 +1,6 @@
 import { AppError } from '../../domain/errors/AppError.js';
 import { EstablishmentAccessRepository } from '../../domain/auth/EstablishmentAccessRepository.js';
+import { chavesDoGrupo } from '../../application/auth/chavesDoGrupo.js';
 
 // Dono da loja: manda em tudo, sem grupo.
 const OWNER_PERMISSIONS = { isAdmin: true, groupId: null, keys: [] };
@@ -118,7 +119,9 @@ export class FirestoreEstablishmentAccessRepository extends EstablishmentAccessR
       permissions: {
         isAdmin: groupData?.isAdmin === true,
         groupId: groupId || null,
-        keys: Array.isArray(groupData?.permissions) ? groupData.permissions : [],
+        // Grupo antigo ganha, so na leitura, a chave nova cuja tela ele ja via na web antiga
+        // (RP-62, E.8): vale para a sessao e para as barreiras do Core.
+        keys: groupData ? chavesDoGrupo(groupData) : [],
       },
     };
   }
