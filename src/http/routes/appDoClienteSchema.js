@@ -25,6 +25,8 @@ export const safraDaLojaSchema = z.object({ ligada: z.boolean() }).strict();
 
 // Item 2: formas de pagamento, cada uma com ativa e onde e cobrada.
 const formaSchema = z.object({ ativa: z.boolean().optional(), cobradoEm: z.enum(COBRADO_EM).optional() }).strict();
+// Contrato K2 (cola RP-62): { formas?, entrega?: boolean }, pelo menos um dos dois.
 export const formasDePagamentoSchema = z.object({
-  formas: z.object(Object.fromEntries(Object.keys(FORMAS_DE_PAGAMENTO).map((forma) => [forma, formaSchema.optional()]))).strict(),
-}).strict();
+  formas: z.object(Object.fromEntries(Object.keys(FORMAS_DE_PAGAMENTO).map((forma) => [forma, formaSchema.optional()]))).strict().optional(),
+  entrega: z.boolean().optional(),
+}).strict().refine((corpo) => corpo.formas !== undefined || corpo.entrega !== undefined, { message: 'Informe formas ou entrega.' });

@@ -203,9 +203,12 @@ export class FormasDePagamento {
   }
 
   // `formas`: { pix?, credito?, debito?, dinheiro? }, cada uma { ativa?, cobradoEm? }.
-  async salvar(lojaId, formas = {}) {
-    const mudancas = Object.fromEntries(Object.entries(formas).filter(([forma, valor]) => FORMAS.includes(forma) && valor));
-    if (!Object.keys(mudancas).length) throw recusa('Nada para gravar.', 'formas_sem_mudancas');
+  // `entrega` (contrato K2, cola RP-62, item B.4): booleano de "Entrega em casa", gravado so em
+  // featureFlags.entrega, pelo caminho pontuado. Desligar a entrega sem a retirada ligada: 409.
+  async salvar(lojaId, formas = {}, { entrega } = {}) {
+    const mudancas = Object.fromEntries(Object.entries(formas || {}).filter(([forma, valor]) => FORMAS.includes(forma) && valor));
+    const mudaEntrega = typeof entrega === 'boolean';
+    if (!Object.keys(mudancas).length && !mudaEntrega) throw recusa('Nada para gravar.', 'formas_sem_mudancas');
     if (mudancas.dinheiro?.cobradoEm && mudancas.dinheiro.cobradoEm !== 'entrega') {
       throw recusa('Dinheiro só é pago na entrega ou na retirada.', 'forma_cobranca_invalida');
     }
@@ -217,6 +220,14 @@ export class FormasDePagamento {
       const loja = await transacao.get(ref);
       if (!loja.exists) throw recusa('Loja não encontrada.', 'loja_nao_encontrada', 404);
       const dados = loja.data() || {};
+      if (entrega === false && dados.featureFlags?.retirada !== true) {
+        throw recusa('Deixe pelo menos uma forma de seus clientes receberem as compras ligada.', 'sem_forma_de_receber', 409);
+      }
+      const daEntrega = mudaEntrega ? { 'featureFlags.entrega': entrega } : {};
+      if (!Object.keys(mudancas).length) {
+        transacao.update(ref, { ...daEntrega, updatedAt: this.serverTimestamp() });
+        return;
+      }
       // "No app" e "Nos dois" so com o gateway ligado e nas formas que ele cobra.
       const semGateway = Object.entries(mudancas)
         .find(([forma, valor]) => valor.cobradoEm && valor.cobradoEm !== 'entrega' && !cobraNoApp(dados, forma));
@@ -225,7 +236,7 @@ export class FormasDePagamento {
       }
       const documentos = await this.lerDocumentos(ref, transacao);
       const gravacao = gravacaoDasFormas(dados, documentos, mudancas);
-      transacao.update(ref, { paymentMethods: gravacao.paymentMethods, ...gravacao.gateway, updatedAt: this.serverTimestamp() });
+      transacao.update(ref, { paymentMethods: gravacao.paymentMethods, ...gravacao.gateway, ...daEntrega, updatedAt: this.serverTimestamp() });
       Object.entries(gravacao.documentos).forEach(([forma, documento]) => {
         transacao.set(ref.collection(SUBCOLECAO_FORMAS).doc(forma), documento, { merge: true });
       });

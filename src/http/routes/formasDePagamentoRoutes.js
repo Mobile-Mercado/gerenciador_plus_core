@@ -14,9 +14,9 @@ export function createFormasDePagamentoRoutes({ formasDePagamento, requirePermis
   }));
 
   router.patch('/', requirePermission('settings.edit'), asyncHandler(async (request, response) => {
-    const { formas } = formasDePagamentoSchema.parse(request.body);
+    const { formas, entrega } = formasDePagamentoSchema.parse(request.body);
     const { establishmentId } = await accountForRequest(request);
-    response.json({ data: await formasDePagamento.salvar(establishmentId, formas) });
+    response.json({ data: await formasDePagamento.salvar(establishmentId, formas, { entrega }) });
   }));
 
   return router;

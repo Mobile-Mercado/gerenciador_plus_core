@@ -322,9 +322,11 @@ export function createAdminRoutes({
   }));
 
   router.patch('/estabelecimentos/:lojaId/formas-de-pagamento', asyncHandler(async (request, response) => {
-    const { formas } = formasDePagamentoSchema.parse(request.body);
-    response.locals.auditoria = { acao: 'formas_de_pagamento', campos: Object.keys(formas) };
-    response.json({ data: await formasDePagamento.salvar(request.params.lojaId, formas) });
+    const { formas, entrega } = formasDePagamentoSchema.parse(request.body);
+    response.locals.auditoria = {
+      acao: 'formas_de_pagamento', campos: [...Object.keys(formas || {}), ...(typeof entrega === 'boolean' ? ['entrega'] : [])],
+    };
+    response.json({ data: await formasDePagamento.salvar(request.params.lojaId, formas, { entrega }) });
   }));
 
   // ===== Credencial da Safrapay (contrato K4, cola RP-62, item A.2) =====
