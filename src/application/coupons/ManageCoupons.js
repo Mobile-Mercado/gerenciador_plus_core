@@ -16,6 +16,22 @@ export const OBJETIVOS_PADRAO = Object.freeze([
   'Data comemorativa',
 ]);
 
+// Regra 3 (RP-62, D.3): o cupom precisa de pelo menos uma regra (primeiro pedido, valor minimo,
+// faixa de quantidade ou frete) ou do texto das regras da promocao. A duracao nao conta.
+const TIPOS_DE_REGRA = new Set(['minValue', 'quantityRange', 'freight']);
+export const MENSAGEM_CUPOM_SEM_REGRA = 'Marque pelo menos uma regra acima ou escreva as regras da promoção.';
+
+export function cupomTemRegra({ firstPurchaseOnly, rules, termsText } = {}) {
+  return firstPurchaseOnly === true
+    || (Array.isArray(rules) && rules.some((rule) => TIPOS_DE_REGRA.has(rule?.type)))
+    || String(termsText || '').trim().length > 0;
+}
+
+function assertCupomTemRegra(cupom) {
+  if (cupomTemRegra(cupom)) return;
+  throw new AppError(MENSAGEM_CUPOM_SEM_REGRA, { statusCode: 400, code: 'cupom_sem_regra' });
+}
+
 // O que a web recebe de cada cupom: o documento do Coupons mais o que esta nos bastidores.
 export function cupomComBastidores(coupon, bastidores = null) {
   return {
@@ -71,6 +87,8 @@ export class ManageCoupons {
         throw new AppError('Este cliente ainda não comprou nesta loja.', { statusCode: 400, code: 'coupon_destinatario_invalido' });
       }
     }
+
+    assertCupomTemRegra({ firstPurchaseOnly, rules, termsText });
 
     const normalizedCode = String(code || '').trim().toUpperCase();
     await this.assertCodeNotActive(normalizedCode, account.establishmentId);
@@ -189,6 +207,10 @@ export class ManageCoupons {
         await this.assertCodeNotActive(normalizedCode, account.establishmentId);
       }
       normalizedPatch.code = normalizedCode;
+    }
+    // Regra 3 na edicao: quando o PATCH mexe nas regras, o cupom como fica precisa ter uma.
+    if (['firstPurchaseOnly', 'rules', 'termsText'].some((campo) => campo in normalizedPatch)) {
+      assertCupomTemRegra({ ...coupon, ...normalizedPatch });
     }
     if (normalizedPatch.startAt != null) {
       normalizedPatch.startAt = Timestamp.fromDate(new Date(normalizedPatch.startAt));

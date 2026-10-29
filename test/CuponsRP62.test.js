@@ -196,3 +196,62 @@ test('D.2: criar objetivo pede coupons.manage; ver os objetivos, nao', async () 
     rota.fechar();
   }
 });
+
+test('D.3: sem regra marcada e sem texto, 400 cupom_sem_regra com a frase da cola; a duracao nao conta', async () => {
+  const rota = await subirRota();
+  try {
+    const { firstPurchaseOnly, termsText, ...semRegra } = cupomValido;
+    const recusas = [
+      ['nada', {}],
+      ['so a duracao', { endAt: '2026-12-31T23:59:59.000Z' }],
+      ['texto em branco', { termsText: '   ' }],
+      ['primeiro pedido desmarcado', { firstPurchaseOnly: false }],
+      ['produto e categoria nao sao regra', { rules: [{ type: 'product', productIds: ['p1'] }, { type: 'category', categoryIds: ['c1'] }] }],
+    ];
+    for (const [caso, extra] of recusas) {
+      const resposta = await rota.chamar('', { method: 'POST', body: { ...semRegra, ...extra } });
+      assert.equal(resposta.status, 400, caso);
+      assert.equal(resposta.corpo.error.code, 'cupom_sem_regra', caso);
+      assert.equal(resposta.corpo.error.message, 'Marque pelo menos uma regra acima ou escreva as regras da promoção.', caso);
+    }
+    assert.equal(docsDe(rota.banco, 'Coupons').length, 0, 'recusa nao grava');
+
+    const aceitos = [
+      ['primeiro pedido', { firstPurchaseOnly: true }],
+      ['valor minimo', { rules: [{ type: 'minValue', minValue: 50 }] }],
+      ['faixa de quantidade', { rules: [{ type: 'quantityRange', minQuantity: 2, maxQuantity: null }] }],
+      ['frete', { discount: null, rules: [{ type: 'freight', freeShipping: true }] }],
+      ['so o texto', { termsText: 'Válido nas compras de sexta.' }],
+    ];
+    for (const [indice, [caso, extra]] of aceitos.entries()) {
+      const resposta = await rota.chamar('', { method: 'POST', body: { ...semRegra, code: `REGRA${indice}`, ...extra } });
+      assert.equal(resposta.status, 201, caso);
+    }
+  } finally {
+    rota.fechar();
+  }
+});
+
+test('D.3: na edicao, o PATCH que mexe nas regras nao deixa o cupom sem regra', async () => {
+  const banco = new FirestoreEmMemoria({
+    [`estabelecimentos/${LOJA}`]: { name: 'Loja 1' },
+    'Coupons/c1': { code: 'PRIMEIRA', establishmentIds: [LOJA], active: true, firstPurchaseOnly: true, rules: [], termsText: null },
+    'Coupons/antigo': { code: 'ANTIGO', establishmentIds: [LOJA], active: true, firstPurchaseOnly: false, rules: [] },
+  });
+  const rota = await subirRota({ banco });
+  try {
+    const objetivo = 'Atrair clientes novos';
+    const tirarTudo = await rota.chamar('/c1', { method: 'PATCH', body: { objetivo, firstPurchaseOnly: false, rules: [], termsText: '' } });
+    assert.equal(tirarTudo.status, 400);
+    assert.equal(tirarTudo.corpo.error.code, 'cupom_sem_regra');
+    assert.equal(rota.banco.dados('Coupons/c1').firstPurchaseOnly, true, 'recusa nao grava');
+    assert.equal(rota.banco.dados('CuponsBastidores/c1'), undefined, 'recusa nao grava os bastidores');
+
+    assert.equal((await rota.chamar('/c1', { method: 'PATCH', body: { objetivo, firstPurchaseOnly: false, rules: [{ type: 'minValue', minValue: 80 }] } })).status, 200);
+    assert.equal((await rota.chamar('/c1', { method: 'PATCH', body: { objetivo, rules: [], termsText: 'Só no balcão.' } })).status, 200);
+    // O PATCH que nao mexe nas regras (so o objetivo e a descricao) passa no cupom antigo sem regra.
+    assert.equal((await rota.chamar('/antigo', { method: 'PATCH', body: { objetivo, description: 'Novo título' } })).status, 200);
+  } finally {
+    rota.fechar();
+  }
+});
