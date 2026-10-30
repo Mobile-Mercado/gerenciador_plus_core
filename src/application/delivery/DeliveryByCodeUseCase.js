@@ -11,8 +11,15 @@ const CAMPOS_PERMITIDOS = new Set([
   'deliveredBy',
   'deliveredAt',
   'deliveredSource',
+  'routeStartedBy',
+  'routeStartedAt',
+  'routeStartedSource',
 ]);
 
+// Fluxo da entrega (decisao do Thay de 22/10/2026, cola RP-14): escolher o entregador no fim da
+// separacao grava waitingForDelivery com o entregador; o pedido so vai para deliveryRoute quando o
+// entregador toca em "Iniciar rota" aqui no link; "Entregue" so depois disso.
+const STATUS_AGUARDANDO = 'PurchaseStatus.waitingForDelivery';
 const STATUS_EM_ROTA = 'PurchaseStatus.deliveryRoute';
 const STATUS_ENTREGUE = 'PurchaseStatus.completed';
 const ORIGEM = 'entregador_link';
@@ -26,11 +33,47 @@ export class DeliveryByCodeUseCase {
 
   // Codigo inexistente, pedido inexistente, pedido em outro status e codigo repetido
   // respondem a mesma coisa: o link nao serve de sonda para descobrir pedido.
+  // etapa: 'aguardando' (o link mostra "Iniciar rota") ou 'em_rota' (mostra "Entregue").
   async summary(codigo) {
-    const snapshot = await this.findOrder(codigo);
+    const snapshot = umPedidoDoLink(await this.query(codigo).get());
+    if (!snapshot) throw linkInvalido();
     const pedido = snapshot.data();
     const loja = await lerLoja(pedido, (referencia) => referencia.get());
-    return resumoDoPedido(pedido, { gatewayEmProducao: emProducao(loja), loja });
+    return { ...resumoDoPedido(pedido, { gatewayEmProducao: emProducao(loja), loja }), etapa: etapaDoPedido(pedido) };
+  }
+
+  // "Iniciar rota": so o pedido aguardando, com entregador. Transacao, como o "Entregue": o
+  // segundo toque ja encontra o pedido em rota e responde link invalido.
+  async startRoute(codigo) {
+    const consulta = this.query(codigo);
+    const resultado = await this.firestore.runTransaction(async (transaction) => {
+      const snapshot = umPedidoDoLink(await transaction.get(consulta));
+      if (!snapshot || etapaDoPedido(snapshot.data()) !== 'aguardando') return null;
+      const pedido = snapshot.data();
+      const loja = await lerLoja(pedido, (referencia) => transaction.get(referencia));
+      const entregador = String(pedido.deliveryPerson?.name || '').trim();
+      const alteracao = {
+        currentPurchaseStatus: STATUS_EM_ROTA,
+        statusList: [
+          ...(Array.isArray(pedido.statusList) ? pedido.statusList : []),
+          { purchaseStatus: STATUS_EM_ROTA, createdAt: Timestamp.fromDate(this.clock()) },
+        ],
+        routeStartedBy: entregador,
+        routeStartedAt: FieldValue.serverTimestamp(),
+        routeStartedSource: ORIGEM,
+      };
+      assertCamposPermitidos(alteracao);
+      transaction.update(snapshot.ref, alteracao);
+      return { pedido: { ...pedido, ...alteracao }, entregador, producao: emProducao(loja), loja };
+    });
+    if (!resultado) throw linkInvalido();
+    return {
+      ...resumoDoPedido(resultado.pedido, { gatewayEmProducao: resultado.producao, loja: resultado.loja }),
+      etapa: 'em_rota',
+      status: 'em_rota',
+      iniciadaPor: resultado.entregador,
+      origem: ORIGEM,
+    };
   }
 
   // Transacao: duas marcacoes seguidas com o mesmo codigo nao passam as duas, porque a
@@ -88,16 +131,26 @@ export class DeliveryByCodeUseCase {
       .where('deliveryCode', '==', limpo)
       .limit(2);
   }
-
-  async findOrder(codigo) {
-    const snapshot = umPedidoEmRota(await this.query(codigo).get());
-    if (!snapshot) throw linkInvalido();
-    return snapshot;
-  }
 }
 
-// Vale so um pedido, e so enquanto ele esta em rota de entrega. Codigo repetido em
-// dois pedidos nao vale para nenhum.
+// O resumo vale para o pedido aguardando o entregador (com entregador escolhido) e para o pedido
+// em rota. Codigo repetido em dois pedidos nao vale para nenhum.
+function umPedidoDoLink(resultado) {
+  const documentos = resultado?.docs || [];
+  if (documentos.length !== 1) return null;
+  const [snapshot] = documentos;
+  return etapaDoPedido(snapshot.data() || {}) ? snapshot : null;
+}
+
+function etapaDoPedido(pedido = {}) {
+  if (pedido.currentPurchaseStatus === STATUS_EM_ROTA) return 'em_rota';
+  const comEntregador = Boolean(String(pedido.deliveryPerson?.name || '').trim());
+  if (pedido.currentPurchaseStatus === STATUS_AGUARDANDO && comEntregador) return 'aguardando';
+  return null;
+}
+
+// "Entregue" vale so um pedido, e so enquanto ele esta em rota de entrega. Codigo repetido
+// em dois pedidos nao vale para nenhum.
 function umPedidoEmRota(resultado) {
   const documentos = resultado?.docs || [];
   if (documentos.length !== 1) return null;
@@ -151,6 +204,9 @@ function resumoDoPedido(pedido = {}, { gatewayEmProducao = false, loja = null } 
   const endereco = pedido.address || {};
   const pagamento = pedido.purchasePayment || {};
   const troco = Number(pagamento.valueBack || 0);
+  // Valor da nota que o cliente entrega (purchasePayment.paymentValue), para a linha "Paga com
+  // R$ Y" do link (cola RP-13). So vem junto do troco: sem troco, a linha nao existe.
+  const notaDoCliente = Number(pagamento.paymentValue || 0);
   return {
     pedido: pedido.orderNumber || '',
     loja: nomeDaLoja(pedido, loja),
@@ -166,8 +222,17 @@ function resumoDoPedido(pedido = {}, { gatewayEmProducao = false, loja = null } 
     total: Number(pedido.total || 0),
     pagamento: pagamento.paymentType || '',
     troco: troco > 0 ? troco : null,
+    paymentValue: troco > 0 && notaDoCliente > 0 ? notaDoCliente : null,
     pagoOnline: pagamentoOnlineConfirmado(pedido, gatewayEmProducao),
+    // Acerto da pesagem do pedido pago pelo app (cola RP-51, item 2.1). Inteiros em centavos,
+    // gravados so pelo servidor. Ausente, zero, negativo ou fora de inteiro vem nulo.
+    devolverAoCliente: centavosPositivos(pedido.devolverAoCliente),
+    receberDoCliente: centavosPositivos(pedido.receberDoCliente),
   };
+}
+
+function centavosPositivos(valor) {
+  return Number.isInteger(valor) && valor > 0 ? valor : null;
 }
 
 // Forma de pagamento nao diz se o dinheiro entrou: na Zero Grau, Pix e cartao sao
@@ -285,5 +350,6 @@ function linkInvalido() {
 }
 
 export const CAMPOS_DE_ESCRITA = CAMPOS_PERMITIDOS;
+export const STATUS_DE_ESPERA = STATUS_AGUARDANDO;
 export const STATUS_DE_ROTA = STATUS_EM_ROTA;
 export const STATUS_DE_ENTREGA = STATUS_ENTREGUE;

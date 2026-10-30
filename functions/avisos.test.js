@@ -116,7 +116,7 @@ test('titulo e texto do pedido novo iguais aos de hoje', () => {
     title: '🔔 Novo Pedido!', body: 'Pedido #000123 de Ana', orderNumber: '000123', clientName: 'Ana',
   });
   assert.deepEqual(avisoDePedidoNovo({}), {
-    title: '🔔 Novo Pedido!', body: 'Pedido  de Cliente', orderNumber: '', clientName: 'Cliente',
+    title: '🔔 Novo Pedido!', body: 'Você tem um novo pedido', orderNumber: '', clientName: 'Cliente',
   });
   assert.equal(avisoDePedidoNovo({ orderNumber: 77, clientName: 'Bia' }).body, 'Pedido #77 de Bia');
   assert.deepEqual(

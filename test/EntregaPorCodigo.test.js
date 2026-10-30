@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import express from 'express';
-import { DeliveryByCodeUseCase, STATUS_DE_ENTREGA, STATUS_DE_ROTA } from '../src/application/delivery/DeliveryByCodeUseCase.js';
+import {
+  DeliveryByCodeUseCase, STATUS_DE_ENTREGA, STATUS_DE_ESPERA, STATUS_DE_ROTA,
+} from '../src/application/delivery/DeliveryByCodeUseCase.js';
 import { createDeliveryRoutes } from '../src/http/routes/deliveryRoutes.js';
 import { errorHandler } from '../src/http/middlewares/errorHandler.js';
 
@@ -146,7 +148,11 @@ test('codigo valido com pedido em rota devolve so o que a tela do entregador pre
     total: 74.5,
     pagamento: 'Dinheiro',
     troco: 25.5,
+    paymentValue: 100,
     pagoOnline: false,
+    devolverAoCliente: null,
+    receberDoCliente: null,
+    etapa: 'em_rota',
   });
   const texto = JSON.stringify(body);
   ['cliente-1', 'Aparecida', 'joao@exemplo.com', 'productsCart', 'deliveryCode', '75000-000'].forEach((proibido) => {
@@ -175,6 +181,19 @@ test('marcar entregue grava os cinco campos e nada mais', async () => {
   // nada fora da lista branca: o pedido mantem os mesmos campos de antes mais os tres novos
   const novos = Object.keys(gravado).filter((campo) => !Object.keys(pedido()).includes(campo));
   assert.deepEqual(novos.sort(), ['deliveredAt', 'deliveredBy', 'deliveredSource']);
+});
+
+test('valor da nota (paymentValue) so vem junto do troco: total 80, nota 100, troco 20', async () => {
+  const casos = [
+    ['dinheiro com troco', { paymentType: 'PaymentType.cash', paymentValue: 100, valueBack: 20 }, { troco: 20, paymentValue: 100 }],
+    ['dinheiro sem troco', { paymentType: 'PaymentType.cash', paymentValue: 80, valueBack: null }, { troco: null, paymentValue: null }],
+    ['pix, valor igual ao total', { paymentType: 'PaymentType.pix', paymentValue: 80 }, { troco: null, paymentValue: null }],
+  ];
+  for (const [rotulo, purchasePayment, esperado] of casos) {
+    const { app } = servidor({ p1: pedido({ total: 80, purchasePayment }) });
+    const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+    assert.deepEqual({ troco: body.data.troco, paymentValue: body.data.paymentValue }, esperado, rotulo);
+  }
 });
 
 test('pagoOnline sai do registro de transacao, nunca da forma de pagamento', async () => {
@@ -242,7 +261,7 @@ test('a gravacao devolve a hora que o servidor gravou em deliveredAt', async () 
 test('codigo valido com pedido ja entregue responde link invalido, sem dado', async () => {
   const { app } = servidor({ p1: pedido({ currentPurchaseStatus: STATUS_DE_ENTREGA }) });
 
-  for (const rota of ['resumo', 'entregue']) {
+  for (const rota of ['resumo', 'iniciar-rota', 'entregue']) {
     const { status, body } = await chamar(app, rota, { codigo: 'A7K2Z9' });
     assert.equal(status, 404);
     assert.equal(body.error.code, 'entrega_link_invalido');
@@ -251,13 +270,46 @@ test('codigo valido com pedido ja entregue responde link invalido, sem dado', as
   }
 });
 
-test('pedido em waitingForDelivery responde igual, porque ainda nao ha entregador', async () => {
-  const { app } = servidor({ p1: pedido({ currentPurchaseStatus: 'PurchaseStatus.waitingForDelivery' }) });
+test('pedido em waitingForDelivery sem entregador responde igual, porque ainda nao ha entregador', async () => {
+  const { app } = servidor({ p1: pedido({ currentPurchaseStatus: STATUS_DE_ESPERA, deliveryPerson: null }) });
 
-  const { status, body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+  for (const rota of ['resumo', 'iniciar-rota']) {
+    const { status, body } = await chamar(app, rota, { codigo: 'A7K2Z9' });
+    assert.equal(status, 404);
+    assert.equal(body.error.code, 'entrega_link_invalido');
+  }
+});
 
-  assert.equal(status, 404);
-  assert.equal(body.error.code, 'entrega_link_invalido');
+test('fluxo novo: aguardando com entregador -> Iniciar rota grava deliveryRoute -> Entregue', async () => {
+  const { app, firestore } = servidor({ p1: pedido({ currentPurchaseStatus: STATUS_DE_ESPERA }) });
+
+  const resumo = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+  assert.equal(resumo.status, 200);
+  assert.equal(resumo.body.data.etapa, 'aguardando');
+  assert.equal(resumo.body.data.troco, 25.5, 'o resto do resumo e o mesmo');
+
+  // Aguardando, o "Entregue" ainda nao vale: so depois de iniciar a rota.
+  assert.equal((await chamar(app, 'entregue', { codigo: 'A7K2Z9' })).status, 404);
+  assert.equal(firestore.documentos.get('p1').currentPurchaseStatus, STATUS_DE_ESPERA);
+
+  const iniciar = await chamar(app, 'iniciar-rota', { codigo: 'A7K2Z9' });
+  assert.equal(iniciar.status, 200);
+  assert.equal(iniciar.body.data.etapa, 'em_rota');
+  assert.equal(iniciar.body.data.iniciadaPor, 'Joao Entregador');
+  const gravado = firestore.documentos.get('p1');
+  assert.equal(gravado.currentPurchaseStatus, STATUS_DE_ROTA);
+  assert.equal(gravado.statusList.at(-1).purchaseStatus, STATUS_DE_ROTA);
+  assert.equal(gravado.routeStartedBy, 'Joao Entregador');
+  assert.equal(gravado.routeStartedSource, 'entregador_link');
+  assert.ok(gravado.routeStartedAt, 'routeStartedAt gravado');
+  const novos = Object.keys(gravado).filter((campo) => !Object.keys(pedido()).includes(campo));
+  assert.deepEqual(novos.sort(), ['routeStartedAt', 'routeStartedBy', 'routeStartedSource']);
+
+  // Segundo toque: ja em rota, o link nao inicia de novo.
+  assert.equal((await chamar(app, 'iniciar-rota', { codigo: 'A7K2Z9' })).status, 404);
+  assert.equal((await chamar(app, 'resumo', { codigo: 'A7K2Z9' })).body.data.etapa, 'em_rota');
+  assert.equal((await chamar(app, 'entregue', { codigo: 'A7K2Z9' })).status, 200);
+  assert.equal(firestore.documentos.get('p1').currentPurchaseStatus, STATUS_DE_ENTREGA);
 });
 
 test('codigo inexistente responde a mesma coisa que pedido inexistente', async () => {
@@ -521,4 +573,31 @@ test('a coordenada tambem vem na resposta da gravacao, e o resto do retorno nao 
   assert.deepEqual(body.data.coordenada, { lat: -16.3285, lng: -48.9534 });
   assert.equal(body.data.status, 'entregue');
   assert.equal(typeof body.data.endereco, 'string');
+});
+
+test('devolverAoCliente e receberDoCliente vao a pagina em centavos; fora de inteiro positivo vem nulo (RP-51, item 2.1)', async () => {
+  const casos = [
+    ['devolver 490', { devolverAoCliente: 490 }, { devolverAoCliente: 490, receberDoCliente: null }],
+    ['receber 1235', { receberDoCliente: 1235 }, { devolverAoCliente: null, receberDoCliente: 1235 }],
+    ['ausentes', {}, { devolverAoCliente: null, receberDoCliente: null }],
+    ['zero', { devolverAoCliente: 0, receberDoCliente: 0 }, { devolverAoCliente: null, receberDoCliente: null }],
+    ['negativo', { devolverAoCliente: -10 }, { devolverAoCliente: null, receberDoCliente: null }],
+    ['quebrado', { receberDoCliente: 4.9 }, { devolverAoCliente: null, receberDoCliente: null }],
+    ['texto', { devolverAoCliente: '490' }, { devolverAoCliente: null, receberDoCliente: null }],
+  ];
+  for (const [rotulo, extra, esperado] of casos) {
+    const { app } = servidor({ p1: pedido(extra) });
+    const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+    assert.deepEqual(
+      { devolverAoCliente: body.data.devolverAoCliente, receberDoCliente: body.data.receberDoCliente },
+      esperado,
+      rotulo,
+    );
+  }
+
+  // Tambem nas respostas de "Iniciar rota" e "Entregue".
+  const rota = servidor({ p1: pedido({ currentPurchaseStatus: STATUS_DE_ESPERA, devolverAoCliente: 490 }) });
+  assert.equal((await chamar(rota.app, 'iniciar-rota', { codigo: 'A7K2Z9' })).body.data.devolverAoCliente, 490);
+  const entrega = servidor({ p1: pedido({ receberDoCliente: 1235 }) });
+  assert.equal((await chamar(entrega.app, 'entregue', { codigo: 'A7K2Z9' })).body.data.receberDoCliente, 1235);
 });

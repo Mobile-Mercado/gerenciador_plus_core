@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { AppError } from '../../domain/errors/AppError.js';
 
 const importProductsSchema = z.object({
   establishmentId: z.string().min(1).max(120),
@@ -11,6 +12,8 @@ const approvalSchema = z.object({
   approved: z.boolean(),
   note: z.string().max(500).optional().default(''),
 });
+
+const aprovacaoFormalSchema = z.object({ nome: z.string().trim().min(2).max(80) });
 
 const pipelineParamsSchema = z.object({
   establishmentId: z.string().min(1).max(120),
@@ -25,8 +28,13 @@ export function createImplantacaoRoutes({
   implantationAdminMiddleware,
   requirePermission,
   accountForRequest,
+  registrarAcaoDoAdmin = null,
 }) {
   const router = Router();
+  // Admin da plataforma agindo na loja escolhida (X-Loja-Alvo) importa sem a chave da loja.
+  const podeEditarProdutos = (request, response, next) => (request.lojaAlvo
+    ? next()
+    : requirePermission('products.edit')(request, response, next));
 
   router.get('/admin/pipelines', implantationAdminMiddleware, async (request, response, next) => {
     try {
@@ -61,7 +69,7 @@ export function createImplantacaoRoutes({
     }
   });
 
-  router.post('/importar-produtos', requirePermission('products.edit'), async (request, response, next) => {
+  router.post('/importar-produtos', podeEditarProdutos, async (request, response, next) => {
     let streamStarted = false;
 
     const writeEvent = (event) => {
@@ -88,6 +96,15 @@ export function createImplantacaoRoutes({
         onProgress: (progress) => writeEvent({ type: 'progress', ...progress }),
       });
 
+      if (request.lojaAlvo && registrarAcaoDoAdmin) {
+        await registrarAcaoDoAdmin({
+          uid: request.auth?.uid,
+          email: request.auth?.email || null,
+          rota: request.originalUrl,
+          lojaId: request.lojaAlvo,
+          detalhes: { acao: 'importar_produtos', arquivo: input.fileName || null, resumo: summary },
+        });
+      }
       writeEvent({ type: 'done', data: summary });
       response.end();
     } catch (error) {
@@ -101,6 +118,25 @@ export function createImplantacaoRoutes({
         response.end();
         return;
       }
+      next(error);
+    }
+  });
+
+  // Aprovacao formal da implantacao pelo dono da loja (botao da faixa do Gerenciador Plus).
+  router.post('/aprovacao-formal', async (request, response, next) => {
+    try {
+      const { nome } = aprovacaoFormalSchema.parse(request.body);
+      const conta = await accountForRequest(request);
+      if (conta.porAdminDaPlataforma || conta.permissions?.isAdmin !== true) {
+        throw new AppError('Só o dono da loja faz a aprovação formal.', { statusCode: 403, code: 'implantacao_aprovacao_so_dono' });
+      }
+      const pipeline = await manageImplantationPipelines.aprovarFormalmente({
+        establishmentId: conta.establishmentId,
+        nome,
+        uid: request.auth?.uid,
+      });
+      response.json({ data: pipeline });
+    } catch (error) {
       next(error);
     }
   });

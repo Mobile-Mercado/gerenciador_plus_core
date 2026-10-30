@@ -26,15 +26,29 @@ export class FirestoreEstablishmentAccessRepository extends EstablishmentAccessR
     const establishmentId = String(userData.id || userSnapshot.id || '').trim();
     if (!establishmentId) return null;
 
-    const establishmentSnapshot = await this.firestore
+    // Dono so da loja que aponta para ele (13/10/2026): a loja do campo id so vale quando o
+    // userReference dela e este mesmo documento de Users. Sem isso, qualquer conta que gravasse
+    // no proprio Users o id de outra loja viraria dona dela.
+    let establishmentSnapshot = await this.firestore
       .collection('estabelecimentos')
       .doc(establishmentId)
       .get();
+    if (!lojaApontaPara(establishmentSnapshot, userSnapshot.ref)) {
+      // Loja do cadastro pelo servidor: Users/{uid}.id e o proprio uid, como o app gerenciador
+      // espera, e a loja e achada por userReference = Users/{uid}.
+      const porReferencia = await this.firestore
+        .collection('estabelecimentos')
+        .where('userReference', '==', userSnapshot.ref)
+        .limit(1)
+        .get();
+      establishmentSnapshot = porReferencia.empty ? null : porReferencia.docs[0];
+    }
+    const temLoja = Boolean(establishmentSnapshot?.exists);
 
     return {
       uid,
       userId: userSnapshot.id,
-      establishmentId,
+      establishmentId: temLoja ? establishmentSnapshot.id : establishmentId,
       userDocument: {
         id: userSnapshot.id,
         name: userData.name || null,
@@ -43,10 +57,10 @@ export class FirestoreEstablishmentAccessRepository extends EstablishmentAccessR
         image: userData.image || null,
         userType: userData.userType || null,
       },
-      establishmentDocument: establishmentSnapshot.exists
+      establishmentDocument: temLoja
         ? sessionEstablishment(establishmentSnapshot.id, establishmentSnapshot.data())
         : null,
-      hasEstablishment: establishmentSnapshot.exists,
+      hasEstablishment: temLoja,
     };
   }
 
@@ -104,6 +118,8 @@ export class FirestoreEstablishmentAccessRepository extends EstablishmentAccessR
       permissions: {
         isAdmin: groupData?.isAdmin === true,
         groupId: groupId || null,
+        // O grupo vale o que esta gravado, na sessao e nas barreiras do Core (RP-65, E.1: sai a
+        // regra de transicao do E.8, sem chave herdada).
         keys: Array.isArray(groupData?.permissions) ? groupData.permissions : [],
       },
     };
@@ -112,9 +128,17 @@ export class FirestoreEstablishmentAccessRepository extends EstablishmentAccessR
   async userCanAccess({ uid, establishmentId }) {
     if (!uid || !establishmentId) return false;
 
+    // Mesma regra do dono: so a loja cujo userReference e o Users da conta.
     const account = await this.findAccountByUid(uid);
-    return account?.establishmentId === establishmentId;
+    return account?.hasEstablishment === true && account.establishmentId === establishmentId;
   }
+}
+
+// A loja aponta para este Users quando userReference e o mesmo documento (mesmo caminho).
+function lojaApontaPara(lojaSnapshot, usuarioRef) {
+  if (!lojaSnapshot?.exists) return false;
+  const referencia = lojaSnapshot.data()?.userReference;
+  return Boolean(referencia?.path) && referencia.path === usuarioRef?.path;
 }
 
 function sessionEstablishment(id, data = {}) {
@@ -126,5 +150,8 @@ function sessionEstablishment(id, data = {}) {
     coorporativeName: data.coorporativeName || null,
     image: data.image || data.imageUrl || null,
     userType: data.userType || null,
+    // Pedido de loja do cadastro novo. Loja antiga nao tem status e segue como hoje.
+    status: data.status || null,
+    motivoRecusa: data.status === 'recusada' ? data.motivoRecusa || null : null,
   };
 }

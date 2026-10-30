@@ -1,4 +1,6 @@
+import { assertLojaLiberada } from '../../domain/cadastro/lojaLiberada.js';
 import { AppError } from '../../domain/errors/AppError.js';
+import { contaDoAdminNaLoja } from '../../http/middlewares/lojaAlvoDoAdmin.js';
 
 // Sem `exp` no token, guarda a identificacao por um minuto, como o cache de
 // permissoes de requirePermission.js.
@@ -14,21 +16,21 @@ export class ManageManagerData {
     this.accountCache = new Map();
   }
 
-  async getDocument({ actorUid, claims, target }) {
-    return this.gateway.getDocument({ actor: await this.actor(actorUid, claims), target });
+  async getDocument({ actorUid, claims, target, lojaAlvo }) {
+    return this.gateway.getDocument({ actor: await this.actor(actorUid, claims, lojaAlvo), target });
   }
 
-  async getDocuments({ actorUid, claims, target }) {
-    return this.gateway.getDocuments({ actor: await this.actor(actorUid, claims), target });
+  async getDocuments({ actorUid, claims, target, lojaAlvo }) {
+    return this.gateway.getDocuments({ actor: await this.actor(actorUid, claims, lojaAlvo), target });
   }
 
-  async countDocuments({ actorUid, claims, target }) {
-    return this.gateway.countDocuments({ actor: await this.actor(actorUid, claims), target });
+  async countDocuments({ actorUid, claims, target, lojaAlvo }) {
+    return this.gateway.countDocuments({ actor: await this.actor(actorUid, claims, lojaAlvo), target });
   }
 
-  async mutate({ actorUid, claims, request }) {
+  async mutate({ actorUid, claims, request, lojaAlvo }) {
     const result = await this.gateway.mutate({
-      actor: await this.actor(actorUid, claims),
+      actor: await this.actor(actorUid, claims, lojaAlvo),
       request,
     });
     establishmentIdsTouchingAccess(request).forEach((id) => this.forgetEstablishment(id));
@@ -39,8 +41,8 @@ export class ManageManagerData {
   // leituras correm em paralelo e cada uma passa pela politica como se fosse a rota
   // individual. Devolve um resultado por leitura, na ordem da entrada; leitura que
   // falha vira erro daquele item e nao derruba as outras.
-  async readBatch({ actorUid, claims, reads = [] }) {
-    const actor = await this.actor(actorUid, claims);
+  async readBatch({ actorUid, claims, reads = [], lojaAlvo }) {
+    const actor = await this.actor(actorUid, claims, lojaAlvo);
     const settled = await Promise.allSettled(reads.map((read) => this.readOne(actor, read)));
     return settled.map((result) => (result.status === 'fulfilled'
       ? { ok: true, data: result.value }
@@ -59,10 +61,10 @@ export class ManageManagerData {
   }
 
   async subscribe({
-    actorUid, claims, target, onSnapshot, onError,
+    actorUid, claims, target, onSnapshot, onError, lojaAlvo,
   }) {
     return this.gateway.subscribe({
-      actor: await this.actor(actorUid, claims),
+      actor: await this.actor(actorUid, claims, lojaAlvo),
       target,
       onSnapshot,
       onError,
@@ -75,7 +77,11 @@ export class ManageManagerData {
   // leituras no Firestore (tres para funcionario) so para descobrir de novo quem
   // esta pedindo. A chave e o uid com os campos do token, e a validade vai ate o
   // `exp` dele.
-  async actor(uid, claims) {
+  //
+  // `lojaAlvo` vem do cabecalho X-Loja-Alvo, ja conferido como admin da plataforma em
+  // lojaAlvoDoAdmin.js: o admin age como dono da loja escolhida.
+  async actor(uid, claims, lojaAlvo = null) {
+    if (lojaAlvo) return contaDoAdminNaLoja(uid, lojaAlvo);
     const key = accountCacheKey(uid, claims);
     const now = this.clock();
     const cached = this.accountCache.get(key);
@@ -96,6 +102,7 @@ export class ManageManagerData {
         code: 'data_establishment_required',
       });
     }
+    assertLojaLiberada(account);
     const exp = Number(claims?.exp);
     this.accountCache.set(key, {
       account,

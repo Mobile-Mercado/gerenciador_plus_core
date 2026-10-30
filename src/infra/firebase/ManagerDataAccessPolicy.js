@@ -22,7 +22,11 @@ const CUSTOMER_CACHE_TTL_MS = 30 * 60 * 1000;
 const VERIFICATION_TTL_MS = 10 * 60 * 1000;
 // Status que contam como cancelamento do pedido: exigem requests.cancel.
 const CANCEL_STATUSES = new Set(['canceled', 'cancelled', 'cancelado', 'denied', 'giveUp']);
-const PRICE_FIELDS = new Set(['price', 'promotionPrice', 'historyPrice', 'previewPrice']);
+// Campos de preco: a promocao (como o app gerenciador grava) pede a mesma permissao de preco.
+const PRICE_FIELDS = new Set([
+  'price', 'currentPrice', 'promotionPrice', 'historyPrice', 'previewPrice',
+  'promotionalPrice', 'promotionStartAt', 'promotionEndAt', 'promotionSource',
+]);
 const PRODUCT_EDIT_COLLECTIONS = new Set(['implantacaoGrenciador', 'ProductCategories', 'ProductSubcategories', 'SugestoesCategorias']);
 // Catalogo da loja (decisao do Thay de 12/10/2026): nome de categoria e subcategoria so
 // muda pela rota do nome de exibicao, que formata e confere repetido.
@@ -32,6 +36,20 @@ const SUGESTAO_FIELDS = new Set([
   'nome', 'tipo', 'categoriaId', 'categoriaNome', 'observacao', 'produtos', 'produtosIds', 'quem', 'em', 'estado',
 ]);
 const COUPON_COLLECTIONS = new Set(['Cupons', 'Campaigns']);
+// Campos do documento da loja e da implantacao que so o Admin muda.
+// isActive (ligar no app Mobile Supermercados) e so pelo botao do Admin.
+const CAMPOS_DA_LOJA_SO_ADMIN = [
+  'isActive', 'status', 'motivoRecusa', 'aprovadoPor', 'aprovadoEm', 'recusadoPor', 'recusadoEm', 'enviadoEm',
+  'origemCadastro', 'cnpjConferido', 'offerColor', 'scheduling.contracted',
+  // Contrato da versao 55 (cola RP-13): interruptores do app e blocos da Home, so pelo Admin
+  // (PATCH /api/admin/estabelecimentos/:lojaId/app-do-cliente).
+  'featureFlags', 'aparenciaHome',
+  // Dono da loja (RP-68, A.1): userReference so muda pelo Admin ("Corrigir acesso"), como na regra.
+  'userReference',
+];
+// Campos da loja que so mudam pela rota do Core que valida: a retirada vai por /api/loja/entrega.
+const CAMPOS_DA_LOJA_SO_PELA_ROTA = ['retirada'];
+const CAMPOS_DA_IMPLANTACAO_SO_ADMIN = ['aprovacaoFormal', 'appNasLojas'];
 const ALLOWED_AUTOMATIONS = new Set([
   'padronizador_nomes',
   'taggeador',
@@ -67,6 +85,12 @@ const CONFERENCIA_FIELDS = new Set([
   'ultimaEm',
   'ultimaPor',
 ]);
+// Mapas do documento da loja com a configuracao de pagamento (RP-60). A API mescla os dois
+// (safrapay_mobile_mercado__api, companyPaymentConfig.js, normalizeGatewayConfig).
+const MAPAS_DE_PAGAMENTO = ['paymentGateway', 'safrapay'];
+// Caminhos dentro de safrapay que o painel publicado grava pelo proxy. Leitura de 28/10/2026
+// (web origin/main 6c25a72): nenhum. Entra aqui so o que o painel passar a gravar.
+const SAFRAPAY_LIBERADO_AO_PAINEL = new Set();
 const USER_UPDATE_FIELDS = new Set(['segmento', 'isTestAccount']);
 const BOOLEAN_MUTATION_FIELDS = new Set(['isTest', 'isTestAccount']);
 const CHAT_UPDATE_FIELDS = new Set(['lastMessage', 'updatedAt']);
@@ -159,6 +183,7 @@ export class ManagerDataAccessPolicy {
 
     const path = sourcePath(target);
     if (!path) throw invalidTarget();
+    if (isSoDoCore(path)) throw forbidden();
     if (isOwnEstablishmentPath(path, actor.establishmentId)) return;
     if (isAllowedAutomation(path)) return;
     if (isSearchTermsPath(path, actor.establishmentId)) return;
@@ -188,6 +213,7 @@ export class ManagerDataAccessPolicy {
     this.assertActor(actor);
     const path = mutation?.target?.path;
     if (!path) throw invalidTarget();
+    if (isSoDoCore(path)) throw forbidden();
 
     // Barreira por chave. Ator sem `permissions` e o dono, que passa em tudo.
     assertPermission(
@@ -196,7 +222,9 @@ export class ManagerDataAccessPolicy {
     );
 
     if (isOwnEstablishmentPath(path, actor.establishmentId)) {
+      await this.assertPagamentoDaLoja(actor, mutation, pathParts(path));
       await this.assertCatalogoDaLoja(actor, mutation, pathParts(path));
+      await this.assertCodigoDeBarras(mutation, pathParts(path));
       return;
     }
 
@@ -232,11 +260,63 @@ export class ManagerDataAccessPolicy {
     throw forbidden();
   }
 
+  // Pagamento da loja (RP-60, dossie 83): o proxy grava com o Admin SDK, que nao passa pela
+  // regra do Firestore. Pelo proxy o painel nao grava nada em paymentGateway nem em safrapay
+  // (credencial e escolha da credencial: merchantRef, merchantConfigId, useDefaultMerchant),
+  // nem com caminho pontuado nem com o mapa inteiro, e nao apaga esses mapas gravando o
+  // documento inteiro ou apagando o documento. O Admin da Mobile grava por fora do proxy, e o
+  // Admin da plataforma agindo na loja (X-Loja-Alvo) passa, como em assertCamposDoAdmin.
+  async assertPagamentoDaLoja(actor, mutation, parts) {
+    if (actor.porAdminDaPlataforma || parts.length !== 2) return;
+    if (mutation.operation !== 'delete') {
+      const tocados = caminhosDaEscritaNoPagamento(mutation.data, mutation.operation === 'set' && mutation.options?.merge === true);
+      if (tocados.some(caminhoDePagamentoBloqueado)) {
+        throw forbidden(undefined, 'campo_de_pagamento_so_admin');
+      }
+    }
+    const substituiTudo = mutation.operation === 'delete'
+      || (mutation.operation === 'set' && mutation.options?.merge !== true);
+    if (!substituiTudo) return;
+    const atual = (await this.firestore.doc(parts.join('/')).get()).data() || {};
+    if (MAPAS_DE_PAGAMENTO.some((mapa) => Object.hasOwn(atual, mapa))) {
+      throw forbidden(undefined, 'campo_de_pagamento_so_admin');
+    }
+  }
+
+  // Codigo de barras repetido (contrato K6, cola RP-62, item E.4): gravar barCode nao vazio igual ao
+  // de outro produto da mesma loja (outro id, fora da lixeira: isTrashed diferente de true e sem
+  // deletedAt, o mesmo filtro da web) da 409 com o nome desse produto. Vale para quem grava pelo
+  // proxy, inclusive o Admin na loja. So confere ao criar o produto ou quando o barCode gravado muda
+  // em relacao ao do documento atual (RP-65, B.1): produto que ja esta repetido salva normalmente
+  // quando o codigo nao muda.
+  async assertCodigoDeBarras(mutation, parts) {
+    if (parts.length !== 4 || parts[2] !== 'Products') return;
+    if (mutation.operation !== 'set' && mutation.operation !== 'update') return;
+    if (!mutation.data || !Object.hasOwn(mutation.data, 'barCode')) return;
+    const valor = mutation.data.barCode;
+    const texto = textoDoCodigoDeBarras(valor);
+    if (!texto) return;
+    const atual = await this.firestore.doc(parts.join('/')).get();
+    if (atual.exists && textoDoCodigoDeBarras(atual.data()?.barCode) === texto) return;
+    const produtos = this.firestore.collection(parts.slice(0, 3).join('/'));
+    const procurados = [...new Set([valor, texto])];
+    const achados = await Promise.all(procurados.map((codigo) => produtos.where('barCode', '==', codigo).get()));
+    const outro = achados.flatMap((snapshot) => snapshot.docs)
+      .find((documento) => documento.id !== parts[3] && produtoNaLoja(documento.data()));
+    if (!outro) return;
+    const nome = String(outro.data()?.name || '').trim();
+    throw new AppError(`Já existe um produto com este código de barras: ${nome}.`, {
+      statusCode: 409,
+      code: 'codigo_de_barras_repetido',
+    });
+  }
+
   // Categoria e subcategoria da loja nascem so pelo Ativar do Core (copia da lista padrao),
   // o nome muda so pelo nome de exibicao e categoria travada na loja nao liga. Sugestao de
   // categoria nasce pendente e nao muda pelo painel: quem decide e o Admin.
   async assertCatalogoDaLoja(actor, mutation, parts) {
     const colecao = parts[2];
+    await this.assertCamposDoAdmin(actor, mutation, parts);
     if (parts.length !== 4) return;
 
     if (colecao === 'ProductCategories' || colecao === 'ProductSubcategories') {
@@ -276,6 +356,37 @@ export class ManagerDataAccessPolicy {
       }
       if ((await this.firestore.doc(parts.join('/')).get()).exists) {
         throw forbidden('Sugestao so pode ser criada.', 'sugestao_so_criacao');
+      }
+    }
+  }
+
+  // Campos que so o Admin muda (rodada de 13/10/2026): situacao do pedido de loja, cor de oferta,
+  // agendamento contratado e as marcas da implantacao. scheduling.enabled o lojista so liga com o
+  // agendamento contratado. O admin da plataforma agindo na loja (X-Loja-Alvo) passa.
+  async assertCamposDoAdmin(actor, mutation, parts) {
+    if (actor.porAdminDaPlataforma || mutation.operation === 'delete') return;
+    const ehLoja = parts.length === 2;
+    const ehPipeline = parts.length === 4 && parts[2] === 'implantacaoGrenciador';
+    if (!ehLoja && !ehPipeline) return;
+    const tocados = caminhosTocados(mutation.data, mutation.operation === 'update');
+    const proibidos = ehLoja ? CAMPOS_DA_LOJA_SO_ADMIN : CAMPOS_DA_IMPLANTACAO_SO_ADMIN;
+    if (tocados.some((caminho) => proibidos.some((campo) => caminho === campo || caminho.startsWith(`${campo}.`) || campo.startsWith(`${caminho}.`)))) {
+      throw forbidden('Este campo muda só pelo Admin.', 'campo_so_admin');
+    }
+    if (ehLoja && tocados.some((caminho) => CAMPOS_DA_LOJA_SO_PELA_ROTA.some((campo) => caminho === campo || caminho.startsWith(`${campo}.`)))) {
+      throw forbidden('Este campo muda pela tela de Entregas.', 'campo_so_pela_rota');
+    }
+    // Gravar o documento inteiro (set sem merge) apagaria os campos do Admin que ja existem.
+    if (mutation.operation === 'set' && mutation.options?.merge !== true) {
+      const atual = (await this.firestore.doc(parts.join('/')).get()).data() || {};
+      if (proibidos.some((campo) => campo.split('.').reduce((valor, parte) => valor?.[parte], atual) !== undefined)) {
+        throw forbidden('Este campo muda só pelo Admin.', 'campo_so_admin');
+      }
+    }
+    if (ehLoja && tocados.some((caminho) => caminho === 'scheduling.enabled')) {
+      const loja = await this.firestore.doc(parts.join('/')).get();
+      if (loja.data()?.scheduling?.contracted !== true) {
+        throw forbidden('O agendamento não está contratado para esta loja.', 'agendamento_nao_contratado');
       }
     }
   }
@@ -556,6 +667,69 @@ function sourcePath(target) {
 
 function pathParts(path) {
   return String(path || '').split('/').filter(Boolean);
+}
+
+// Caminhos de campo que a escrita mexe. No update, a chave (com ponto ou nao) troca o campo
+// inteiro; no set, mapas aninhados viram caminhos com ponto.
+function caminhosTocados(data, ehUpdate) {
+  const caminhos = [];
+  const visitar = (valor, prefixo) => {
+    Object.entries(valor || {}).forEach(([chave, item]) => {
+      const caminho = prefixo ? `${prefixo}.${chave}` : chave;
+      const mapa = item && typeof item === 'object' && !Array.isArray(item) && !item.__managerDataType && !item.methodName;
+      if (!ehUpdate && mapa && Object.keys(item).length) visitar(item, caminho);
+      else caminhos.push(caminho);
+    });
+  };
+  visitar(data && typeof data === 'object' ? data : {}, '');
+  return caminhos;
+}
+
+// Subcolecoes da loja que so as rotas proprias do Core leem e gravam (validacao e permissao
+// delas): o celular dos entregadores (entregadoresPrivado, 17/10/2026). O BFF nunca passa.
+const SUBCOLECOES_SO_DO_CORE = new Set(['entregadoresPrivado']);
+
+function isSoDoCore(path) {
+  const parts = pathParts(path);
+  return parts[0] === 'estabelecimentos' && SUBCOLECOES_SO_DO_CORE.has(parts[2]);
+}
+
+function ehMapaSimples(valor) {
+  return valor !== null && typeof valor === 'object' && Object.getPrototypeOf(valor) === Object.prototype;
+}
+
+// Caminhos que a escrita toca, para a trava de pagamento (RP-60). No update cada chave e um caminho pontuado e um mapa no valor
+// troca o mapa inteiro. No set com merge os mapas se mesclam, entao o caminho desce ate a folha.
+function caminhosDaEscritaNoPagamento(data, mesclando) {
+  const caminhos = [];
+  const descer = (valor, prefixo) => {
+    if (mesclando && ehMapaSimples(valor) && Object.keys(valor).length) {
+      Object.entries(valor).forEach(([chave, item]) => descer(item, `${prefixo}.${chave}`));
+      return;
+    }
+    caminhos.push(prefixo);
+  };
+  Object.entries(data || {}).forEach(([chave, valor]) => descer(valor, chave));
+  return caminhos;
+}
+
+function caminhoDePagamentoBloqueado(caminho) {
+  const [mapa, ...resto] = String(caminho).split('.').map((parte) => parte.replace(/`/g, ''));
+  if (mapa === 'paymentGateway') return true;
+  if (mapa !== 'safrapay') return false;
+  const dentro = resto.join('.');
+  return !dentro || ![...SAFRAPAY_LIBERADO_AO_PAINEL]
+    .some((liberado) => dentro === liberado || dentro.startsWith(`${liberado}.`));
+}
+
+function produtoNaLoja(produto = {}) {
+  return produto?.isTrashed !== true && !produto?.deletedAt;
+}
+
+// barCode como texto (sem espacos nas pontas; numero vira texto); vazio ou de outro tipo, ''.
+function textoDoCodigoDeBarras(valor) {
+  if (typeof valor === 'string') return valor.trim();
+  return Number.isFinite(valor) ? String(valor) : '';
 }
 
 function isOwnEstablishmentPath(path, establishmentId) {

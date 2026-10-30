@@ -2,7 +2,24 @@ import { createApp } from './app.js';
 import { GenerateAiResponseUseCase } from './application/ai/GenerateAiResponseUseCase.js';
 import { GetDailyHomeOverviewUseCase } from './application/ai/GetDailyHomeOverviewUseCase.js';
 import { GetManagerSession } from './application/auth/GetManagerSession.js';
+import { AdministradoresDaPlataforma } from './application/admin/AdministradoresDaPlataforma.js';
+import { DadosDoAdmin } from './application/admin/DadosDoAdmin.js';
+import { EntregaDaLoja } from './application/admin/EntregaDaLoja.js';
+import { JornadaDeEntrada } from './application/admin/JornadaDeEntrada.js';
+import { Franquias } from './application/admin/Franquias.js';
+import { LojaNoAdmin } from './application/admin/LojaNoAdmin.js';
+import { PedidosDeLoja } from './application/admin/PedidosDeLoja.js';
 import { SugestoesDosClientes } from './application/admin/SugestoesDosClientes.js';
+import { CadastroDeLoja } from './application/cadastro/CadastroDeLoja.js';
+import { ClienteDaPlataforma } from './application/cadastro/ClienteDaPlataforma.js';
+import { ImagensDaLoja } from './application/cadastro/ImagensDaLoja.js';
+import { JornadaDoCadastro } from './application/cadastro/JornadaDoCadastro.js';
+import { LimiteDeTentativas } from './application/cadastro/LimiteDeTentativas.js';
+import { BannersDaLoja } from './application/loja/BannersDaLoja.js';
+import { AppDoClienteDaLoja } from './application/loja/AppDoClienteDaLoja.js';
+import { EntregadoresDaLoja } from './application/loja/EntregadoresDaLoja.js';
+import { FormasDePagamento } from './application/loja/FormasDePagamento.js';
+import { FirestoreRest } from './infra/firebase/FirestoreRest.js';
 import { CatalogoDaLoja } from './application/catalogo/CatalogoDaLoja.js';
 import { ManageCatalogoPadrao } from './application/catalogo/ManageCatalogoPadrao.js';
 import { TravasDeCategoria } from './application/catalogo/TravasDeCategoria.js';
@@ -24,7 +41,14 @@ import { FirestorePlatformAdminRepository } from './infra/firebase/FirestorePlat
 import { FirestoreUsoIaRepository } from './infra/firebase/FirestoreUsoIaRepository.js';
 import { FirestoreWebNotificationTokenRepository } from './infra/firebase/FirestoreWebNotificationTokenRepository.js';
 import { ManagerDataAccessPolicy } from './infra/firebase/ManagerDataAccessPolicy.js';
-import { getFirestoreDb, getStorageBucket } from './infra/firebase/firebaseAdmin.js';
+import {
+  getFirebaseAppCheck, getFirebaseAuth, getFirestoreDb, getStorageBucket,
+} from './infra/firebase/firebaseAdmin.js';
+import { registrarAcaoDoAdmin } from './infra/firebase/registroDoAdmin.js';
+import { BrasilApiCnpj } from './infra/cnpj/BrasilApiCnpj.js';
+import { FieldValue } from 'firebase-admin/firestore';
+import { InstalacoesDosApps } from './application/admin/InstalacoesDosApps.js';
+import { criarFontesDeInstalacoes } from './infra/relatorios/fontesDeInstalacoes.js';
 import { createAdminAuditMiddleware } from './http/middlewares/adminAudit.js';
 import { createAiGateway } from './infra/ai/createAiGateway.js';
 import { logger } from './infra/logger/logger.js';
@@ -84,12 +108,64 @@ const manageCatalogoPadrao = new ManageCatalogoPadrao({
   bucket: getStorageBucket(env.STORAGE_BUCKET),
 });
 const catalogoDaLoja = new CatalogoDaLoja({ firestore, travas });
+// Cadastro de loja pelo servidor e Admin completo (rodada de 13/10/2026).
+const firebaseAuth = getFirebaseAuth();
+const imagensDaLoja = new ImagensDaLoja({ firestore, bucket: getStorageBucket(env.STORAGE_BUCKET) });
+const limitesDoCadastro = new LimiteDeTentativas({ firestore });
+// Jornada do cadastro (funil do Admin): eventos e rascunhos do app, por instalacao.
+const jornadaDoCadastro = new JornadaDoCadastro({ firestore, limites: limitesDoCadastro });
+const cadastroDeLoja = new CadastroDeLoja({
+  firestore,
+  auth: firebaseAuth,
+  consultaCnpj: new BrasilApiCnpj(),
+  limites: limitesDoCadastro,
+  imagens: imagensDaLoja,
+  jornada: jornadaDoCadastro,
+});
 const app = createApp({
+  cadastroDeLoja,
+  jornadaDoCadastro,
+  // Abertura com o app logado: reconhece o lojista que ja e cliente (corte dos acessos do Admin).
+  clienteDaPlataforma: new ClienteDaPlataforma({ verificarToken: (token) => firebaseAuth.verifyIdToken(token), accessRepository }),
+  jornadaDeEntrada: new JornadaDeEntrada({ firestore }),
+  entregaDaLoja: new EntregaDaLoja({ firestore }),
+  appDoClienteDaLoja: new AppDoClienteDaLoja({ firestore }),
+  formasDePagamento: new FormasDePagamento({ firestore }),
+  entregadoresDaLoja: new EntregadoresDaLoja({ firestore }),
+  verificarAppCheck: (token) => getFirebaseAppCheck().verifyToken(token),
+  imagensDaLoja,
+  pedidosDeLoja: new PedidosDeLoja({ firestore, auth: firebaseAuth, jornada: jornadaDoCadastro }),
+  lojaNoAdmin: new LojaNoAdmin({
+    firestore, auth: firebaseAuth, accessRepository, imagens: imagensDaLoja,
+  }),
+  franquias: new Franquias({ firestore }),
+  administradores: new AdministradoresDaPlataforma({ firestore, auth: firebaseAuth }),
+  dadosDoAdmin: new DadosDoAdmin({ firestore }),
+  firestore,
+  registrarAcaoDoAdmin: (registro) => registrarAcaoDoAdmin(firestore, registro),
+  bannersDaLoja: new BannersDaLoja({
+    firestore,
+    bucket: getStorageBucket(env.STORAGE_BUCKET),
+    restFirestore: new FirestoreRest({ projectId: env.FIRESTORE_PROJECT_ID }),
+  }),
   manageCatalogoPadrao,
   catalogoDaLoja,
   platformAdminRepository,
   adminAuditMiddleware: createAdminAuditMiddleware({ firestore }),
   sugestoesDosClientes: new SugestoesDosClientes({ firestore }),
+  // Tela Instalacoes do Admin: leitura dos Stats/instalacoesApp e o "Atualizar agora".
+  instalacoesDosApps: new InstalacoesDosApps({
+    firestore,
+    FieldValue,
+    fontes: criarFontesDeInstalacoes({
+      projeto: env.INSTALACOES_PROJETO,
+      contaDeServico: env.INSTALACOES_CONTA_DE_SERVICO,
+      bucket: env.PLAY_REPORTS_BUCKET,
+      segredo: env.APPLE_RELATORIOS_SEGREDO,
+      issuerId: env.APPLE_ISSUER_ID,
+      keyId: env.APPLE_KEY_ID,
+    }),
+  }),
   accessRepository,
   generateAiResponseUseCase,
   getDailyHomeOverviewUseCase,
