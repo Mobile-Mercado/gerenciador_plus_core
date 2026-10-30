@@ -42,6 +42,15 @@ const ruleSchema = z.union([
 const temFrete = (rules = []) => rules.some((rule) => rule.type === 'freight');
 const temLeveN = (rules = []) => rules.some((rule) => rule.type === 'bundle');
 
+// Cupom so de frete gratis (RP-88, item 2): com a regra freight de frete gratis, valor 0 quer dizer
+// sem desconto nos produtos e vira discount null antes de validar. Sem essa regra, valor 0 segue
+// recusado. No PATCH, vale quando a regra vem no mesmo corpo (a tela Cupons manda sempre).
+function descontoZeroDoFreteGratis(corpo) {
+  if (corpo?.discount?.value !== 0 || !Array.isArray(corpo.rules)) return corpo;
+  const freteGratis = corpo.rules.some((rule) => rule?.type === 'freight' && rule.freeShipping === true);
+  return freteGratis ? { ...corpo, discount: null } : corpo;
+}
+
 // Objetivo do cupom (RP-62, D.1): texto de 1 a 40 letras, gravado em CuponsBastidores/{id}, nunca
 // no Coupons/{id}. Opcional no Core (RP-65, A.1): so o formulario da tela Cupons exige (radio
 // `required` em CouponForm.jsx); chat, Marketing e campanhas criam sem objetivo. Quando vem, vale a
@@ -49,7 +58,7 @@ const temLeveN = (rules = []) => rules.some((rule) => rule.type === 'bundle');
 const objetivoSchema = z.string().trim().min(1).max(40);
 const novoObjetivoSchema = z.object({ nome: objetivoSchema });
 
-const createCouponSchema = z.object({
+const createCouponSchema = z.preprocess(descontoZeroDoFreteGratis, z.object({
   objetivo: objetivoSchema.optional(),
   code: z.string().min(3).max(30),
   description: z.string().min(1).max(200),
@@ -74,7 +83,7 @@ const createCouponSchema = z.object({
 }).refine(
   (coupon) => coupon.discount !== null || temFrete(coupon.rules) || temLeveN(coupon.rules),
   { message: 'Informe o desconto, a regra de frete ou o leve N.', path: ['discount'] },
-);
+));
 
 const buscaClientesSchema = z.object({ busca: z.string().max(100).optional() });
 
@@ -82,7 +91,7 @@ const couponIdParamsSchema = z.object({
   couponId: z.string().min(1),
 });
 
-const updateCouponSchema = z.object({
+const updateCouponSchema = z.preprocess(descontoZeroDoFreteGratis, z.object({
   objetivo: objetivoSchema.optional(),
   code: z.string().min(3).max(30).optional(),
   description: z.string().min(1).max(200).optional(),
@@ -102,7 +111,7 @@ const updateCouponSchema = z.object({
 }).refine(
   (patch) => Object.keys(patch).length > 0,
   { message: 'Envie ao menos um campo para atualizar.' },
-);
+));
 
 // A loja vem da conta da requisicao (accountForRequest): dono, funcionario com adminOf e Admin da
 // plataforma na loja escolhida (C5.2, 13/10/2026).

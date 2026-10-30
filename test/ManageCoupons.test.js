@@ -414,6 +414,61 @@ test('D6: a rota aceita frete gratis sem desconto e sem fim, e recusa cupom sem 
   }
 });
 
+test('RP-88, item 2: frete gratis com valor 0 e aceito e grava discount null; valor 0 sem frete gratis segue recusado', async () => {
+  const { default: express } = await import('express');
+  const { createCouponRoutes } = await import('../src/http/routes/couponRoutes.js');
+  const { errorHandler } = await import('../src/http/middlewares/errorHandler.js');
+  const created = [];
+  const patches = [];
+  const manageCoupons = createManager({ created });
+  manageCoupons.updateCoupon = async ({ patch }) => { patches.push(patch); };
+  const app = express();
+  app.use(express.json());
+  app.use((request, _response, next) => { request.auth = { uid: 'uid-lojista' }; next(); });
+  app.use('/api/coupons', createCouponRoutes({
+    manageCoupons,
+    requirePermission: () => (_request, _response, next) => next(),
+    accountForRequest: async () => ({ establishmentId: 'loja-1' }),
+  }));
+  app.use(errorHandler);
+  const servidor = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
+  try {
+    const base = `http://127.0.0.1:${servidor.address().port}/api/coupons`;
+    const pedir = (metodo, caminho, corpo) => fetch(base + caminho, { method: metodo, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+    const gratis = { type: 'freight', freeShipping: true };
+    const parcial = { type: 'freight', freeShipping: false, discount: { kind: 'fixed', value: 2 } };
+    const zero = { kind: 'fixed', value: 0 };
+
+    // Frete gratis com valor 0, em R$ ou em %: cria sem desconto nos produtos.
+    assert.equal((await pedir('POST', '', { ...validPayload, code: 'FRETER', discount: zero, rules: [gratis] })).status, 201);
+    assert.equal((await pedir('POST', '', { ...validPayload, code: 'FRETEP', discount: { kind: 'percentage', value: 0 }, rules: [gratis] })).status, 201);
+    assert.equal(created[0].discount, null);
+    assert.equal(created[1].discount, null);
+    assert.deepEqual(created[0].rules, [gratis]);
+
+    // Frete gratis com valor: o desconto fica.
+    assert.equal((await pedir('POST', '', { ...validPayload, code: 'FRETE5', discount: { kind: 'fixed', value: 5 }, rules: [gratis] })).status, 201);
+    assert.deepEqual(created[2].discount, { kind: 'fixed', value: 5 });
+
+    // Valor 0 sem frete gratis: a mesma recusa de antes.
+    for (const [rules, code] of [[[], 'ZERO1'], [[parcial], 'ZERO2'], [[{ type: 'minValue', minValue: 10 }], 'ZERO3']]) {
+      const recusa = await pedir('POST', '', { ...validPayload, code, discount: zero, rules });
+      assert.equal(recusa.status, 400, code);
+      assert.equal((await recusa.json()).error.message, 'Revise os dados enviados.');
+    }
+    assert.equal(created.length, 3);
+
+    // Editar: com a regra no mesmo PATCH (a tela Cupons manda sempre), vale igual.
+    assert.equal((await pedir('PATCH', '/c1', { discount: zero, rules: [gratis] })).status, 200);
+    assert.equal(patches[0].discount, null);
+    assert.equal((await pedir('PATCH', '/c1', { discount: zero, rules: [parcial] })).status, 400);
+    assert.equal((await pedir('PATCH', '/c1', { discount: zero })).status, 400);
+    assert.equal(patches.length, 1);
+  } finally {
+    servidor.close();
+  }
+});
+
 test('F3: leve N pague M e leve N por R$ X: a rota valida N, M e X e grava so a regra', async () => {
   const { default: express } = await import('express');
   const { createCouponRoutes } = await import('../src/http/routes/couponRoutes.js');
