@@ -25,6 +25,13 @@ const MARCA_DE_PEDIDO_NOVO = 'pedidoNovo';
 // Codigo gRPC ALREADY_EXISTS, devolvido pelo create() do Admin SDK quando o documento existe.
 const JA_EXISTE = 6;
 const TAMANHO_DO_TRECHO = 80;
+// Numero do pedido (RP-88, item 1): quem da o numero e o gatilho do mobile_old_web_platform
+// (activatePurchase), que corre ao mesmo tempo que estes. O aviso rele o pedido a cada 2 s, por
+// ate 30 s. Passado o prazo, sai o texto sem numero (o mesmo do firebase-messaging-sw.js do
+// painel), nunca "Pedido  de Cliente".
+const ESPERA_DO_NUMERO_MS = 30000;
+const PASSO_DA_ESPERA_MS = 2000;
+const TEXTO_SEM_NUMERO = 'Você tem um novo pedido';
 
 // Sanitiza strings para prevenir injecao em notificacoes.
 function sanitizeString(str, maxLength = 200) {
@@ -55,7 +62,7 @@ function avisoDePedidoNovo(order = {}) {
   const title = sanitizeString(order.notificationTitle, 100) || '🔔 Novo Pedido!';
   const body =
     sanitizeString(order.notificationBody, 200) ||
-    `Pedido ${orderNumber ? `#${orderNumber}` : ''} de ${clientName}`;
+    (orderNumber ? `Pedido #${orderNumber} de ${clientName}` : TEXTO_SEM_NUMERO);
   return { title, body, orderNumber, clientName };
 }
 
@@ -86,15 +93,41 @@ async function reservarAvisoDePedidoNovo({ db, FieldValue, pedidoId, origem }) {
   }
 }
 
+function avisoJaTemTexto(order = {}) {
+  const { orderNumber } = avisoDePedidoNovo(order);
+  return Boolean(orderNumber || sanitizeString(order.notificationBody, 200));
+}
+
+const pausar = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+// Pedido com o numero, relido do banco enquanto o numero nao vem. Falha ao ler ou prazo vencido:
+// devolve o que tem, e o aviso sai sem numero (o aviso nao se perde).
+async function pedidoComNumero({ db, order, pedidoId, esperar, origem }) {
+  if (avisoJaTemTexto(order)) return order;
+  const referencia = db.collection('PurchaseRequests').doc(String(pedidoId));
+  for (let passado = 0; passado < ESPERA_DO_NUMERO_MS; passado += PASSO_DA_ESPERA_MS) {
+    await esperar(PASSO_DA_ESPERA_MS);
+    try {
+      const lido = (await referencia.get()).data();
+      if (lido && avisoJaTemTexto(lido)) return { ...order, ...lido };
+    } catch (error) {
+      console.warn(`[${origem}] Falha ao reler o pedido ${pedidoId}`, error?.message);
+      return order;
+    }
+  }
+  return order;
+}
+
 // Avisa a loja do pedido novo uma vez so por pedido: reserva a marca e so entao envia.
 // Se o envio falhar depois da reserva, o aviso nao se repete (no maximo uma vez).
-async function avisarPedidoNovoUmaVez({ db, FieldValue, order = {}, pedidoId, companyId, enviar, origem }) {
+async function avisarPedidoNovoUmaVez({ db, FieldValue, order = {}, pedidoId, companyId, enviar, origem, esperar = pausar }) {
   const reservado = await reservarAvisoDePedidoNovo({ db, FieldValue, pedidoId, origem });
   if (!reservado) {
     console.log(`[${origem}] Pedido ${pedidoId} ja avisado; nao repete o aviso`);
     return null;
   }
-  const { title, body, orderNumber, clientName } = avisoDePedidoNovo(order);
+  const pedido = await pedidoComNumero({ db, order, pedidoId, esperar, origem });
+  const { title, body, orderNumber, clientName } = avisoDePedidoNovo(pedido);
   return enviar({
     companyId,
     title,
@@ -154,6 +187,7 @@ function avisoDePedidoCancelado({ antes = {}, depois = {}, pedidoId }) {
 
 module.exports = {
   COLECAO_DE_AVISOS_DO_PEDIDO,
+  ESPERA_DO_NUMERO_MS,
   MARCA_DE_PEDIDO_NOVO,
   STATUS_DESISTENCIA,
   STATUS_ESPERANDO_PAGAMENTO_DO_APP,
