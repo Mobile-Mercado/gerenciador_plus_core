@@ -149,6 +149,7 @@ test('codigo valido com pedido em rota devolve so o que a tela do entregador pre
     pagamento: 'Dinheiro',
     troco: 25.5,
     paymentValue: 100,
+    receberAMais: null,
     pagoOnline: false,
     devolverAoCliente: null,
     receberDoCliente: null,
@@ -183,10 +184,12 @@ test('marcar entregue grava os cinco campos e nada mais', async () => {
   assert.deepEqual(novos.sort(), ['deliveredAt', 'deliveredBy', 'deliveredSource']);
 });
 
-test('valor da nota (paymentValue) so vem junto do troco: total 80, nota 100, troco 20', async () => {
+// RP-125, item 2: com a nota em dinheiro, o troco sai da nota e do total atual; nota igual ao total
+// da troco 0 (antes: sem troco e sem nota).
+test('valor da nota (paymentValue) vem no dinheiro; fora do dinheiro, nao: total 80, nota 100, troco 20', async () => {
   const casos = [
     ['dinheiro com troco', { paymentType: 'PaymentType.cash', paymentValue: 100, valueBack: 20 }, { troco: 20, paymentValue: 100 }],
-    ['dinheiro sem troco', { paymentType: 'PaymentType.cash', paymentValue: 80, valueBack: null }, { troco: null, paymentValue: null }],
+    ['dinheiro, nota igual ao total', { paymentType: 'PaymentType.cash', paymentValue: 80, valueBack: null }, { troco: 0, paymentValue: 80 }],
     ['pix, valor igual ao total', { paymentType: 'PaymentType.pix', paymentValue: 80 }, { troco: null, paymentValue: null }],
   ];
   for (const [rotulo, purchasePayment, esperado] of casos) {
@@ -600,4 +603,29 @@ test('devolverAoCliente e receberDoCliente vao a pagina em centavos; fora de int
   assert.equal((await chamar(rota.app, 'iniciar-rota', { codigo: 'A7K2Z9' })).body.data.devolverAoCliente, 490);
   const entrega = servidor({ p1: pedido({ receberDoCliente: 1235 }) });
   assert.equal((await chamar(entrega.app, 'entregue', { codigo: 'A7K2Z9' })).body.data.receberDoCliente, 1235);
+});
+
+// RP-125, item 2: o troco do link e o do total atual do pedido (a separacao refaz o total e nao
+// refaz o valueBack gravado no fechamento). Conta em centavos inteiros; valores gravados em reais.
+test('troco pelo total atual: nota maior ou igual da "troco", nota menor da "receber a mais" (RP-125)', async () => {
+  const dinheiro = (paymentValue, valueBack) => ({ paymentType: 'PaymentType.cash', paymentValue, valueBack });
+  const casos = [
+    ['total menor depois da separacao', 40, dinheiro(50, 3), { paymentValue: 50, troco: 10, receberAMais: null }],
+    ['total maior que ainda cabe na nota', 48.7, dinheiro(50, 5), { paymentValue: 50, troco: 1.3, receberAMais: null }],
+    ['total maior que a nota (#000067)', 226.96, dinheiro(50, 0), { paymentValue: 50, troco: null, receberAMais: 176.96 }],
+    ['nota igual ao total', 50, dinheiro(50, null), { paymentValue: 50, troco: 0, receberAMais: null }],
+    ['centavos sem ruido', 0.3, dinheiro(0.4, null), { paymentValue: 0.4, troco: 0.1, receberAMais: null }],
+    ['pedido antigo sem nota: como hoje', 80, dinheiro(null, 20), { paymentValue: null, troco: 20, receberAMais: null }],
+    ['pix com paymentValue: nada de troco', 80, { paymentType: 'PaymentType.pix', paymentValue: 80 }, { paymentValue: null, troco: null, receberAMais: null }],
+  ];
+  for (const [rotulo, total, purchasePayment, esperado] of casos) {
+    const { app } = servidor({ p1: pedido({ total, purchasePayment }) });
+    const { body } = await chamar(app, 'resumo', { codigo: 'A7K2Z9' });
+    assert.deepEqual(
+      { paymentValue: body.data.paymentValue, troco: body.data.troco, receberAMais: body.data.receberAMais },
+      esperado,
+      rotulo,
+    );
+    assert.equal(body.data.total, total, 'o total da pagina e o mesmo da conta');
+  }
 });

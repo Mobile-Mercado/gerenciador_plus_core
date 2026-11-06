@@ -203,10 +203,7 @@ function nomeDaLoja(pedido = {}, loja = null) {
 function resumoDoPedido(pedido = {}, { gatewayEmProducao = false, loja = null } = {}) {
   const endereco = pedido.address || {};
   const pagamento = pedido.purchasePayment || {};
-  const troco = Number(pagamento.valueBack || 0);
-  // Valor da nota que o cliente entrega (purchasePayment.paymentValue), para a linha "Paga com
-  // R$ Y" do link (cola RP-13). So vem junto do troco: sem troco, a linha nao existe.
-  const notaDoCliente = Number(pagamento.paymentValue || 0);
+  const dinheiro = trocoPeloTotalAtual(pagamento, pedido.total);
   return {
     pedido: pedido.orderNumber || '',
     loja: nomeDaLoja(pedido, loja),
@@ -221,14 +218,55 @@ function resumoDoPedido(pedido = {}, { gatewayEmProducao = false, loja = null } 
     itens: Array.isArray(pedido.productsCart) ? pedido.productsCart.length : 0,
     total: Number(pedido.total || 0),
     pagamento: pagamento.paymentType || '',
-    troco: troco > 0 ? troco : null,
-    paymentValue: troco > 0 && notaDoCliente > 0 ? notaDoCliente : null,
+    troco: dinheiro.troco,
+    paymentValue: dinheiro.paymentValue,
+    receberAMais: dinheiro.receberAMais,
     pagoOnline: pagamentoOnlineConfirmado(pedido, gatewayEmProducao),
     // Acerto da pesagem do pedido pago pelo app (cola RP-51, item 2.1). Inteiros em centavos,
     // gravados so pelo servidor. Ausente, zero, negativo ou fora de inteiro vem nulo.
     devolverAoCliente: centavosPositivos(pedido.devolverAoCliente),
     receberDoCliente: centavosPositivos(pedido.receberDoCliente),
   };
+}
+
+// Troco do pedido em dinheiro pelo total atual (cola RP-125, item 2). O valueBack e gravado uma vez,
+// no fechamento da compra, e a separacao refaz o total sem refazer o troco. Com a nota do cliente
+// (purchasePayment.paymentValue, em reais), a conta e refeita em centavos inteiros com o total atual
+// do pedido (pedido.total, em reais, o mesmo "total" desta resposta): nota >= total da troco = nota -
+// total; nota < total da receberAMais = total - nota. Pedido sem nota (antigo) segue com o valueBack,
+// como era. Fora do dinheiro, nada.
+function trocoPeloTotalAtual(pagamento = {}, total) {
+  const nota = Number(pagamento.paymentValue || 0);
+  if (ehDinheiro(pagamento.paymentType) && Number.isFinite(nota) && nota > 0) {
+    const diferenca = centavosDe(nota) - centavosDe(Number(total || 0));
+    return {
+      paymentValue: nota,
+      troco: diferenca >= 0 ? diferenca / 100 : null,
+      receberAMais: diferenca < 0 ? -diferenca / 100 : null,
+    };
+  }
+  const trocoGravado = Number(pagamento.valueBack || 0);
+  // Sem nota: o valueBack gravado, como antes (cola RP-13: a nota so vem junto do troco).
+  return {
+    paymentValue: trocoGravado > 0 && nota > 0 ? nota : null,
+    troco: trocoGravado > 0 ? trocoGravado : null,
+    receberAMais: null,
+  };
+}
+
+function formaLimpa(tipo) {
+  return String(tipo || '').replace('PaymentType.', '').toLowerCase();
+}
+
+function ehDinheiro(tipo) {
+  const limpo = formaLimpa(tipo);
+  return limpo.includes('cash') || limpo.includes('dinheiro') || limpo.includes('money');
+}
+
+// Reais em centavos inteiros, sem o ruido do ponto flutuante (mesma conta do centavosDe do app).
+function centavosDe(valor) {
+  if (!Number.isFinite(valor)) return 0;
+  return Math.round(Number((valor * 100).toFixed(6)));
 }
 
 function centavosPositivos(valor) {
