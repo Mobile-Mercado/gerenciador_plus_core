@@ -22,7 +22,11 @@
 //
 // Arquivo puro: nao requer firebase-admin nem firebase-functions. Para gravar, recebe db e
 // o FieldValue de quem chamou.
+//
+// Cola RP-52, item 3.2: o total de cada pedido e o LTV gravados em centavos (o painel nao
+// arredonda; aqui sim). O valor de cada item e arredondado antes da soma; a soma, de novo.
 const { marcarMudanca } = require('./marcador');
+const { arredondarCentavos } = require('./centavos');
 
 const RESUMO_VERSION = 1;
 const RESUMO_COLLECTION = 'ResumoClientes';
@@ -86,7 +90,7 @@ function getProductTotal(item) {
     'finalPrice',
     'priceTotal',
   ]);
-  if (explicitTotal !== null) return toNumber(explicitTotal);
+  if (explicitTotal !== null) return arredondarCentavos(toNumber(explicitTotal));
 
   const quantity = toNumber(item.quantity) || 1;
   const price = toNumber(
@@ -99,7 +103,7 @@ function getProductTotal(item) {
       'product.promotionalPrice',
     ]),
   );
-  return quantity * price;
+  return arredondarCentavos(quantity * price);
 }
 
 function getOrderTotal(data) {
@@ -115,9 +119,9 @@ function getOrderTotal(data) {
     'payment.amount',
     'summary.total',
   ]);
-  if (directTotal !== null) return toNumber(directTotal);
+  if (directTotal !== null) return arredondarCentavos(toNumber(directTotal));
 
-  return (data.productsCart || data.items || []).reduce((sum, item) => sum + getProductTotal(item), 0);
+  return arredondarCentavos((data.productsCart || data.items || []).reduce((sum, item) => sum + getProductTotal(item), 0));
 }
 
 function normalizeStatus(status) {
@@ -290,7 +294,7 @@ function resumirCliente({ pedidos = [], usuario = null }) {
   const user = userId ? usuario : null;
   const firstOrder = ordersByDate.at(-1);
   const lastOrder = ordersByDate[0];
-  const ltv = ordersByDate.reduce((sum, order) => sum + order.total, 0);
+  const ltv = arredondarCentavos(ordersByDate.reduce((sum, order) => sum + order.total, 0));
 
   return {
     chave,

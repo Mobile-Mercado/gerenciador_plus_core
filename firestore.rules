@@ -1,5 +1,8 @@
 rules_version = '2';
 
+// Regra de processo (Thay, 13/10/2026): as regras se publicam só a partir deste arquivo
+// commitado, nunca editadas no console do Firebase.
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -55,11 +58,19 @@ service cloud.firestore {
     // ===== fim do admin antigo =====
 
     // Users - apenas o próprio usuário pode ler seus dados
+    // O Core acha a loja do dono pelo Users (campo id e userReference da loja): quem cria o
+    // proprio Users so grava no id o id do documento, como os apps gravam
+    // (mobile_cliente user_service.dart:23-54, mobile_gerenciador register_user_service.dart:15-46),
+    // e depois id e userAuthId nao mudam mais (13/10/2026).
     match /Users/{userId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null
-                    && request.resource.data.userAuthId == request.auth.uid;
-      allow update, delete: if request.auth != null
+                    && request.resource.data.userAuthId == request.auth.uid
+                    && request.resource.data.get('id', userId) == userId;
+      allow update: if request.auth != null
+                    && request.auth.uid == resource.data.userAuthId
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['id', 'userAuthId']);
+      allow delete: if request.auth != null
                     && request.auth.uid == resource.data.userAuthId;
 
       // ShoppingCart - apenas o próprio dono
@@ -78,13 +89,61 @@ service cloud.firestore {
         allow read, write: if request.auth != null &&
           request.auth.uid == get(/databases/$(database)/documents/Users/$(userId)).data.userAuthId;
       }
+      // Cupons fiscais do cliente (contrato da versao 55, item 8, ajustado em 22/10/2026; cola RP-14).
+      // Id = chave de acesso de 44 numeros (foto sem chave: id livre). So o dono le, cria e apaga;
+      // ninguem altera pelo app. O app grava a nota lida na pagina da Sefaz (origem 'qr', situacao
+      // 'lido') ou a foto do cupom (origem 'foto', situacao 'aguardando'). Documento do consumidor
+      // sempre mascarado. Origem 'pedido' e so do servidor.
+      match /CuponsFiscais/{cupomId} {
+        function donoDoCupom() {
+          return request.auth != null &&
+            request.auth.uid == get(/databases/$(database)/documents/Users/$(userId)).data.userAuthId;
+        }
+        function documentoMascarado(documento) {
+          return documento == null || (documento is string
+            && (documento.matches('^[*]{3}[.][*]{3}[.][0-9]{3}-[0-9]{2}$')
+              || documento.matches('^[*]{2}[.][*]{3}[.][*]{3}/[0-9]{4}-[0-9]{2}$')));
+        }
+        function cupomLido(cupom) {
+          return cupom.keys().hasOnly(['chaveAcesso', 'urlQr', 'origem', 'situacao', 'uf', 'emitente', 'itens',
+              'total', 'pagamentos', 'tributos', 'emitidoEm', 'numero', 'serie', 'protocolo',
+              'consumidorDocumento', 'criadoEm', 'atualizadoEm'])
+            && cupom.origem == 'qr' && cupom.situacao == 'lido'
+            && cupomId.matches('^[0-9]{44}$') && cupom.chaveAcesso == cupomId
+            && cupom.emitente is map && cupom.itens is list && cupom.pagamentos is list
+            && cupom.total is number && cupom.emitidoEm is timestamp
+            && cupom.numero is string && cupom.serie is string && cupom.protocolo is string
+            && documentoMascarado(cupom.get('consumidorDocumento', null))
+            && cupom.criadoEm == request.time;
+        }
+        function cupomFotografado(cupom) {
+          return cupom.keys().hasOnly(['chaveAcesso', 'urlQr', 'origem', 'situacao', 'fotoPath', 'criadoEm', 'atualizadoEm'])
+            && cupom.origem == 'foto' && cupom.situacao == 'aguardando'
+            && cupom.fotoPath is string && cupom.fotoPath.size() > 0 && cupom.fotoPath.size() <= 300
+            && (cupom.get('chaveAcesso', null) == null || cupom.chaveAcesso.matches('^[0-9]{44}$'))
+            && cupom.criadoEm == request.time;
+        }
+        allow read, delete: if donoDoCupom();
+        allow create: if donoDoCupom() && (cupomLido(request.resource.data) || cupomFotografado(request.resource.data));
+        allow update: if false;
+      }
+    }
+
+    // Pedido de retirada pronto (PurchaseStatus.readyForPickup) nao volta para um status anterior
+    // (cola RP-13, decisao do Thay de 21/10/2026): o app Gerenciador antigo nao conhece o status,
+    // mostra o pedido como pendente, e o "Aceitar" dele regravaria accepted por cima.
+    function voltaDaRetirada() {
+      return resource.data.get('currentPurchaseStatus', '') == 'PurchaseStatus.readyForPickup'
+        && request.resource.data.get('currentPurchaseStatus', '') in [
+          'PurchaseStatus.pending', 'PurchaseStatus.accepted', 'PurchaseStatus.separatingOrder',
+          'pending', 'accepted', 'separatingOrder'];
     }
 
     // PurchaseRequests - apenas usuários autenticados do estabelecimento
     match /PurchaseRequests/{orderId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null;
-      allow update: if request.auth != null;
+      allow update: if request.auth != null && !voltaDaRetirada();
       allow delete: if false;
 
       // AuditLog só é escrito pelas Cloud Functions (Admin SDK, ignora estas
@@ -165,13 +224,113 @@ service cloud.firestore {
       }
 
       // Leitura intocada: o boot anônimo do whitelabel depende dela
-      // (caso whitelabel-boot-sem-sessao). Create liberado para autenticado
-      // porque o cadastro de estabelecimento novo pelo painel acontece antes
-      // de a conta ter claim adminOf; update só para o admin do próprio.
+      // (caso whitelabel-boot-sem-sessao). Loja nova nasce só pelo servidor
+      // (POST /api/cadastro/loja do Core, Admin SDK), desde 13/10/2026; update só
+      // para o admin do próprio. Com o create fechado, credencial e userReference só se conferem
+      // no update: a loja nasce no "Aprovar" do Admin, com o userReference gravado pelo Core.
       allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update: if isAdminOf(estabId);
+      allow create: if false;
+      allow update: if isAdminOf(estabId) && camposDoAdminIguais()
+        && semCredencialNova(request.resource.data, resource.data);
       allow delete: if false;
+
+      // Campos que so o Admin muda (pelo Core, Admin SDK): o lojista com adminOf grava o resto da
+      // loja, mas estes so passam com o mesmo valor. scheduling.contracted e comparado pelo
+      // valor, porque o lojista ainda muda scheduling.enabled. userReference (RP-68, A.1): o
+      // Core acha o dono da loja por ele (findAccountByUid), entao o lojista nao troca, nao
+      // acrescenta nem apaga; a gravacao sem o campo, ou com o mesmo valor, passa.
+      function camposDoAdminIguais() {
+        let mudou = request.resource.data.diff(resource.data).affectedKeys();
+        return !mudou.hasAny(['isActive', 'status', 'motivoRecusa', 'aprovadoPor', 'aprovadoEm',
+            'recusadoPor', 'recusadoEm', 'enviadoEm', 'origemCadastro', 'cnpjConferido', 'offerColor',
+            'featureFlags', 'aparenciaHome', 'userReference'])
+          && request.resource.data.get('scheduling', {}).get('contracted', null)
+            == resource.data.get('scheduling', {}).get('contracted', null);
+      }
+
+      // Credencial da Safrapay fora do documento da loja (RP-57, b02c87f): ela fica em
+      // safrapayMerchants/{loja}, que so o Admin SDK le. O lojista nao grava valor de credencial
+      // em safrapay, paymentGateway nem paymentGateway.safrapay: cada campo fica ausente, nulo,
+      // vazio ou igual ao que ja esta gravado na mesma posicao. O App Gerenciador publicado manda
+      // merchantId e merchantToken vazios numa loja sem credencial, e isso continua aceito. Os
+      // aliases sao os que a API tambem le (companyPaymentConfig.js). RP-68, A.2: a escolha da
+      // credencial tambem fica so com o Admin: merchantRef e merchantConfigId (qual documento de
+      // safrapayMerchants a API usa) e useDefaultMerchant (a credencial padrao da Mobile).
+      // useDefaultMerchant false conta como vazio, porque a API so usa a padrao com true, "true"
+      // ou 1 (isEnabled); qualquer outro valor novo e recusado. enabled fica livre.
+      function mapaDe(valor) {
+        return valor is map ? valor : {};
+      }
+      function credencialLivre(novo, antigo, campo) {
+        return !(campo in novo) || novo[campo] == null || novo[campo] == '' ||
+          (campo in antigo && novo[campo] == antigo[campo]);
+      }
+      function mapaSemCredencialNova(novoValor, antigoValor) {
+        let novo = mapaDe(novoValor);
+        let antigo = mapaDe(antigoValor);
+        return credencialLivre(novo, antigo, 'merchantId') &&
+          credencialLivre(novo, antigo, 'merchantToken') &&
+          credencialLivre(novo, antigo, 'accessToken') &&
+          credencialLivre(novo, antigo, 'webhookSecret') &&
+          credencialLivre(novo, antigo, 'safrapayMerchantId') &&
+          credencialLivre(novo, antigo, 'safrapayMerchantToken') &&
+          credencialLivre(novo, antigo, 'token') &&
+          credencialLivre(novo, antigo, 'merchantRef') &&
+          credencialLivre(novo, antigo, 'merchantConfigId') &&
+          (credencialLivre(novo, antigo, 'useDefaultMerchant') || novo.useDefaultMerchant == false);
+      }
+      function semCredencialNova(novo, antigo) {
+        return mapaSemCredencialNova(novo.get('safrapay', {}), antigo.get('safrapay', {})) &&
+          mapaSemCredencialNova(novo.get('paymentGateway', {}), antigo.get('paymentGateway', {})) &&
+          mapaSemCredencialNova(
+            mapaDe(novo.get('paymentGateway', {})).get('safrapay', {}),
+            mapaDe(antigo.get('paymentGateway', {})).get('safrapay', {}));
+      }
+
+      // Visita do dia gravada pelo app do cliente (company_visits_service.dart), que
+      // manda estes campos todos; só viewsCount sobe, e de 1 em 1.
+      function contadorIgual(campo) {
+        return request.resource.data.get(campo, 0) == resource.data.get(campo, 0);
+      }
+      function soAcrescentado(campo) {
+        return !(campo in request.resource.data.diff(resource.data).affectedKeys()) || !(campo in resource.data);
+      }
+      function camposDaVisita() {
+        return ['id', 'appViewsCount', 'canceledOrdersCount', 'completedPurchasesCount',
+          'deniedRequestsCount', 'dissatisfiedCustomersCount', 'newOrdersCount',
+          'ordersDeliveredCount', 'riskOfDelayCount', 'shoppingStartedCount', 'totalSalesValue',
+          'viewsCount', 'withinTheTimeLimitCount', 'date', 'createdAt', 'updatedAt'];
+      }
+      function contadoresZerados(dados) {
+        return dados.get('appViewsCount', 0) == 0 && dados.get('canceledOrdersCount', 0) == 0
+          && dados.get('completedPurchasesCount', 0) == 0 && dados.get('deniedRequestsCount', 0) == 0
+          && dados.get('dissatisfiedCustomersCount', 0) == 0 && dados.get('newOrdersCount', 0) == 0
+          && dados.get('ordersDeliveredCount', 0) == 0 && dados.get('riskOfDelayCount', 0) == 0
+          && dados.get('shoppingStartedCount', 0) == 0 && dados.get('totalSalesValue', 0) == 0
+          && dados.get('withinTheTimeLimitCount', 0) == 0;
+      }
+      function visitaNova(statId) {
+        return request.auth != null
+          && request.resource.data.keys().hasOnly(camposDaVisita())
+          && request.resource.data.get('id', statId) == statId
+          && request.resource.data.viewsCount == 1
+          && request.resource.data.get('updatedAt', request.time) == request.time
+          && contadoresZerados(request.resource.data);
+      }
+      function maisUmaVisita() {
+        return request.auth != null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(camposDaVisita())
+          && request.resource.data.viewsCount == resource.data.get('viewsCount', 0) + 1
+          && contadorIgual('appViewsCount') && contadorIgual('canceledOrdersCount')
+          && contadorIgual('completedPurchasesCount') && contadorIgual('deniedRequestsCount')
+          && contadorIgual('dissatisfiedCustomersCount') && contadorIgual('newOrdersCount')
+          && contadorIgual('ordersDeliveredCount') && contadorIgual('riskOfDelayCount')
+          && contadorIgual('shoppingStartedCount') && contadorIgual('totalSalesValue')
+          && contadorIgual('withinTheTimeLimitCount')
+          && soAcrescentado('id') && soAcrescentado('date') && soAcrescentado('createdAt')
+          && (!('updatedAt' in request.resource.data.diff(resource.data).affectedKeys())
+            || request.resource.data.updatedAt == request.time);
+      }
 
       // Coleções administrativas do sistema de grupos de permissão.
       // Escrita sempre negada: só as Cloud Functions (Admin SDK) gravam.
@@ -205,21 +364,24 @@ service cloud.firestore {
         allow write: if isAdminOf(estabId);
       }
 
+      // Subcoleções da loja: grava só o admin da loja (claim adminOf) ou o servidor
+      // (Admin SDK, que ignora estas regras). Exceções fechadas: DailyStats (visita) e
+      // Suggestions (só criar), que o app do cliente grava sem claim.
       match /PurchaseRequests/{orderId} {
         allow read: if request.auth != null;
-        allow create: if request.auth != null;
-        allow update: if request.auth != null;
+        allow create: if isAdminOf(estabId);
+        allow update: if isAdminOf(estabId) && !voltaDaRetirada();
         allow delete: if false;
       }
 
       match /Categories/{categoryId} {
         allow read: if request.auth != null;
-        allow write: if request.auth != null;
+        allow write: if isAdminOf(estabId);
       }
 
       match /Subcategories/{subcategoryId} {
         allow read: if request.auth != null;
-        allow write: if request.auth != null;
+        allow write: if isAdminOf(estabId);
       }
 
       match /Stats/{statId} {
@@ -227,11 +389,13 @@ service cloud.firestore {
         allow write: if isAdminOf(estabId);
       }
 
-      // DailyStats fica aberta a autenticado: o app do cliente grava a
-      // visita do dia aqui (company_visits_service.dart), sem claim.
+      // Quem só tem login grava só a visita do dia: viewsCount sobe 1 (ou nasce 1), os
+      // outros contadores ficam como estão. O resto, só o admin da loja ou o servidor.
       match /DailyStats/{statId} {
         allow read: if request.auth != null;
-        allow write: if request.auth != null;
+        allow create: if isAdminOf(estabId) || visitaNova(statId);
+        allow update: if isAdminOf(estabId) || maisUmaVisita();
+        allow delete: if isAdminOf(estabId);
       }
 
       match /MonthlyStats/{statId} {
@@ -241,7 +405,7 @@ service cloud.firestore {
 
       match /Banners/{bannerId} {
         allow read: if request.auth != null;
-        allow write: if request.auth != null;
+        allow write: if isAdminOf(estabId);
       }
 
       match /ProductCategories/{categoryId} {
@@ -256,12 +420,12 @@ service cloud.firestore {
 
       match /NotificationViewState/{group} {
         allow read: if request.auth != null;
-        allow write: if request.auth != null;
+        allow write: if isAdminOf(estabId);
       }
 
       match /implantacaoGrenciador/{automationId} {
         allow read: if request.auth != null;
-        allow write: if request.auth != null;
+        allow write: if isAdminOf(estabId);
       }
 
       // Logs do integrador - escritos so pelo Admin SDK, nas Cloud Functions
@@ -283,12 +447,24 @@ service cloud.firestore {
       }
 
       // Sugestões de melhoria enviadas pelo cliente na tela Ajustes do app.
-      // Só cria; leitura e marcação de lida ficam no painel, via Admin SDK.
+      // Só cria, com os campos que o app grava (suggestion_document.dart) e o autor
+      // sendo quem chama: userId é o id do documento Users do cliente (não o uid), então
+      // o autor é conferido pelo userAuthId dele. Leitura e marcação de lida ficam no
+      // painel, via Admin SDK.
       match /Suggestions/{suggestionId} {
         allow create: if request.auth != null
+          && request.resource.data.keys().hasOnly(['id', 'companyId', 'userId', 'userName',
+            'userEmail', 'userPhone', 'subject', 'text', 'appVersion', 'platform', 'packageName',
+            'read', 'createdAt'])
+          && request.resource.data.id == suggestionId
+          && request.resource.data.companyId == estabId
+          && request.resource.data.read == false
           && request.resource.data.text is string
           && request.resource.data.text.size() >= 30
-          && request.resource.data.text.size() <= 500;
+          && request.resource.data.text.size() <= 500
+          && request.resource.data.userId is string
+          && request.resource.data.userId.size() > 0
+          && get(/databases/$(database)/documents/Users/$(request.resource.data.userId)).data.userAuthId == request.auth.uid;
         allow read, update, delete: if false;
       }
     }

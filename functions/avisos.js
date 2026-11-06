@@ -1,17 +1,37 @@
-// Avisos de Web Push para a loja: pedido novo, mensagem nova do cliente no chat e pedido
-// cancelado pelo cliente.
+// Avisos de Web Push para a loja: pedido novo (uma vez por pedido; o pago pelo app so
+// quando o pagamento confirma), mensagem nova do cliente no chat e pedido cancelado pelo
+// cliente.
 //
 // Aqui so a decisao de avisar e o titulo e o texto. O envio (tokens, blocos, desativacao
 // de token invalido) fica em enviarAvisoParaLoja, em functions/index.js. O push vai so
 // como dados: o Service Worker do painel (public/firebase-messaging-sw.js) monta a
 // notificacao visivel a partir de data.title, data.body, data.tag e data.url.
 //
-// Arquivo puro: nao requer firebase-admin nem firebase-functions.
+// Arquivo puro: nao requer firebase-admin nem firebase-functions (o banco e o FieldValue
+// chegam por parametro).
 
 // Status que o app do cliente grava quando o cliente desiste do pedido
 // (mobile_cliente, purchase_firebase_repository_impl.dart).
 const STATUS_DESISTENCIA = 'giveUp';
+// Pedido pago pelo app: o app do cliente grava em waitingForOrderPayment antes da cobranca
+// e muda para pending quando o pagamento confirma. Pedido pago na entrega nasce em pending.
+const STATUS_ESPERANDO_PAGAMENTO_DO_APP = 'waitingForOrderPayment';
+const STATUS_PENDENTE = 'pending';
+// Marca de "pedido novo ja avisado": um documento por pedido, criado com create(), que
+// falha se ja existe. Fica numa subcolecao do pedido (como AuditLog) para nao regravar o
+// pedido e nao disparar de novo os gatilhos onDocumentWritten de PurchaseRequests.
+const COLECAO_DE_AVISOS_DO_PEDIDO = 'Avisos';
+const MARCA_DE_PEDIDO_NOVO = 'pedidoNovo';
+// Codigo gRPC ALREADY_EXISTS, devolvido pelo create() do Admin SDK quando o documento existe.
+const JA_EXISTE = 6;
 const TAMANHO_DO_TRECHO = 80;
+// Numero do pedido (RP-88, item 1): quem da o numero e o gatilho do mobile_old_web_platform
+// (activatePurchase), que corre ao mesmo tempo que estes. O aviso rele o pedido a cada 2 s, por
+// ate 30 s. Passado o prazo, sai o texto sem numero (o mesmo do firebase-messaging-sw.js do
+// painel), nunca "Pedido  de Cliente".
+const ESPERA_DO_NUMERO_MS = 30000;
+const PASSO_DA_ESPERA_MS = 2000;
+const TEXTO_SEM_NUMERO = 'Você tem um novo pedido';
 
 // Sanitiza strings para prevenir injecao em notificacoes.
 function sanitizeString(str, maxLength = 200) {
@@ -42,8 +62,81 @@ function avisoDePedidoNovo(order = {}) {
   const title = sanitizeString(order.notificationTitle, 100) || '🔔 Novo Pedido!';
   const body =
     sanitizeString(order.notificationBody, 200) ||
-    `Pedido ${orderNumber ? `#${orderNumber}` : ''} de ${clientName}`;
+    (orderNumber ? `Pedido #${orderNumber} de ${clientName}` : TEXTO_SEM_NUMERO);
   return { title, body, orderNumber, clientName };
+}
+
+// Pedido criado: avisa em qualquer status, menos o pedido pago pelo app ainda sem pagamento.
+function avisaPedidoNovoNaCriacao(order = {}) {
+  return semPrefixo(order?.currentPurchaseStatus) !== STATUS_ESPERANDO_PAGAMENTO_DO_APP;
+}
+
+// Pedido atualizado: avisa so quando o pagamento pelo app confirma, isto e, na troca de
+// waitingForOrderPayment para pending.
+function avisaPedidoNovoNaAtualizacao({ antes = {}, depois = {} } = {}) {
+  return semPrefixo(antes?.currentPurchaseStatus) === STATUS_ESPERANDO_PAGAMENTO_DO_APP
+    && semPrefixo(depois?.currentPurchaseStatus) === STATUS_PENDENTE;
+}
+
+// Reserva o aviso de pedido novo: cria PurchaseRequests/{pedido}/Avisos/pedidoNovo. Devolve
+// true para quem criou e false se o aviso ja foi reservado (pelo outro gatilho ou por uma
+// entrega repetida do mesmo evento). Outros erros sobem.
+async function reservarAvisoDePedidoNovo({ db, FieldValue, pedidoId, origem }) {
+  const marca = db.collection('PurchaseRequests').doc(String(pedidoId))
+    .collection(COLECAO_DE_AVISOS_DO_PEDIDO).doc(MARCA_DE_PEDIDO_NOVO);
+  try {
+    await marca.create({ avisadoEm: FieldValue.serverTimestamp(), origem });
+    return true;
+  } catch (error) {
+    if (error?.code === JA_EXISTE || error?.code === 'already-exists') return false;
+    throw error;
+  }
+}
+
+function avisoJaTemTexto(order = {}) {
+  const { orderNumber } = avisoDePedidoNovo(order);
+  return Boolean(orderNumber || sanitizeString(order.notificationBody, 200));
+}
+
+const pausar = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+// Pedido com o numero, relido do banco enquanto o numero nao vem. Falha ao ler ou prazo vencido:
+// devolve o que tem, e o aviso sai sem numero (o aviso nao se perde).
+async function pedidoComNumero({ db, order, pedidoId, esperar, origem }) {
+  if (avisoJaTemTexto(order)) return order;
+  const referencia = db.collection('PurchaseRequests').doc(String(pedidoId));
+  for (let passado = 0; passado < ESPERA_DO_NUMERO_MS; passado += PASSO_DA_ESPERA_MS) {
+    await esperar(PASSO_DA_ESPERA_MS);
+    try {
+      const lido = (await referencia.get()).data();
+      if (lido && avisoJaTemTexto(lido)) return { ...order, ...lido };
+    } catch (error) {
+      console.warn(`[${origem}] Falha ao reler o pedido ${pedidoId}`, error?.message);
+      return order;
+    }
+  }
+  return order;
+}
+
+// Avisa a loja do pedido novo uma vez so por pedido: reserva a marca e so entao envia.
+// Se o envio falhar depois da reserva, o aviso nao se repete (no maximo uma vez).
+async function avisarPedidoNovoUmaVez({ db, FieldValue, order = {}, pedidoId, companyId, enviar, origem, esperar = pausar }) {
+  const reservado = await reservarAvisoDePedidoNovo({ db, FieldValue, pedidoId, origem });
+  if (!reservado) {
+    console.log(`[${origem}] Pedido ${pedidoId} ja avisado; nao repete o aviso`);
+    return null;
+  }
+  const pedido = await pedidoComNumero({ db, order, pedidoId, esperar, origem });
+  const { title, body, orderNumber, clientName } = avisoDePedidoNovo(pedido);
+  return enviar({
+    companyId,
+    title,
+    body,
+    url: '/pedidos',
+    tag: pedidoId,
+    data: { orderId: pedidoId, orderNumber: orderNumber || '', clientName },
+    origem,
+  });
 }
 
 // Comeco da mensagem com ate 80 caracteres; o corte termina em reticencias.
@@ -93,11 +186,20 @@ function avisoDePedidoCancelado({ antes = {}, depois = {}, pedidoId }) {
 }
 
 module.exports = {
+  COLECAO_DE_AVISOS_DO_PEDIDO,
+  ESPERA_DO_NUMERO_MS,
+  MARCA_DE_PEDIDO_NOVO,
   STATUS_DESISTENCIA,
+  STATUS_ESPERANDO_PAGAMENTO_DO_APP,
+  STATUS_PENDENTE,
   TAMANHO_DO_TRECHO,
+  avisaPedidoNovoNaAtualizacao,
+  avisaPedidoNovoNaCriacao,
+  avisarPedidoNovoUmaVez,
   avisoDeMensagem,
   avisoDePedidoCancelado,
   avisoDePedidoNovo,
+  reservarAvisoDePedidoNovo,
   sanitizeString,
   trechoDaMensagem,
 };

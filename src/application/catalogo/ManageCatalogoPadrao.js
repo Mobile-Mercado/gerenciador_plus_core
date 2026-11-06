@@ -269,10 +269,10 @@ export class ManageCatalogoPadrao {
   }
 
   async lojas() {
-    const snapshot = await this.firestore.collection('estabelecimentos').select('name', 'fantasyName').get();
+    const snapshot = await this.firestore.collection('estabelecimentos').select('name', 'fantasyName', 'nomeEstabelecimento').get();
     return snapshot.docs.map((documento) => ({
       id: documento.id,
-      nome: documento.data()?.fantasyName || documento.data()?.name || documento.id,
+      nome: documento.data()?.fantasyName || documento.data()?.name || documento.data()?.nomeEstabelecimento || documento.id,
     }));
   }
 
@@ -413,15 +413,19 @@ export class ManageCatalogoPadrao {
 
   // Lojas com nome, cidade, ativa ou nao e quantidade de produtos (contagem do Firestore,
   // uma por loja).
+  //
+  // Pedidos do cadastro novo (status diferente de aprovada) ficam em Pedidos de loja, nao aqui.
+  // Loja sem name mostra nomeEstabelecimento quando existir.
   async estabelecimentos() {
-    const snapshot = await this.firestore.collection('estabelecimentos').select('name', 'fantasyName', 'address', 'isActive', 'createdAt').get();
-    return Promise.all(snapshot.docs.map(async (documento) => {
+    const snapshot = await this.firestore.collection('estabelecimentos').select('name', 'fantasyName', 'nomeEstabelecimento', 'address', 'isActive', 'createdAt', 'status').get();
+    const lojas = snapshot.docs.filter((documento) => !documento.data()?.status || documento.data()?.status === 'aprovada');
+    return Promise.all(lojas.map(async (documento) => {
       const data = documento.data() || {};
       const contagem = await this.firestore.collection('estabelecimentos').doc(documento.id).collection('Products').count().get();
       return {
         id: documento.id,
-        nome: data.fantasyName || data.name || documento.id,
-        semNome: !String(data.fantasyName || data.name || '').trim(),
+        nome: data.fantasyName || data.name || data.nomeEstabelecimento || documento.id,
+        semNome: !String(data.fantasyName || data.name || data.nomeEstabelecimento || '').trim(),
         criadaEm: quando(data.createdAt),
         cidade: data.address?.city || null,
         uf: data.address?.uf || data.address?.state || null,

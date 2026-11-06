@@ -1,5 +1,6 @@
 const { isTestOrder, orderClientId } = require('./hourlySalesAggregation');
 const { hasBrokenSearch } = require('./searchKeys');
+const { arredondarCentavos } = require('./centavos');
 
 const CHECK_VERSION = 7;
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -405,7 +406,8 @@ function salesFromOrders(orders = [], { now = Date.now(), testAccountIds = new S
         || Object.fromEntries(windows.map(({ name }) => [name, { unidades: 0, valor: 0 }]));
       inWindows.forEach((name) => {
         entry[name].unidades += quantity;
-        entry[name].valor += quantity * price;
+        // Valor do item em centavos antes de somar (cola RP-52, item 3.2).
+        entry[name].valor += arredondarCentavos(quantity * price);
       });
       byProduct.set(productId, entry);
     });
@@ -436,7 +438,7 @@ function summarizeSales(sales, products) {
       pedidosConfirmados: sales.confirmedOrders[name],
       produtosVendidos,
       bloqueadosQueVenderam,
-      faturamentoDosBloqueados: Math.round(faturamentoDosBloqueados * 100) / 100,
+      faturamentoDosBloqueados: arredondarCentavos(faturamentoDosBloqueados),
     }];
   }));
 }

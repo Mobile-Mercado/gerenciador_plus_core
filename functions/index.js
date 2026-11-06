@@ -5,7 +5,9 @@ const {
   onDocumentWritten,
 } = require('firebase-functions/v2/firestore');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { defineSecret, defineString } = require('firebase-functions/params');
 const { getStorage } = require('firebase-admin/storage');
+const { applicationDefault } = require('firebase-admin/app');
 const {
   DEFAULT_SAMPLE_SIZE,
   SALES_WINDOW_DAYS,
@@ -35,6 +37,7 @@ const {
 } = require('./provedoresDeLogin');
 const { gerarListaDeClientes } = require('./clientesDaLoja');
 const { lojaDaConversaDoAgente, lojasDaConversa, marcarMudanca } = require('./marcador');
+const { ligarBannersAgendados, tratarBannerGravado } = require('./situacaoDoBanner');
 const {
   RESUMO_COLLECTION,
   TOTAL_DE_BLOCOS,
@@ -44,8 +47,26 @@ const {
 } = require('./resumoClientes');
 const { atualizarResumoDoPedido } = require('./resumoPedidos');
 const { atualizarResumoDeVendas } = require('./resumoVendas');
+const { atualizarGruposDoPedido } = require('./resumoDoMes');
 const { atualizarSemGiro } = require('./semGiro');
-const { avisoDeMensagem, avisoDePedidoCancelado, avisoDePedidoNovo } = require('./avisos');
+const { atualizarVisitasPorMes } = require('./visitasPorMes');
+const {
+  atualizarTodasAsLojas,
+  appsDaLoja,
+  clienteDePedidos,
+  doisUltimosMeses,
+  leitorDaApple,
+  lerSegredoOpcional,
+  pedidoAppleDaLoja,
+  pedirRelatoriosQueFaltam,
+} = require('./instalacoesApp');
+const {
+  avisaPedidoNovoNaAtualizacao,
+  avisaPedidoNovoNaCriacao,
+  avisarPedidoNovoUmaVez,
+  avisoDeMensagem,
+  avisoDePedidoCancelado,
+} = require('./avisos');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -183,6 +204,67 @@ exports.marcarConversaDoAgenteNoMarcador = onDocumentWritten(
   },
 );
 
+// Banners da loja (estabelecimentos/{loja}/Banners/{id}), de qualquer origem: criado ou atualizado com
+// status true e inicio no futuro passa a aguardar o inicio (o app do cliente nao olha startAt); toda
+// gravacao, inclusive a remocao, marca 'banners' para a tela Loja reler. A normalizacao grava status
+// false, entao a passada seguinte nao grava de novo (sem laco). Registra e nunca lanca.
+exports.ajustarBannerGravado = onDocumentWritten(
+  'estabelecimentos/{lojaId}/Banners/{bannerId}',
+  async (event) => {
+    const { lojaId, bannerId } = event.params;
+    try {
+      const depois = event.data?.after?.exists ? event.data.after.data() : null;
+      await tratarBannerGravado({
+        lojaId,
+        referencia: event.data?.after?.ref,
+        depois,
+        marcar: (loja) => marcarMudanca({
+          db,
+          FieldValue: admin.firestore.FieldValue,
+          lojaId: loja,
+          tipo: 'banners',
+        }),
+        aoFalhar: (etapa, error) => console.error('[ajustarBannerGravado] Falha ao normalizar', { lojaId, bannerId, etapa, error }),
+      });
+    } catch (error) {
+      console.error('[ajustarBannerGravado] Falha ao marcar banner', { lojaId, bannerId, error });
+    }
+  },
+);
+
+// A cada 5 minutos liga os banners que aguardavam o inicio (aguardandoInicio true e startAt ja
+// passado). A gravacao passa pelo ajustarBannerGravado, que marca 'banners' na loja. Indice:
+// Banners (collection group) aguardandoInicio + startAt, em firestore.indexes.json.
+exports.ligarBannersAgendados = onSchedule(
+  {
+    schedule: 'every 5 minutes',
+    timeZone: 'America/Sao_Paulo',
+    region: 'us-central1',
+    memory: '256MiB',
+    timeoutSeconds: 120,
+    retryCount: 0,
+  },
+  async () => {
+    try {
+      const resultado = await ligarBannersAgendados({
+        db,
+        agora: new Date(),
+        aoFalhar: (caminho, error) => console.error('[ligarBannersAgendados] Falha ao ligar', { caminho, error }),
+      });
+      const lojas = [];
+      for (const [establishmentId, { storeRef, ligados }] of resultado.porLoja) {
+        lojas.push({ establishmentId, ligados });
+        await registrarNoite(storeRef, 'ligarBannersAgendados', { dados: { bannersLigados: ligados } });
+      }
+      if (lojas.length) console.log('[ligarBannersAgendados] Banners ligados', { lidos: resultado.lidos, lojas });
+      return { lidos: resultado.lidos, lojas };
+    } catch (error) {
+      console.error('[ligarBannersAgendados] Falha na passada', { error });
+      return null;
+    }
+  },
+);
+
 exports.marcarMensagemDoAgenteNoMarcador = onDocumentCreated(
   'AgenteVendas/{userId}/conversas/{conversationId}/mensagens/{messageId}',
   async (event) => {
@@ -231,6 +313,25 @@ exports.resumirVendasDoPedido = onDocumentWritten(
         orderId: event.params.orderId,
         error,
       });
+    }
+  },
+);
+
+// Grupo do Resumo do mes (contrato da versao 55, item 7): gruposDosItens, resumoPorGrupo e
+// gruposVersao no proprio pedido, na criacao e quando productsCart muda. Falha aqui deixa o pedido
+// sem grupo ate a proxima mudanca: registra e nunca lanca.
+exports.agruparItensDoPedido = onDocumentWritten(
+  'PurchaseRequests/{orderId}',
+  async (event) => {
+    try {
+      await atualizarGruposDoPedido({
+        db,
+        ref: event.data?.after?.ref,
+        antes: event.data?.before?.data() || null,
+        depois: event.data?.after?.data() || null,
+      });
+    } catch (error) {
+      console.error('[agruparItensDoPedido] Falha ao agrupar os itens', { orderId: event.params.orderId, error });
     }
   },
 );
@@ -425,6 +526,10 @@ async function enviarAvisoParaLoja({
   return { totalSuccess, totalFailures };
 }
 
+// Pedido novo: avisa na criacao, menos o pedido pago pelo app ainda em
+// waitingForOrderPayment, que so avisa quando o pagamento confirma (avisarPedidoPagoPeloApp).
+// Os dois gatilhos reservam a mesma marca (PurchaseRequests/{id}/Avisos/pedidoNovo), entao a
+// loja recebe um aviso so por pedido.
 exports.sendOrderNotification = onDocumentCreated(
   'PurchaseRequests/{orderId}',
   async (event) => {
@@ -442,6 +547,11 @@ exports.sendOrderNotification = onDocumentCreated(
       return null;
     }
 
+    if (!avisaPedidoNovoNaCriacao(order)) {
+      console.log(`[sendOrderNotification] Pedido ${orderId} esperando o pagamento pelo app; avisa quando confirmar`);
+      return null;
+    }
+
     const companyId = extractCompanyId(order);
     if (!companyId) {
       console.warn('[sendOrderNotification] Pedido sem referência de empresa', orderId);
@@ -450,22 +560,48 @@ exports.sendOrderNotification = onDocumentCreated(
 
     console.log(`[sendOrderNotification] Processando pedido ${orderId} da empresa ${companyId}`);
 
-    const { title, body, orderNumber, clientName } = avisoDePedidoNovo(order);
-
-    return enviarAvisoParaLoja({
+    return avisarPedidoNovoUmaVez({
+      db,
+      FieldValue: admin.firestore.FieldValue,
+      order,
+      pedidoId: orderId,
       companyId,
-      title,
-      body,
-      url: '/pedidos',
-      tag: orderId,
-      data: {
-        orderId,
-        orderNumber: orderNumber || '',
-        clientName,
-      },
+      enviar: enviarAvisoParaLoja,
       origem: 'sendOrderNotification',
     });
   }
+);
+
+// Pedido pago pelo app: o aviso de pedido novo sai quando o status passa de
+// waitingForOrderPayment para pending, com o mesmo titulo e texto de sendOrderNotification.
+exports.avisarPedidoPagoPeloApp = onDocumentUpdated(
+  'PurchaseRequests/{orderId}',
+  async (event) => {
+    try {
+      const antes = event.data?.before?.data() || {};
+      const depois = event.data?.after?.data() || {};
+      if (!avisaPedidoNovoNaAtualizacao({ antes, depois })) return;
+      const companyId = extractCompanyId(depois);
+      if (!companyId) {
+        console.warn('[avisarPedidoPagoPeloApp] Pedido sem referência de empresa', event.params.orderId);
+        return;
+      }
+      await avisarPedidoNovoUmaVez({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        order: depois,
+        pedidoId: event.params.orderId,
+        companyId,
+        enviar: enviarAvisoParaLoja,
+        origem: 'avisarPedidoPagoPeloApp',
+      });
+    } catch (error) {
+      console.error('[avisarPedidoPagoPeloApp] Falha ao avisar pedido pago', {
+        orderId: event.params.orderId,
+        error,
+      });
+    }
+  },
 );
 
 // Mensagem nova do cliente no chat. Mensagem da loja nao avisa. Mensagens do mesmo chat
@@ -1096,6 +1232,191 @@ exports.semGiroNightly = onSchedule(
       return result;
     } catch (error) {
       console.error('[semGiroNightly] Falha na passada', { error });
+      return null;
+    }
+  },
+);
+
+// Visitas por mes (Stats/visitasPorMes) para o grafico "Visitas e pedidos" da tela Financas nos
+// periodos Ano e Desde o inicio. Semanal, segunda as 02:45 (decisao de 16/10/2026): recalcula do zero o mes
+// atual e o anterior (ate 62 dias do DailyStats por loja, pelo id) e grava por cima desses dois meses.
+// O painel pega o mes atual e o anterior dos 60 dias do DailyStats que ja le.
+exports.visitasPorMesNightly = onSchedule(
+  {
+    schedule: '45 2 * * 1',
+    timeZone: 'America/Sao_Paulo',
+    region: 'us-central1',
+    memory: '256MiB',
+    timeoutSeconds: 540,
+    retryCount: 0,
+  },
+  async () => {
+    try {
+      const startedAt = Date.now();
+      const agora = new Date();
+      const configSnapshot = await db.doc(IMAGE_CHECK_CONFIG_PATH).get();
+      const configuredIds = configuredEstablishmentIds(configSnapshot.data());
+      if (!configuredIds.length) {
+        console.log('[visitasPorMesNightly] Nenhuma loja habilitada em', IMAGE_CHECK_CONFIG_PATH);
+        return null;
+      }
+
+      const storeSnapshots = await db.getAll(
+        ...configuredIds.map((id) => db.collection('estabelecimentos').doc(id)),
+      );
+      const report = storeSnapshots
+        .filter((snapshot) => !snapshot.exists)
+        .map((snapshot) => ({ establishmentId: snapshot.id, status: 'inexistente' }));
+
+      for (const snapshot of storeSnapshots.filter((store) => store.exists)) {
+        const establishmentId = snapshot.id;
+        try {
+          const resultado = await atualizarVisitasPorMes({
+            db,
+            FieldValue: admin.firestore.FieldValue,
+            lojaId: establishmentId,
+            agora,
+          });
+          const meses = Object.keys(resultado.meses);
+          report.push({ establishmentId, meses, encontrados: resultado.encontrados, atualizadoAte: resultado.atualizadoAte });
+          await registrarNoite(snapshot.ref, 'visitasPorMesNightly', {
+            dados: {
+              meses: meses.join(','),
+              diasEncontrados: resultado.encontrados,
+              visitas: meses.reduce((soma, mes) => soma + resultado.meses[mes].app + resultado.meses[mes].agente, 0),
+            },
+          });
+        } catch (error) {
+          console.error('[visitasPorMesNightly] Falha na loja', { establishmentId, error });
+          report.push({ establishmentId, status: 'falhou' });
+        }
+      }
+
+      const result = { lojas: report, segundos: Math.round((Date.now() - startedAt) / 1000) };
+      console.log('[visitasPorMesNightly] Passada concluida', result);
+      return result;
+    } catch (error) {
+      console.error('[visitasPorMesNightly] Falha na passada', { error });
+      return null;
+    }
+  },
+);
+
+// Instalacoes do app (Stats/instalacoesApp) para a tela Instalacoes do Admin: Android pelos CSVs da
+// Google Play no bucket de relatorios, iPhone pelos relatorios de analise do App Store Connect.
+// Semanal, segunda as 04:15 (decisao de 16/10/2026): recalcula os dois ultimos meses e grava por cima
+// deles. Roda com a conta de servico relatorios-lojas (leitura do bucket da Play) e a chave de leitura
+// da Apple no Secret Manager. A mesma montagem (atualizarTodasAsLojas) atende o "Atualizar agora".
+const APPLE_RELATORIOS_LEITURA_P8 = defineSecret('APPLE_RELATORIOS_LEITURA_P8');
+const APPLE_ISSUER_ID = defineString('APPLE_ISSUER_ID');
+const APPLE_KEY_ID = defineString('APPLE_KEY_ID');
+const PLAY_REPORTS_BUCKET = defineString('PLAY_REPORTS_BUCKET');
+// Pedido automatico dos relatorios da Apple para app novo (Partes 32.3 e 36.2): a chave Admin mora no
+// segredo APPLE_RELATORIOS_PEDIDO_P8 do projeto mobile-chaves-apple, lido em memoria pela conta da funcao
+// (relatorios-lojas) pelo caminho completo; o defineSecret so enxerga segredos do proprio projeto. O Key
+// ID e o caminho vem do functions/.env.appmobileprod-19505. Sem os dois, a rotina so registra app sem pedido.
+const APPLE_PEDIDO_KEY_ID = defineString('APPLE_PEDIDO_KEY_ID', { default: '' });
+const APPLE_PEDIDO_SEGREDO = defineString('APPLE_PEDIDO_SEGREDO', { default: '' });
+
+// Le um segredo opcional com a credencial da funcao (sem prende-lo ao deploy, como os de defineSecret).
+async function pedirAoGoogle({ url }) {
+  const { access_token: token } = await applicationDefault().getAccessToken();
+  const resposta = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!resposta.ok) throw new Error(`Secret Manager respondeu ${resposta.status}`);
+  return { data: await resposta.json() };
+}
+
+// Antes de ler os relatorios: os apps da conta Apple sem pedido ONGOING ganham um ONGOING (com a chave de
+// pedido) ou ficam apontados como sem pedido (sem ela). Falha aqui nao para a rotina.
+async function pedidosDaAppleDaSemana({ issuerId, chaveDeLeitura, keyIdDeLeitura }) {
+  try {
+    const keyIdDePedido = APPLE_PEDIDO_KEY_ID.value();
+    const chaveDePedido = keyIdDePedido
+      ? await lerSegredoOpcional({ pedirAoGoogle, caminho: APPLE_PEDIDO_SEGREDO.value() })
+      : null;
+    const resultado = await pedirRelatoriosQueFaltam({
+      leitura: clienteDePedidos({ chaveP8: chaveDeLeitura, issuerId, keyId: keyIdDeLeitura }),
+      pedido: chaveDePedido ? clienteDePedidos({ chaveP8: chaveDePedido, issuerId, keyId: keyIdDePedido }) : null,
+    });
+    console.log('[instalacoesAppNightly] Pedidos da Apple', {
+      chaveDePedido: Boolean(chaveDePedido),
+      apps: resultado.map(({ appId, bundle, situacao, pedidos, erro }) => ({ appId, bundle, situacao, pedidos, ...(erro ? { erro } : {}) })),
+    });
+    return resultado;
+  } catch (error) {
+    console.error('[instalacoesAppNightly] Falha ao conferir os pedidos da Apple', { error: error.message });
+    return [];
+  }
+}
+
+exports.instalacoesAppNightly = onSchedule(
+  {
+    schedule: '15 4 * * 1',
+    timeZone: 'America/Sao_Paulo',
+    region: 'us-central1',
+    memory: '512MiB',
+    timeoutSeconds: 1800,
+    retryCount: 0,
+    serviceAccount: 'relatorios-lojas@appmobileprod-19505.iam.gserviceaccount.com',
+    secrets: [APPLE_RELATORIOS_LEITURA_P8],
+  },
+  async () => {
+    try {
+      const startedAt = Date.now();
+      const meses = doisUltimosMeses(new Date());
+      const configSnapshot = await db.doc(IMAGE_CHECK_CONFIG_PATH).get();
+      const configuredIds = configuredEstablishmentIds(configSnapshot.data());
+      if (!configuredIds.length) {
+        console.log('[instalacoesAppNightly] Nenhuma loja habilitada em', IMAGE_CHECK_CONFIG_PATH);
+        return null;
+      }
+      const pedidosDaApple = await pedidosDaAppleDaSemana({
+        issuerId: APPLE_ISSUER_ID.value(),
+        chaveDeLeitura: APPLE_RELATORIOS_LEITURA_P8.value(),
+        keyIdDeLeitura: APPLE_KEY_ID.value(),
+      });
+      const situacaoDoPedido = (snapshot) => {
+        const bundle = appsDaLoja(snapshot.get('whitelabelId'))?.ios;
+        const app = pedidosDaApple.find((item) => item.bundle === bundle);
+        return app ? `${app.situacao}${app.pedidos.length ? `:${app.pedidos.map((item) => item.tipo).join('+')}` : ''}` : '';
+      };
+      const report = await atualizarTodasAsLojas({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        lojaIds: configuredIds,
+        bucket: getStorage().bucket(PLAY_REPORTS_BUCKET.value()),
+        apple: leitorDaApple({
+          chaveP8: APPLE_RELATORIOS_LEITURA_P8.value(),
+          issuerId: APPLE_ISSUER_ID.value(),
+          keyId: APPLE_KEY_ID.value(),
+        }),
+        meses,
+        aoTerminarLoja: async (snapshot, resultado) => {
+          // Pedido da Apple do app da loja (app, situacao e motivo do erro) em Stats/instalacoesApp.
+          const pedidoApple = pedidoAppleDaLoja(pedidosDaApple, appsDaLoja(snapshot.get('whitelabelId'))?.ios);
+          if (pedidoApple) {
+            await snapshot.ref.collection('Stats').doc('instalacoesApp').set({ pedidoApple }, { merge: true })
+              .catch((error) => console.error('[instalacoesAppNightly] Falha ao registrar o pedido da Apple', { establishmentId: snapshot.id, error: error.message }));
+          }
+          await registrarNoite(snapshot.ref, 'instalacoesAppNightly', {
+            dados: {
+              meses: meses.join(','),
+              androidAte: resultado.documento.dadosAte.android || '',
+              iosAte: resultado.documento.dadosAte.ios || '',
+              dimensaoAndroid: [...new Set((resultado.android?.arquivos || []).map((arquivo) => arquivo.dimensao))].join(','),
+              // Pedido da Apple do app desta loja: ja-tinha, pedido-criado:ONGOING, sem-pedido ou falhou.
+              pedidoApple: situacaoDoPedido(snapshot),
+            },
+          });
+        },
+        aoFalhar: (establishmentId, error) => console.error('[instalacoesAppNightly] Falha na loja', { establishmentId, error: error.message }),
+      });
+
+      const result = { lojas: report, segundos: Math.round((Date.now() - startedAt) / 1000) };
+      console.log('[instalacoesAppNightly] Passada concluida', result);
+      return result;
+    } catch (error) {
+      console.error('[instalacoesAppNightly] Falha na passada', { error: error.message });
       return null;
     }
   },

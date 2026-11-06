@@ -3,6 +3,7 @@ import test from 'node:test';
 import { ManagerDataAccessPolicy, carimboDeStatus, permissionKeyForMutation } from '../src/infra/firebase/ManagerDataAccessPolicy.js';
 import { FirestoreManagerDataGateway } from '../src/infra/firebase/FirestoreManagerDataGateway.js';
 import { TravasDeCategoria } from '../src/application/catalogo/TravasDeCategoria.js';
+import { CAMPOS_DE_ESCRITA } from '../src/application/delivery/DeliveryByCodeUseCase.js';
 import { FirestoreEmMemoria } from './apoio/firestoreEmMemoria.js';
 
 const actor = {
@@ -380,4 +381,59 @@ test('Mercearia e Todos nao desligam na loja, pelo id ou pelo nome', async () =>
     (error) => error.code === 'catalogo_categoria_protegida',
   );
   await policy.assertMutation({ actor, mutation: mutacao('update', 'estabelecimentos/store-1/ProductCategories/mercearia', { order: 2 }) });
+});
+
+test('C8: mudar currentPrice de produto pede products.edit_price', () => {
+  const caminho = 'estabelecimentos/store-1/Products/p1';
+  assert.equal(permissionKeyForMutation(mutacao('update', caminho, { currentPrice: 9.9 }), 'store-1'), 'products.edit_price');
+  assert.equal(permissionKeyForMutation(mutacao('update', caminho, { name: 'Arroz' }), 'store-1'), 'products.edit');
+});
+
+test('D4: edicao de produto sem campo de preco (como a web manda sem mexer no preco) pede so products.edit', () => {
+  const caminho = 'estabelecimentos/store-1/Products/p1';
+  const semPreco = {
+    updatedAt: { __type: 'fieldValue', operation: 'serverTimestamp' },
+    name: 'Arroz', quantityInStock: 3, unityType: 'un', barCode: '789', isActive: true, tags: [], itsFeatured: false,
+    shelves: [], shelvesIds: [], categoriesIds: [], subcategoriesIds: [], searchIndex: ['789'], wordKeys: ['789'],
+  };
+  assert.equal(permissionKeyForMutation(mutacao('update', caminho, semPreco), 'store-1'), 'products.edit');
+  assert.equal(permissionKeyForMutation(mutacao('update', caminho, { ...semPreco, promotionalPrice: 5 }), 'store-1'), 'products.edit_price');
+});
+
+test('entregadores: o dono grava deliveryMenList com o celular (phone) de cada um, como hoje', async () => {
+  const firestore = new FirestoreEmMemoria({ 'estabelecimentos/store-1': { name: 'Loja', deliveryMenList: [] } });
+  const policy = new ManagerDataAccessPolicy({ firestore });
+  const deliveryMenList = [{ id: 'e1', name: 'Carlos', phone: '27998765432' }, { id: 'e2', name: 'Bia' }];
+  await policy.assertMutation({
+    actor,
+    mutation: { operation: 'update', target: { kind: 'document', path: 'estabelecimentos/store-1' }, data: { deliveryMenList } },
+  });
+  assert.equal(permissionKeyForMutation({ operation: 'update', target: { path: 'estabelecimentos/store-1' }, data: { deliveryMenList } }, 'store-1'), 'settings.edit');
+});
+
+// Cola RP-51, item 4.1: a Core nao grava valor de dinheiro no pedido. O painel so muda os campos da
+// lista de pedido, e o link do entregador so os de status; total, preco, itens, frete, desconto e
+// acerto da pesagem ficam com o servidor de pedidos, que arredonda a centavos. Nenhum valor, nem o
+// 138.04800000000003 do total sem arredondar (RP-50), passa por aqui.
+test('nenhum valor de dinheiro do pedido e gravado pela Core, nem 138.04800000000003 (RP-51, item 4.1)', async () => {
+  const valores = [
+    { total: 138.04800000000003 },
+    { total: 138.05 },
+    { price: 138.04800000000003 },
+    { deliveryPrice: 4.9 },
+    { discount: 10 },
+    { productsCart: [{ id: 'a', price: 23.96, total: 138.04800000000003 }] },
+    { purchasePayment: { paymentValue: 138.04800000000003 } },
+    { devolverAoCliente: 490 },
+    { receberDoCliente: 490 },
+  ];
+  for (const data of valores) {
+    await assert.rejects(
+      mudarPedido('separation', { ...TROCA_PARA_ACEITO, ...data }),
+      (error) => error.code === 'data_order_fields_forbidden' && error.statusCode === 403,
+      JSON.stringify(data),
+    );
+  }
+  const dinheiro = /total|price|preco|valor|value|frete|desconto|discount|cart|payment|devolver|receber/i;
+  assert.deepEqual([...CAMPOS_DE_ESCRITA].filter((campo) => dinheiro.test(campo)), []);
 });

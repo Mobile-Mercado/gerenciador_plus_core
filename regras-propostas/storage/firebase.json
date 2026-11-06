@@ -1,0 +1,8 @@
+{
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "emulators": {
+    "storage": { "port": 9199 }
+  }
+}

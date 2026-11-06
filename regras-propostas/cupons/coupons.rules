@@ -1,0 +1,19 @@
+    // PROPOSTA (cola RP-15, item 4, 22/10/2026). NAO PUBLICAR antes do app novo: a consulta dos
+    // apps de hoje (sem filtro de tipo) passa a ser recusada inteira. Troca o bloco Coupons do
+    // firestore.rules.
+    // Cupom "para todos" (tipo 'todos'): qualquer conta logada le. Cupom "para um cliente" (tipo
+    // 'cliente'): so o destinatario (destinatario.userAuthId == uid do login). Cupom sem tipo nao e
+    // lido por ninguem pelo app: os antigos precisam ganhar o tipo antes de publicar.
+    // A consulta do app tem de provar isso no filtro: uma consulta com tipo == 'todos' e outra com
+    // destinatario.userAuthId == uid, cada uma com os filtros de hoje.
+    match /Coupons/{couponId} {
+      allow read: if request.auth != null
+        && (resource.data.tipo == 'todos' || resource.data.destinatario.userAuthId == request.auth.uid);
+      allow write: if false;
+
+      // Redemptions guarda histórico de uso por cliente - nunca lido/escrito
+      // pelo client, só pelas Cloud Functions aplicarCupom/confirmarPedido.
+      match /Redemptions/{userId} {
+        allow read, write: if false;
+      }
+    }

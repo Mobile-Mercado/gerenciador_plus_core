@@ -1,4 +1,6 @@
+import { assertLojaLiberada } from '../../domain/cadastro/lojaLiberada.js';
 import { AppError } from '../../domain/errors/AppError.js';
+import { contaDoAdminNaLoja } from './lojaAlvoDoAdmin.js';
 
 // Barreira de escrita por chave de permissao. As chaves sao as mesmas do catalogo do
 // painel: requests.*, products.*, coupons.*, chat.*, settings.*, admin_users.*,
@@ -38,6 +40,11 @@ export function createPermissionGuard({ accessRepository, clock = () => Date.now
   // Conta de quem chama (loja e permissoes), no mesmo cache. As rotas que precisam da loja
   // (catalogo, uso da IA, importacao) leem daqui em vez do corpo da requisicao.
   const accountForRequest = async (request) => {
+    // Admin da plataforma agindo na loja escolhida (conferido em lojaAlvoDoAdmin.js).
+    if (request.lojaAlvo) {
+      const conta = contaDoAdminNaLoja(request.auth?.uid, request.lojaAlvo);
+      return { establishmentId: conta.establishmentId, hasEstablishment: true, permissions: conta.permissions, porAdminDaPlataforma: true };
+    }
     const chave = cacheKey(request);
     const agora = clock();
     const guardado = cache.get(chave);
@@ -56,11 +63,14 @@ export function createPermissionGuard({ accessRepository, clock = () => Date.now
         code: 'data_establishment_required',
       });
     }
+    assertLojaLiberada(account);
     const permissions = account.permissions || { isAdmin: true, groupId: null, keys: [] };
     const resumo = {
       establishmentId: account.establishmentId,
       hasEstablishment: account.hasEstablishment,
       permissions,
+      // Nome de quem chama (dono: Users; funcionario: AdminUsers), para o "Criado por" do cupom.
+      nome: account.userDocument?.nome || account.userDocument?.name || null,
     };
     if (chave) cache.set(chave, { account: resumo, expiresAt: expiresAt(request) });
     return resumo;

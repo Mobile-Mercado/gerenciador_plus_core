@@ -1,0 +1,25 @@
+{
+  "comentario": "Indices das duas consultas novas de Coupons (cola RP-15, item 4). Entram no firestore.indexes.json junto com a regra, quando o Thay autorizar a publicacao.",
+  "indexes": [
+    {
+      "collectionGroup": "Coupons",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tipo", "order": "ASCENDING" },
+        { "fieldPath": "active", "order": "ASCENDING" },
+        { "fieldPath": "establishmentIds", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "endAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "Coupons",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "destinatario.userAuthId", "order": "ASCENDING" },
+        { "fieldPath": "active", "order": "ASCENDING" },
+        { "fieldPath": "establishmentIds", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "endAt", "order": "ASCENDING" }
+      ]
+    }
+  ]
+}

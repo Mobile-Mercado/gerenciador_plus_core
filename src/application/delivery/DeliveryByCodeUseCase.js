@@ -11,8 +11,15 @@ const CAMPOS_PERMITIDOS = new Set([
   'deliveredBy',
   'deliveredAt',
   'deliveredSource',
+  'routeStartedBy',
+  'routeStartedAt',
+  'routeStartedSource',
 ]);
 
+// Fluxo da entrega (decisao do Thay de 22/10/2026, cola RP-14): escolher o entregador no fim da
+// separacao grava waitingForDelivery com o entregador; o pedido so vai para deliveryRoute quando o
+// entregador toca em "Iniciar rota" aqui no link; "Entregue" so depois disso.
+const STATUS_AGUARDANDO = 'PurchaseStatus.waitingForDelivery';
 const STATUS_EM_ROTA = 'PurchaseStatus.deliveryRoute';
 const STATUS_ENTREGUE = 'PurchaseStatus.completed';
 const ORIGEM = 'entregador_link';
@@ -26,11 +33,47 @@ export class DeliveryByCodeUseCase {
 
   // Codigo inexistente, pedido inexistente, pedido em outro status e codigo repetido
   // respondem a mesma coisa: o link nao serve de sonda para descobrir pedido.
+  // etapa: 'aguardando' (o link mostra "Iniciar rota") ou 'em_rota' (mostra "Entregue").
   async summary(codigo) {
-    const snapshot = await this.findOrder(codigo);
+    const snapshot = umPedidoDoLink(await this.query(codigo).get());
+    if (!snapshot) throw linkInvalido();
     const pedido = snapshot.data();
     const loja = await lerLoja(pedido, (referencia) => referencia.get());
-    return resumoDoPedido(pedido, { gatewayEmProducao: emProducao(loja), loja });
+    return { ...resumoDoPedido(pedido, { gatewayEmProducao: emProducao(loja), loja }), etapa: etapaDoPedido(pedido) };
+  }
+
+  // "Iniciar rota": so o pedido aguardando, com entregador. Transacao, como o "Entregue": o
+  // segundo toque ja encontra o pedido em rota e responde link invalido.
+  async startRoute(codigo) {
+    const consulta = this.query(codigo);
+    const resultado = await this.firestore.runTransaction(async (transaction) => {
+      const snapshot = umPedidoDoLink(await transaction.get(consulta));
+      if (!snapshot || etapaDoPedido(snapshot.data()) !== 'aguardando') return null;
+      const pedido = snapshot.data();
+      const loja = await lerLoja(pedido, (referencia) => transaction.get(referencia));
+      const entregador = String(pedido.deliveryPerson?.name || '').trim();
+      const alteracao = {
+        currentPurchaseStatus: STATUS_EM_ROTA,
+        statusList: [
+          ...(Array.isArray(pedido.statusList) ? pedido.statusList : []),
+          { purchaseStatus: STATUS_EM_ROTA, createdAt: Timestamp.fromDate(this.clock()) },
+        ],
+        routeStartedBy: entregador,
+        routeStartedAt: FieldValue.serverTimestamp(),
+        routeStartedSource: ORIGEM,
+      };
+      assertCamposPermitidos(alteracao);
+      transaction.update(snapshot.ref, alteracao);
+      return { pedido: { ...pedido, ...alteracao }, entregador, producao: emProducao(loja), loja };
+    });
+    if (!resultado) throw linkInvalido();
+    return {
+      ...resumoDoPedido(resultado.pedido, { gatewayEmProducao: resultado.producao, loja: resultado.loja }),
+      etapa: 'em_rota',
+      status: 'em_rota',
+      iniciadaPor: resultado.entregador,
+      origem: ORIGEM,
+    };
   }
 
   // Transacao: duas marcacoes seguidas com o mesmo codigo nao passam as duas, porque a
@@ -88,16 +131,26 @@ export class DeliveryByCodeUseCase {
       .where('deliveryCode', '==', limpo)
       .limit(2);
   }
-
-  async findOrder(codigo) {
-    const snapshot = umPedidoEmRota(await this.query(codigo).get());
-    if (!snapshot) throw linkInvalido();
-    return snapshot;
-  }
 }
 
-// Vale so um pedido, e so enquanto ele esta em rota de entrega. Codigo repetido em
-// dois pedidos nao vale para nenhum.
+// O resumo vale para o pedido aguardando o entregador (com entregador escolhido) e para o pedido
+// em rota. Codigo repetido em dois pedidos nao vale para nenhum.
+function umPedidoDoLink(resultado) {
+  const documentos = resultado?.docs || [];
+  if (documentos.length !== 1) return null;
+  const [snapshot] = documentos;
+  return etapaDoPedido(snapshot.data() || {}) ? snapshot : null;
+}
+
+function etapaDoPedido(pedido = {}) {
+  if (pedido.currentPurchaseStatus === STATUS_EM_ROTA) return 'em_rota';
+  const comEntregador = Boolean(String(pedido.deliveryPerson?.name || '').trim());
+  if (pedido.currentPurchaseStatus === STATUS_AGUARDANDO && comEntregador) return 'aguardando';
+  return null;
+}
+
+// "Entregue" vale so um pedido, e so enquanto ele esta em rota de entrega. Codigo repetido
+// em dois pedidos nao vale para nenhum.
 function umPedidoEmRota(resultado) {
   const documentos = resultado?.docs || [];
   if (documentos.length !== 1) return null;
@@ -150,7 +203,7 @@ function nomeDaLoja(pedido = {}, loja = null) {
 function resumoDoPedido(pedido = {}, { gatewayEmProducao = false, loja = null } = {}) {
   const endereco = pedido.address || {};
   const pagamento = pedido.purchasePayment || {};
-  const troco = Number(pagamento.valueBack || 0);
+  const dinheiro = trocoPeloTotalAtual(pagamento, pedido.total);
   return {
     pedido: pedido.orderNumber || '',
     loja: nomeDaLoja(pedido, loja),
@@ -165,9 +218,59 @@ function resumoDoPedido(pedido = {}, { gatewayEmProducao = false, loja = null } 
     itens: Array.isArray(pedido.productsCart) ? pedido.productsCart.length : 0,
     total: Number(pedido.total || 0),
     pagamento: pagamento.paymentType || '',
-    troco: troco > 0 ? troco : null,
+    troco: dinheiro.troco,
+    paymentValue: dinheiro.paymentValue,
+    receberAMais: dinheiro.receberAMais,
     pagoOnline: pagamentoOnlineConfirmado(pedido, gatewayEmProducao),
+    // Acerto da pesagem do pedido pago pelo app (cola RP-51, item 2.1). Inteiros em centavos,
+    // gravados so pelo servidor. Ausente, zero, negativo ou fora de inteiro vem nulo.
+    devolverAoCliente: centavosPositivos(pedido.devolverAoCliente),
+    receberDoCliente: centavosPositivos(pedido.receberDoCliente),
   };
+}
+
+// Troco do pedido em dinheiro pelo total atual (cola RP-125, item 2). O valueBack e gravado uma vez,
+// no fechamento da compra, e a separacao refaz o total sem refazer o troco. Com a nota do cliente
+// (purchasePayment.paymentValue, em reais), a conta e refeita em centavos inteiros com o total atual
+// do pedido (pedido.total, em reais, o mesmo "total" desta resposta): nota >= total da troco = nota -
+// total; nota < total da receberAMais = total - nota. Pedido sem nota (antigo) segue com o valueBack,
+// como era. Fora do dinheiro, nada.
+function trocoPeloTotalAtual(pagamento = {}, total) {
+  const nota = Number(pagamento.paymentValue || 0);
+  if (ehDinheiro(pagamento.paymentType) && Number.isFinite(nota) && nota > 0) {
+    const diferenca = centavosDe(nota) - centavosDe(Number(total || 0));
+    return {
+      paymentValue: nota,
+      troco: diferenca >= 0 ? diferenca / 100 : null,
+      receberAMais: diferenca < 0 ? -diferenca / 100 : null,
+    };
+  }
+  const trocoGravado = Number(pagamento.valueBack || 0);
+  // Sem nota: o valueBack gravado, como antes (cola RP-13: a nota so vem junto do troco).
+  return {
+    paymentValue: trocoGravado > 0 && nota > 0 ? nota : null,
+    troco: trocoGravado > 0 ? trocoGravado : null,
+    receberAMais: null,
+  };
+}
+
+function formaLimpa(tipo) {
+  return String(tipo || '').replace('PaymentType.', '').toLowerCase();
+}
+
+function ehDinheiro(tipo) {
+  const limpo = formaLimpa(tipo);
+  return limpo.includes('cash') || limpo.includes('dinheiro') || limpo.includes('money');
+}
+
+// Reais em centavos inteiros, sem o ruido do ponto flutuante (mesma conta do centavosDe do app).
+function centavosDe(valor) {
+  if (!Number.isFinite(valor)) return 0;
+  return Math.round(Number((valor * 100).toFixed(6)));
+}
+
+function centavosPositivos(valor) {
+  return Number.isInteger(valor) && valor > 0 ? valor : null;
 }
 
 // Forma de pagamento nao diz se o dinheiro entrou: na Zero Grau, Pix e cartao sao
@@ -285,5 +388,6 @@ function linkInvalido() {
 }
 
 export const CAMPOS_DE_ESCRITA = CAMPOS_PERMITIDOS;
+export const STATUS_DE_ESPERA = STATUS_AGUARDANDO;
 export const STATUS_DE_ROTA = STATUS_EM_ROTA;
 export const STATUS_DE_ENTREGA = STATUS_ENTREGUE;

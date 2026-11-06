@@ -93,7 +93,15 @@ test('resumirPedido: endereco em objeto, total direto, canal app', () => {
     price: 0,
     paidAt: null,
     formaPagamento: null,
+    modoRecebimento: 'entrega',
   });
+});
+
+test('versao 55: modoRecebimento no resumo; ausente ou desconhecido vale entrega', () => {
+  assert.equal(resumirPedido('r1', { modoRecebimento: 'retirada' }).modoRecebimento, 'retirada');
+  assert.equal(resumirPedido('r2', { modoRecebimento: 'entrega' }).modoRecebimento, 'entrega');
+  assert.equal(resumirPedido('r3', {}).modoRecebimento, 'entrega');
+  assert.equal(resumirPedido('r4', { modoRecebimento: 'drone' }).modoRecebimento, 'entrega');
 });
 
 test('resumirPedido: endereco em texto, total somado de productsCart, pedido do agente, recorrente', () => {

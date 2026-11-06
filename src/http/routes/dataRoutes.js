@@ -10,7 +10,9 @@ const batchBodySchema = z.object({ reads: z.array(z.record(z.unknown())) });
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const MAX_BATCH_READS = 25;
 
-export function createDataRoutes({ manageManagerData }) {
+// `registrarAcaoDoAdmin` grava quem agiu quando um admin da plataforma escreve numa loja
+// escolhida (cabecalho X-Loja-Alvo, conferido em lojaAlvoDoAdmin.js).
+export function createDataRoutes({ manageManagerData, registrarAcaoDoAdmin = null }) {
   const router = Router();
 
   router.post(
@@ -20,6 +22,7 @@ export function createDataRoutes({ manageManagerData }) {
       const result = await manageManagerData.getDocument({
         actorUid: request.auth.uid,
         claims: request.auth,
+        lojaAlvo: request.lojaAlvo,
         target,
       });
       response.json({ data: result });
@@ -33,6 +36,7 @@ export function createDataRoutes({ manageManagerData }) {
       const result = await manageManagerData.getDocuments({
         actorUid: request.auth.uid,
         claims: request.auth,
+        lojaAlvo: request.lojaAlvo,
         target,
       });
       response.json({ data: result });
@@ -46,6 +50,7 @@ export function createDataRoutes({ manageManagerData }) {
       const result = await manageManagerData.countDocuments({
         actorUid: request.auth.uid,
         claims: request.auth,
+        lojaAlvo: request.lojaAlvo,
         target,
       });
       response.json({ data: result });
@@ -75,6 +80,7 @@ export function createDataRoutes({ manageManagerData }) {
       const results = await manageManagerData.readBatch({
         actorUid: request.auth.uid,
         claims: request.auth,
+        lojaAlvo: request.lojaAlvo,
         reads,
       });
       response.json({
@@ -92,8 +98,18 @@ export function createDataRoutes({ manageManagerData }) {
       const result = await manageManagerData.mutate({
         actorUid: request.auth.uid,
         claims: request.auth,
+        lojaAlvo: request.lojaAlvo,
         request: mutation,
       });
+      if (request.lojaAlvo && registrarAcaoDoAdmin) {
+        await registrarAcaoDoAdmin({
+          uid: request.auth.uid,
+          email: request.auth.email || null,
+          rota: request.originalUrl,
+          lojaId: request.lojaAlvo,
+          detalhes: { operacao: mutation.operation || null, caminhos: caminhosDaMutacao(mutation) },
+        });
+      }
       response.json({ data: result });
     }),
   );
@@ -144,6 +160,7 @@ function abrirStream(manageManagerData) {
         unsubscribe = await manageManagerData.subscribe({
           actorUid: request.auth.uid,
           claims: request.auth,
+          lojaAlvo: request.lojaAlvo,
           target,
           onSnapshot: (snapshot) => writeLine(response, { type: 'snapshot', snapshot }),
           onError: (error) => {
@@ -197,6 +214,11 @@ function describeReadFailure(error, request, read) {
     stack: error?.stack,
   });
   return { code: 'internal_error', message: 'Nao foi possivel completar esta leitura.' };
+}
+
+function caminhosDaMutacao(mutation) {
+  const operacoes = mutation?.operation === 'batch' ? (mutation.operations || []) : [mutation];
+  return operacoes.map((operacao) => String(operacao?.target?.path || '')).filter(Boolean).slice(0, 50);
 }
 
 function writeLine(response, payload) {

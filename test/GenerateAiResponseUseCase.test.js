@@ -102,3 +102,10 @@ test('falha ao gravar o uso nao derruba a resposta', async () => {
   assert.equal(result.output, 'ok');
   assert.deepEqual(erros, ['uso_ia_registro_falhou']);
 });
+
+test('C4: o assistente se apresenta como painel Móbile Gerenciador, sem "Plus"', async () => {
+  const fs = await import('node:fs');
+  const fonte = fs.readFileSync(new URL('../src/application/ai/GenerateAiResponseUseCase.js', import.meta.url), 'utf8');
+  assert.ok(fonte.includes("'Voce e o assistente de IA do painel Móbile Gerenciador.'"));
+  assert.equal(/gerenciador_plus|Gerenciador Plus/.test(fonte), false);
+});

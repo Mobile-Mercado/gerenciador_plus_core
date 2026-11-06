@@ -29,8 +29,18 @@
 //
 // Arquivo puro: nao requer firebase-admin nem firebase-functions. Para gravar, recebe db e
 // o FieldValue de quem chamou.
+//
+// CENTAVOS (cola RP-52, item 3.2): o que cada pedido soma (price, frete, total e o valor de
+// produto, categoria e cliente) e arredondado a centavos antes do FieldValue.increment; o valor
+// de cada item, antes de somar. A contribuicao antiga sai como foi guardada, sem arredondar, e o
+// delta perde so o ruido de ponto flutuante (semRuido). Na montagem inteira (script), o valor ja
+// somado e arredondado ao gravar.
 const { marcarMudanca } = require('./marcador');
 const { getOrderTotal } = require('./resumoPedidos');
+const { arredondarCentavos, semRuido } = require('./centavos');
+
+// Campos de dinheiro do documento do mes e do dia (o ultimo nome do caminho).
+const CAMPOS_DE_DINHEIRO = new Set(['price', 'frete', 'total', 'valor']);
 
 const RESUMO_VENDAS_VERSION = 1;
 const RESUMO_VENDAS_COLLECTION = 'ResumoVendas';
@@ -173,9 +183,9 @@ function norm(value) {
 // price: total do item ou quantidade vezes preco.
 function itemValue(item) {
   const itemTotal = get(item, ['total', 'totalPrice', 'subtotal', 'amount']);
-  if (itemTotal !== null) return num(itemTotal);
+  if (itemTotal !== null) return arredondarCentavos(num(itemTotal));
   const price = get(item, ['price', 'currentPrice', 'unitPrice', 'product.price']);
-  return (num(item.quantity) || 1) * num(price);
+  return arredondarCentavos((num(item.quantity) || 1) * num(price));
 }
 
 // Produto do item precisa do documento quando falta nome ou categoria, como no painel.
@@ -253,14 +263,19 @@ function contribuicaoDoPedido(id, data, meta = {}) {
     });
   });
 
+  // Soma dos itens ja em centavos: arredonda de novo para nao levar ruido ao increment.
+  [produtos, categorias].forEach((mapa) => Object.values(mapa).forEach((entrada) => {
+    entrada.valor = arredondarCentavos(entrada.valor);
+  }));
+
   const neighborhood = orderNeighborhood(data);
-  const price = toNumber(data.price);
+  const price = arredondarCentavos(toNumber(data.price));
   return {
     pedidoId: id,
     ...momentoDaVenda(vendidoEm),
     canal: orderChannel(data),
     price,
-    frete: toNumber(data.deliveryPrice),
+    frete: arredondarCentavos(toNumber(data.deliveryPrice)),
     total: getOrderTotal(data),
     produtos,
     categorias,
@@ -336,7 +351,8 @@ function objetoDoAcumulador(acumulador, FieldValue) {
     alvo[caminho.at(-1)] = valor;
   };
   acumulador.deltas.forEach((delta, chave) => {
-    if (Math.abs(delta) > 1e-9) por(JSON.parse(chave), FieldValue.increment(delta));
+    const limpo = semRuido(delta);
+    if (Math.abs(limpo) > 1e-9) por(JSON.parse(chave), FieldValue.increment(limpo));
   });
   acumulador.nomes.forEach((nome, chave) => por(JSON.parse(chave), nome));
   return raiz;
@@ -521,7 +537,10 @@ function montarDocumentos(contribuicoes, idDe, aplicarEm) {
       caminho.slice(0, -1).forEach((parte) => { alvo[parte] = alvo[parte] || {}; alvo = alvo[parte]; });
       alvo[caminho.at(-1)] = valor;
     };
-    acumulador.deltas.forEach((valor, chave) => por(JSON.parse(chave), valor));
+    acumulador.deltas.forEach((valor, chave) => {
+      const caminho = JSON.parse(chave);
+      por(caminho, CAMPOS_DE_DINHEIRO.has(caminho.at(-1)) ? arredondarCentavos(valor) : valor);
+    });
     acumulador.nomes.forEach((nome, chave) => por(JSON.parse(chave), nome));
     documentos.set(id, raiz);
   });

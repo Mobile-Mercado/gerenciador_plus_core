@@ -375,3 +375,60 @@ test('montarDias do script da a mesma soma que o gatilho', async () => {
   assert.deepEqual([...dias.keys()], ['2026-09-10']);
   assert.deepEqual(pelaFuncao, dias.get('2026-09-10'));
 });
+
+// ----- Centavos (cola RP-52, item 3.2) -----
+
+const pedidoQuebrado = (extra = {}) => pedido({
+  price: 133.04800000000003,
+  deliveryPrice: 5.005,
+  total: 138.04800000000003,
+  productsCart: [1, 2, 3].map(() => ({ id: 'p-arroz', quantity: 1, product: { name: 'Arroz', price: 0.335 } })),
+  ...extra,
+});
+
+test('centavos: o que o pedido soma no mes e no dia vai arredondado ao increment', async () => {
+  const { db, registro } = firestoreFalso(PRODUTOS);
+  await atualizar(db, null, pedidoQuebrado());
+  const doc = mes(registro, 'loja-1', '2026-09');
+  assert.deepEqual(doc.dias['10'].app, { pedidos: 1, price: 133.05, frete: 5.01, total: 138.05 });
+  assert.deepEqual(doc.semanaHora.d4h12, { pedidos: 1, price: 133.05, total: 138.05 });
+  // Cada item de 0,335 vira 0,34: 1,02 (antes, 1.0050000000000001).
+  assert.deepEqual(doc.produtos['p-arroz'], { nome: 'Arroz', qtd: 3, valor: 1.02 });
+  assert.deepEqual(doc.categorias.cereais, { nome: 'CEREAIS', qtd: 3, valor: 1.02 });
+  assert.deepEqual(doc.clientes['cli-1'], { nome: 'Ana', pedidos: 1, valor: 133.05 });
+  assert.deepEqual(diaDoc(registro, 'loja-1', '2026-09-10').horas.h12.app, { price: 133.05, pedidos: 1 });
+  assert.equal(contribuicao(registro, 'loja-1', 'ped-1').total, 138.05);
+});
+
+test('centavos: contribuicao antiga com sobra de casas sai inteira e a nova entra em centavos', async () => {
+  const antiga = contribuicaoDoPedido('ped-1', pedido(), META);
+  // Gravado antes desta regra: price 30.004 no pedido, na contribuicao e no mes, sem arredondar.
+  const sobra = { ...antiga, price: 30.004, cliente: { ...antiga.cliente, valor: 30.004 } };
+  const { db, registro } = firestoreFalso({
+    ...PRODUTOS,
+    'estabelecimentos/loja-1/ResumoVendasContribuicoes/ped-1': sobra,
+    'estabelecimentos/loja-1/ResumoVendas/2026-09': {
+      dias: { 10: { app: { pedidos: 1, price: 30.004, frete: 5, total: 35 } } },
+      clientes: { 'cli-1': { nome: 'Ana', pedidos: 1, valor: 30.004 } },
+    },
+  });
+  await atualizar(db, pedido({ price: 30.004 }), pedido({ price: 30.004, conferenciaEntrega: { ultimaResposta: 'entregue' } }));
+  const doc = mes(registro, 'loja-1', '2026-09');
+  // Sai 30.004 (delta -0.004) e o mes fica com 30.00, sem sobra.
+  assert.equal(doc.dias['10'].app.price, 30);
+  assert.equal(doc.clientes['cli-1'].valor, 30);
+  assert.equal(contribuicao(registro, 'loja-1', 'ped-1').price, 30);
+});
+
+test('centavos: a soma acumulada pelo increment ainda pode ter ruido; a montagem do script arredonda', async () => {
+  const { db, registro } = firestoreFalso(PRODUTOS);
+  const um = pedido({ price: 0.1 });
+  const dois = pedido({ price: 0.2, clientId: 'cli-2' });
+  await atualizarResumoDeVendas({ db, FieldValue, antes: null, depois: um, pedidoId: 'ped-1', lojaDe });
+  await atualizarResumoDeVendas({ db, FieldValue, antes: null, depois: dois, pedidoId: 'ped-2', lojaDe });
+  // Os dois increments sao 0.1 e 0.2, ja em centavos; a soma em ponto flutuante fica 0.30000000000000004.
+  assert.equal(mes(registro, 'loja-1', '2026-09').dias['10'].app.price, 0.30000000000000004);
+  const contribuicoes = [contribuicaoDoPedido('ped-1', um, META), contribuicaoDoPedido('ped-2', dois, META)];
+  assert.equal(montarMeses(contribuicoes).get('2026-09').dias['10'].app.price, 0.3);
+  assert.equal(montarDias(contribuicoes).get('2026-09-10').horas.h12.app.price, 0.3);
+});
