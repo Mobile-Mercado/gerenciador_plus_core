@@ -17,6 +17,7 @@ import { JornadaDoCadastro } from './application/cadastro/JornadaDoCadastro.js';
 import { LimiteDeTentativas } from './application/cadastro/LimiteDeTentativas.js';
 import { BannersDaLoja } from './application/loja/BannersDaLoja.js';
 import { AppDoClienteDaLoja } from './application/loja/AppDoClienteDaLoja.js';
+import { ConjuntosDeIcones } from './application/admin/ConjuntosDeIcones.js';
 import { EntregadoresDaLoja } from './application/loja/EntregadoresDaLoja.js';
 import { FormasDePagamento } from './application/loja/FormasDePagamento.js';
 import { FirestoreRest } from './infra/firebase/FirestoreRest.js';
@@ -130,6 +131,8 @@ const app = createApp({
   jornadaDeEntrada: new JornadaDeEntrada({ firestore }),
   entregaDaLoja: new EntregaDaLoja({ firestore }),
   appDoClienteDaLoja: new AppDoClienteDaLoja({ firestore }),
+  // Conjuntos de icones (cola B56-04).
+  conjuntosDeIcones: new ConjuntosDeIcones({ firestore, bucket: getStorageBucket(env.STORAGE_BUCKET) }),
   formasDePagamento: new FormasDePagamento({ firestore }),
   entregadoresDaLoja: new EntregadoresDaLoja({ firestore }),
   verificarAppCheck: (token) => getFirebaseAppCheck().verifyToken(token),

@@ -5,6 +5,7 @@ import { asyncHandler } from '../middlewares/asyncHandler.js';
 import { corpoDeImagem } from '../middlewares/corpoDeImagem.js';
 import { appDoClienteSchema, formasDePagamentoSchema } from './appDoClienteSchema.js';
 import { entregaSchema } from './entregaSchema.js';
+import { conjuntoDaLojaSchema, conjuntoNomeSchema, iconeDoConjuntoSchema } from './aparenciaSchema.js';
 import { AMBIENTES_DA_SAFRA } from '../../application/loja/FormasDePagamento.js';
 
 // Rotas do Admin da plataforma. A barreira (requirePlatformAdmin) e o registro de quem agiu
@@ -104,7 +105,7 @@ const sugestoesClientesSchema = z.object({
 export function createAdminRoutes({
   manageCatalogoPadrao, sugestoesDosClientes, pedidosDeLoja, lojaNoAdmin, franquias, administradores, dadosDoAdmin,
   manageImplantationPipelines, jornadaDeEntrada = null, entregaDaLoja = null, appDoClienteDaLoja = null,
-  formasDePagamento = null, instalacoesDosApps = null,
+  formasDePagamento = null, instalacoesDosApps = null, conjuntosDeIcones = null,
 }) {
   const router = Router();
 
@@ -457,6 +458,61 @@ export function createAdminRoutes({
   router.get('/dados/experiencia/carrinho/:uid/:lojaId', asyncHandler(async (request, response) => {
     response.json({ data: await dadosDoAdmin.carrinho(request.params.uid, request.params.lojaId) });
   }));
+
+  // ===== Aparencias (cola B56-04) =====
+  // Conjuntos de icones: "Lineares" (a lista padrao) vem primeiro, com o numero de lojas de cada.
+  if (conjuntosDeIcones) {
+    router.get('/conjuntos-icones', asyncHandler(async (_request, response) => {
+      response.json({ data: await conjuntosDeIcones.listar() });
+    }));
+
+    router.get('/conjuntos-icones/:conjuntoId', asyncHandler(async (request, response) => {
+      response.json({ data: await conjuntosDeIcones.ler(request.params.conjuntoId) });
+    }));
+
+    router.post('/conjuntos-icones', asyncHandler(async (request, response) => {
+      const { nome } = conjuntoNomeSchema.parse(request.body);
+      const conjunto = await conjuntosDeIcones.criar({ nome }, atorDe(request));
+      response.locals.auditoria = { acao: 'conjunto_icones_criado', conjuntoId: conjunto.id, nome: conjunto.nome };
+      response.status(201).json({ data: conjunto });
+    }));
+
+    router.patch('/conjuntos-icones/:conjuntoId', asyncHandler(async (request, response) => {
+      const { nome } = conjuntoNomeSchema.parse(request.body);
+      const resultado = await conjuntosDeIcones.renomear(request.params.conjuntoId, { nome }, atorDe(request));
+      response.locals.auditoria = {
+        acao: 'conjunto_icones_renomeado', conjuntoId: request.params.conjuntoId, antes: resultado.antes, depois: resultado.conjunto.nome,
+      };
+      response.json({ data: resultado.conjunto });
+    }));
+
+    router.put('/conjuntos-icones/:conjuntoId/icones/:categoriaId', asyncHandler(async (request, response) => {
+      const entrada = iconeDoConjuntoSchema.parse(request.body);
+      const { conjuntoId, categoriaId } = request.params;
+      const resultado = await conjuntosDeIcones.trocarIcone(conjuntoId, categoriaId, entrada, atorDe(request));
+      response.locals.auditoria = {
+        acao: 'conjunto_icone_trocado', conjuntoId, categoriaId, antes: resultado.antes?.arquivo || null, convertido: resultado.convertido,
+      };
+      response.json({ data: resultado.conjunto });
+    }));
+
+    router.delete('/conjuntos-icones/:conjuntoId/icones/:categoriaId', asyncHandler(async (request, response) => {
+      const { conjuntoId, categoriaId } = request.params;
+      const resultado = await conjuntosDeIcones.removerIcone(conjuntoId, categoriaId, atorDe(request));
+      response.locals.auditoria = { acao: 'conjunto_icone_removido', conjuntoId, categoriaId, antes: resultado.antes?.arquivo || null };
+      response.json({ data: resultado.conjunto });
+    }));
+
+    // Conjunto da loja: null ou "lineares" volta para a lista padrao.
+    router.patch('/estabelecimentos/:lojaId/conjunto-icones', asyncHandler(async (request, response) => {
+      const { conjuntoId } = conjuntoDaLojaSchema.parse(request.body);
+      const resultado = await conjuntosDeIcones.escolherDaLoja(request.params.lojaId, conjuntoId);
+      response.locals.auditoria = {
+        acao: 'conjunto_icones_da_loja', campos: ['aparencia.conjuntoIcones'], antes: resultado.antes, depois: resultado.conjuntoIcones,
+      };
+      response.json({ data: resultado });
+    }));
+  }
 
   // ===== Lista padrao =====
   router.get('/:tipo', asyncHandler(async (request, response) => {

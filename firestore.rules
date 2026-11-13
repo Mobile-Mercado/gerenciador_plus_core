@@ -57,6 +57,12 @@ service cloud.firestore {
     }
     // ===== fim do admin antigo =====
 
+    // Conjuntos de icones (cola B56-04): so o Core (rotas do Admin) grava, e a API le, as duas
+    // pelo Admin SDK. Nenhum app nem painel le ou grava direto.
+    match /conjuntosIcones/{conjuntoId} {
+      allow read, write: if false;
+    }
+
     // Users - apenas o próprio usuário pode ler seus dados
     // O Core acha a loja do dono pelo Users (campo id e userReference da loja): quem cria o
     // proprio Users so grava no id o id do documento, como os apps gravam
@@ -239,11 +245,14 @@ service cloud.firestore {
       // valor, porque o lojista ainda muda scheduling.enabled. userReference (RP-68, A.1): o
       // Core acha o dono da loja por ele (findAccountByUid), entao o lojista nao troca, nao
       // acrescenta nem apaga; a gravacao sem o campo, ou com o mesmo valor, passa.
+      // Conjunto de icones (cola B56-04): aparencia (aparencia.conjuntoIcones) so pelo Core, como
+      // o aparenciaHome.
       function camposDoAdminIguais() {
         let mudou = request.resource.data.diff(resource.data).affectedKeys();
         return !mudou.hasAny(['isActive', 'status', 'motivoRecusa', 'aprovadoPor', 'aprovadoEm',
             'recusadoPor', 'recusadoEm', 'enviadoEm', 'origemCadastro', 'cnpjConferido', 'offerColor',
-            'featureFlags', 'aparenciaHome', 'userReference'])
+            'featureFlags', 'aparenciaHome', 'userReference',
+            'aparencia'])
           && request.resource.data.get('scheduling', {}).get('contracted', null)
             == resource.data.get('scheduling', {}).get('contracted', null);
       }
