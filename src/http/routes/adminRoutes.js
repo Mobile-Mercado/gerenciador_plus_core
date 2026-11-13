@@ -486,6 +486,13 @@ export function createAdminRoutes({
       response.json({ data: resultado.conjunto });
     }));
 
+    // Colecao padrao, para a loja sem escolha (cola B56-17): so uma por vez.
+    router.put('/conjuntos-icones/:conjuntoId/padrao', asyncHandler(async (request, response) => {
+      const resultado = await conjuntosDeIcones.marcarPadrao(request.params.conjuntoId, atorDe(request));
+      response.locals.auditoria = { acao: 'conjunto_icones_padrao', conjuntoId: request.params.conjuntoId, antes: resultado.antes };
+      response.json({ data: resultado.conjunto });
+    }));
+
     router.put('/conjuntos-icones/:conjuntoId/icones/:categoriaId', asyncHandler(async (request, response) => {
       const entrada = iconeDoConjuntoSchema.parse(request.body);
       const { conjuntoId, categoriaId } = request.params;

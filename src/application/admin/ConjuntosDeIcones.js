@@ -74,6 +74,7 @@ export class ConjuntosDeIcones {
         nome: data.nome || documento.id,
         icones: Object.keys(data.icones || {}).length,
         lojas: await this.contarLojas(documento.id),
+        padrao: data.padrao === true,
         atualizadoEm: quandoIso(data.atualizadoEm),
         atualizadoPor: data.atualizadoPor || null,
       };
@@ -111,6 +112,7 @@ export class ConjuntosDeIcones {
       id: snapshot.id,
       nome: data.nome || snapshot.id,
       listaPadrao: false,
+      padrao: data.padrao === true,
       icones: data.icones || {},
       criadoEm: quandoIso(data.criadoEm),
       atualizadoEm: quandoIso(data.atualizadoEm),
@@ -172,7 +174,8 @@ export class ConjuntosDeIcones {
     };
   }
 
-  // Tira o icone da categoria do conjunto: a loja volta a ver o da lista padrao nela.
+  // Tira o icone da categoria do conjunto: nas lojas que usam o conjunto, a categoria fica sem
+  // icone (cola B56-17: so a colecao vale, sem reserva).
   async removerIcone(id, categoriaId, ator = {}) {
     const atual = await this.conjunto(id);
     if (!ID_SEGURO.test(String(categoriaId || ''))) throw recusa('Categoria não encontrada na lista padrão.', 'conjunto_categoria_nao_encontrada', 404);
@@ -186,7 +189,23 @@ export class ConjuntosDeIcones {
     return { antes, conjunto: this.paraATela(await atual.ref.get()) };
   }
 
-  // Conjunto da loja. null ou "lineares" apaga o campo (a loja volta para a lista padrao).
+  // Colecao padrao (cola B56-17): vale para a loja sem escolha. So uma por vez: marcar uma tira
+  // a marca das outras, na mesma gravacao. Devolve qual era a padrao antes (ou null).
+  async marcarPadrao(id, ator = {}) {
+    const atual = await this.conjunto(id);
+    const marcadas = await this.colecao().where('padrao', '==', true).get();
+    const antes = marcadas.docs.map((documento) => documento.id);
+    const lote = this.firestore.batch();
+    for (const documento of marcadas.docs) {
+      if (documento.id !== atual.id) lote.update(documento.ref, { padrao: this.apagarCampo(), atualizadoEm: this.serverTimestamp(), atualizadoPor: ator.uid || null });
+    }
+    lote.update(atual.ref, { padrao: true, atualizadoEm: this.serverTimestamp(), atualizadoPor: ator.uid || null });
+    await lote.commit();
+    return { antes: antes.length ? antes.join(',') : null, conjunto: this.paraATela(await atual.ref.get()) };
+  }
+
+  // Conjunto da loja. null ou "lineares" apaga o campo: a loja fica sem escolha e usa a colecao
+  // padrao (cola B56-17).
   async escolherDaLoja(lojaId, conjuntoId) {
     const ref = this.lojas().doc(String(lojaId || ''));
     const loja = await ref.get();

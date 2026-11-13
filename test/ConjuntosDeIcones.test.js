@@ -159,6 +159,26 @@ test('conjunto da loja: grava aparencia.conjuntoIcones; null ou "lineares" apaga
   await assert.rejects(conjuntos.escolherDaLoja('nao-existe', 'ilus'), (erro) => erro.code === 'loja_nao_encontrada');
 });
 
+test('colecao padrao (B56-17): marcar uma tira a marca da outra; so uma por vez; aparece na lista e na leitura', async () => {
+  const { conjuntos, banco } = montar({}, {
+    'conjuntosIcones/ilus': { nome: 'Ilustrações', icones: {} },
+    'conjuntosIcones/padrao': { nome: 'Padrão', icones: {}, padrao: true },
+  });
+  const marcada = await conjuntos.marcarPadrao('ilus', { uid: 'admin-1' });
+  assert.equal(marcada.antes, 'padrao');
+  assert.equal(marcada.conjunto.padrao, true);
+  assert.equal(banco.dados('conjuntosIcones/ilus').padrao, true);
+  assert.equal(banco.dados('conjuntosIcones/padrao').padrao, undefined, 'a outra perde a marca');
+  const lista = await conjuntos.listar();
+  assert.deepEqual(lista.filter((item) => item.padrao).map((item) => item.id), ['ilus'], 'so uma padrao na lista');
+  assert.equal((await conjuntos.ler('padrao')).padrao, false);
+  const deNovo = await conjuntos.marcarPadrao('ilus');
+  assert.equal(deNovo.antes, 'ilus', 'marcar a que ja e padrao nao muda nada');
+  assert.equal(banco.dados('conjuntosIcones/ilus').padrao, true);
+  await assert.rejects(conjuntos.marcarPadrao('lineares'), (erro) => erro.code === 'conjunto_lineares_fixo');
+  await assert.rejects(conjuntos.marcarPadrao('nao-existe'), (erro) => erro.code === 'conjunto_nao_encontrado');
+});
+
 // ----- Parte 3: Ofertas, Abertura e Primeira tela -----
 
 // ----- Rotas -----
@@ -216,5 +236,20 @@ test('rotas do Admin: conjuntos (listar, criar, renomear, icone, remover) e conj
     const naLoja = [...banco.docs.entries()].filter(([caminho]) => caminho.startsWith(`${LOJA}/AdminAuditLogs/`)).map(([, dados]) => dados.details);
     assert.equal(naLoja.length, 1);
     assert.deepEqual([naLoja[0].acao, naLoja[0].antes, naLoja[0].depois], ['conjunto_icones_da_loja', 'lineares', 'ilus']);
+  });
+});
+
+test('rota do Admin (B56-17): PUT /conjuntos-icones/:id/padrao marca a colecao padrao, com auditoria', async () => {
+  await comRotas(async ({ chamar, banco }) => {
+    const marcada = await chamar('PUT', '/api/admin/conjuntos-icones/ilus/padrao');
+    assert.equal(marcada.status, 200);
+    assert.equal((await marcada.json()).data.padrao, true);
+    assert.equal(banco.dados('conjuntosIcones/ilus').padrao, true);
+    assert.equal((await chamar('PUT', '/api/admin/conjuntos-icones/nao-existe/padrao')).status, 404);
+    const lista = await (await chamar('GET', '/api/admin/conjuntos-icones')).json();
+    assert.deepEqual(lista.data.map((item) => [item.id, item.padrao === true]), [['lineares', false], ['ilus', true]]);
+    await esperarAuditoria();
+    const acoes = [...banco.docs.entries()].filter(([caminho]) => caminho.startsWith('adminAuditLogs/')).map(([, dados]) => [dados.acao, dados.status]);
+    assert.ok(acoes.some(([acao, status]) => acao === 'conjunto_icones_padrao' && status === 200));
   });
 });
