@@ -44,6 +44,8 @@ const CAMPOS_DA_LOJA_SO_ADMIN = [
   // Contrato da versao 55 (cola RP-13): interruptores do app e blocos da Home, so pelo Admin
   // (PATCH /api/admin/estabelecimentos/:lojaId/app-do-cliente).
   'featureFlags', 'aparenciaHome',
+  // Conjunto de icones da loja (cola B56-04): so pelo Core (rotas do Admin).
+  'aparencia',
   // Dono da loja (RP-68, A.1): userReference so muda pelo Admin ("Corrigir acesso"), como na regra.
   'userReference',
 ];

@@ -54,6 +54,7 @@ export function createApp({
   jornadaDeEntrada = null,
   entregaDaLoja = null,
   appDoClienteDaLoja = null,
+  conjuntosDeIcones = null,
   formasDePagamento = null,
   entregadoresDaLoja = null,
   verificarAppCheck,
@@ -231,6 +232,7 @@ export function createApp({
       appDoClienteDaLoja,
       formasDePagamento,
       instalacoesDosApps,
+      conjuntosDeIcones,
     }),
   );
 
