@@ -10,6 +10,10 @@ rules_version = '2';
 //    sem isso a foto ficaria publica e qualquer conta logada gravaria na pasta de outro cliente.
 // 3. Products/{productId}/images: "request.auth != true" era sempre verdadeiro e deixava gravar
 //    sem login (dossie item 3). Passa a exigir login, como as outras pastas.
+// B56-19, passo 2b (decisao do Thay de 13/11): conjuntosIcones/ (as colecoes de icones das
+// categorias) com leitura publica e sem gravacao pelo app nem pelo painel. So o servidor grava
+// (Core, pelo Admin SDK, que nao passa por esta regra). A regra geral deixa de valer para a
+// gravacao nessa pasta, porque no Storage basta uma regra liberar.
 service firebase.storage {
   match /b/{bucket}/o {
 
@@ -41,11 +45,18 @@ service firebase.storage {
       allow delete: if request.auth != null && request.auth.uid == uid;
     }
 
+    // Colecoes de icones das categorias (B56-19, passo 2b): leitura publica; ninguem grava pelo
+    // app ou pelo painel.
+    match /conjuntosIcones/{resto=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // Regra geral para outros arquivos, fora da pasta dos cupons fiscais. Era /{allPaths=**}; o
     // curinga recursivo e um caminho (sem texto para comparar), entao a primeira parte vem a parte.
     match /{pasta}/{resto=**} {
       allow read: if pasta != 'cuponsFiscais';
-      allow write: if request.auth != null && pasta != 'cuponsFiscais';
+      allow write: if request.auth != null && pasta != 'cuponsFiscais' && pasta != 'conjuntosIcones';
     }
   }
 }
