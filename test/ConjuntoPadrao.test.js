@@ -20,7 +20,7 @@ test('padrao: bucket e caminho do endereco, sem token; sem endereco ou endereco 
   assert.equal(JSON.stringify(itens).includes('segredo'), false, 'nenhum token');
 });
 
-test('padrao: arquivo que nao existe (o todos.svg) fica fora, sem icone; arquivo que nao passa na conferencia para tudo', async () => {
+test('padrao: arquivo que nao existe (o todos.svg) fica fora, sem icone; fora do tamanho vai para foraDaRegra; tipo fora para tudo', async () => {
   const { itens } = montarListaPadrao([
     { id: 'bebidas', nome: 'Bebidas', icon: url('b', 'categoriasProdutos/bebidas.svg') },
     { id: 'todos', nome: 'TODOS', icon: url('b', 'categoriasProdutos/todos.svg') },
@@ -29,10 +29,9 @@ test('padrao: arquivo que nao existe (o todos.svg) fica fora, sem icone; arquivo
   ], 'x');
   const arquivos = { 'categoriasProdutos/bebidas.svg': Buffer.from('<svg/>'), 'categoriasProdutos/grande.svg': Buffer.alloc(30000), 'categoriasProdutos/foto.jpg': Buffer.from('jpg') };
   const conferir = async (conteudo) => { if (conteudo.length > 20480) throw new Error('acima de 20 KB'); };
-  const { escolhidos, semArquivo, problemas } = await escolherArquivosPadrao(itens, async (item) => arquivos[item.caminho] || null, conferir);
+  const { escolhidos, semArquivo, foraDaRegra, problemas } = await escolherArquivosPadrao(itens, async (item) => arquivos[item.caminho] || null, conferir);
   assert.deepEqual(escolhidos.map((item) => [item.categoriaId, item.tipoArquivo]), [['bebidas', 'image/svg+xml']]);
   assert.deepEqual(semArquivo.map((item) => item.categoriaId), ['todos']);
-  assert.equal(problemas.length, 2);
-  assert.match(problemas.join(' '), /grande.*20 KB/);
-  assert.match(problemas.join(' '), /foto: tipo \.jpg/);
+  assert.deepEqual(foraDaRegra.map((item) => [item.categoriaId, item.motivo, item.bytes]), [['grande', 'acima de 20 KB', 30000]]);
+  assert.deepEqual(problemas, ['foto: tipo .jpg fora de SVG, PNG ou WEBP']);
 });

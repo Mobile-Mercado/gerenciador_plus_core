@@ -5,8 +5,11 @@
 //
 // Sem --criar, so le e imprime a lista: nao grava nada.
 // Com --criar, confere todos os arquivos antes (tipo SVG/PNG/WEBP, quadrado, ate 20 KB, a mesma
-// regra do Admin) e, se algum nao passar, para sem gravar. Passando, cria a colecao pelo mesmo
-// caminho do Admin (ConjuntosDeIcones: conjuntosIcones/{id} e conjuntosIcones/{id}/{categoria}_{ms}.{ext}).
+// regra do Admin). Tipo fora de SVG/PNG/WEBP para tudo. Arquivo de hoje fora do tamanho ou do
+// quadrado da regra (B56-17: 22 dos 58) tambem para, a menos que venha --manter-fora-da-regra: com
+// ela, esses entram como estao hoje, gravados no mesmo lugar e formato do Admin, e saem listados com
+// foraDaRegra (o Admin nao aceitaria reenvia-los assim). Os outros vao pelo caminho do Admin
+// (ConjuntosDeIcones: conjuntosIcones/{id} e conjuntosIcones/{id}/{categoria}_{ms}.{ext}).
 // Nao marca a colecao como padrao (isso e no Admin, aba Icones) e nao marca nenhuma loja.
 //
 // So roda contra o emulador, com as travas do montarConjuntoIlustracoes (B56-14, 2.0): leitura com
@@ -50,10 +53,12 @@ export function montarListaPadrao(catalogo, bucketPadrao) {
 
 // `lerArquivo(item)` devolve o Buffer do arquivo ou null (nao existe). `conferir(conteudo, tipo)`
 // e a conferencia do Admin (conferirIcone). Arquivo que nao existe vai para semArquivo; o que nao
-// passa na conferencia vai para problemas (e o script para sem gravar).
+// passa na conferencia (tamanho, quadrado) vai para foraDaRegra; tipo fora de SVG/PNG/WEBP, para
+// problemas.
 export async function escolherArquivosPadrao(itens, lerArquivo, conferir) {
   const escolhidos = [];
   const semArquivo = [];
+  const foraDaRegra = [];
   const problemas = [];
   for (const item of itens) {
     const conteudo = await lerArquivo(item);
@@ -63,12 +68,12 @@ export async function escolherArquivosPadrao(itens, lerArquivo, conferir) {
     try {
       await conferir(conteudo, tipoArquivo);
     } catch (error) {
-      problemas.push(`${item.categoriaId} (${item.caminho}): ${error?.message}`);
+      foraDaRegra.push({ ...item, tipoArquivo, bytes: conteudo.length, conteudo, motivo: error?.message || 'fora da regra' });
       continue;
     }
     escolhidos.push({ ...item, tipoArquivo, bytes: conteudo.length, conteudo });
   }
-  return { escolhidos, semArquivo, problemas };
+  return { escolhidos, semArquivo, foraDaRegra, problemas };
 }
 
 function argumento(nome) {
@@ -108,14 +113,25 @@ async function main() {
     const [conteudo] = await arquivo.download();
     return conteudo;
   };
-  const { escolhidos, semArquivo, problemas } = await escolherArquivosPadrao(itens, lerArquivo, conferirIcone);
-  const resumo = { categoriasNaLista: catalogo.length, entram: escolhidos.length, semIcone: semIcone.length, semArquivo: semArquivo.length, problemas: problemas.length };
-  if (!criar || problemas.length) {
+  const { escolhidos, semArquivo, foraDaRegra, problemas } = await escolherArquivosPadrao(itens, lerArquivo, conferirIcone);
+  const manter = process.argv.includes('--manter-fora-da-regra');
+  const semConteudo = ({ conteudo, ...item }) => item;
+  const resumo = {
+    categoriasNaLista: catalogo.length, dentroDaRegra: escolhidos.length, foraDaRegra: foraDaRegra.length,
+    semIcone: semIcone.length, semArquivo: semArquivo.length, problemas: problemas.length,
+  };
+  const parar = problemas.length > 0 || (foraDaRegra.length > 0 && !manter);
+  if (!criar || parar) {
     console.log(JSON.stringify({
       projeto, lidoEm: new Date().toISOString(), resumo,
-      entram: escolhidos.map(({ conteudo, ...item }) => item), semIcone, semArquivo, problemas,
+      entram: escolhidos.map(semConteudo), foraDaRegra: foraDaRegra.map(semConteudo), semIcone, semArquivo, problemas,
     }, null, 2));
-    if (criar) { console.error('Parado antes de gravar: há arquivos que não passam na conferência.'); process.exit(1); }
+    if (criar) {
+      console.error(problemas.length
+        ? 'Parado antes de gravar: há arquivo de tipo fora de SVG, PNG ou WEBP.'
+        : 'Parado antes de gravar: há arquivos de hoje fora da regra do Admin; para pô-los como estão, use --manter-fora-da-regra.');
+      process.exit(1);
+    }
     return;
   }
   const { ConjuntosDeIcones } = await import('../src/application/admin/ConjuntosDeIcones.js');
@@ -126,6 +142,21 @@ async function main() {
   for (const item of escolhidos) {
     const resultado = await conjuntos.trocarIcone(conjunto.id, item.categoriaId, { conteudoBase64: item.conteudo.toString('base64'), tipoArquivo: item.tipoArquivo }, ator);
     gravados.push({ categoriaId: item.categoriaId, nome: item.nome, arquivoDeOrigem: item.caminho, bytes: resultado.bytes, arquivoNoConjunto: resultado.conjunto.icones[item.categoriaId].arquivo });
+  }
+  // Fora da regra, com --manter-fora-da-regra: o arquivo de hoje, como esta, no mesmo lugar e
+  // formato que o Admin grava (gravarNoStorage e icones.{categoria} = { url, arquivo }).
+  const { gravarNoStorage } = await import('../src/application/loja/arquivosDaAparencia.js');
+  const { FieldValue } = await import('firebase-admin/firestore');
+  const extensaoDoTipo = { 'image/svg+xml': 'svg', 'image/png': 'png', 'image/webp': 'webp' };
+  for (const item of foraDaRegra) {
+    const arquivo = `${item.categoriaId}_${Date.now()}.${extensaoDoTipo[item.tipoArquivo]}`;
+    const url = await gravarNoStorage(storage.bucket(bucketNome), `conjuntosIcones/${conjunto.id}/${arquivo}`, item.conteudo, item.tipoArquivo);
+    await firestore.collection('conjuntosIcones').doc(conjunto.id).update({
+      [`icones.${item.categoriaId}`]: { url, arquivo },
+      atualizadoEm: FieldValue.serverTimestamp(),
+      atualizadoPor: ator.uid,
+    });
+    gravados.push({ categoriaId: item.categoriaId, nome: item.nome, arquivoDeOrigem: item.caminho, bytes: item.bytes, arquivoNoConjunto: arquivo, foraDaRegra: item.motivo });
   }
   console.log(JSON.stringify({ projeto, criadoEm: new Date().toISOString(), conjunto: { id: conjunto.id, nome: conjunto.nome, icones: gravados.length }, resumo, gravados, semIcone, semArquivo }, null, 2));
 }
