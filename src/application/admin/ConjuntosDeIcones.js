@@ -204,6 +204,13 @@ export class ConjuntosDeIcones {
     return { antes: antes.length ? antes.join(',') : null, conjunto: this.paraATela(await atual.ref.get()) };
   }
 
+  // Colecao escolhida pela loja (cola B56-17): "lineares" quando nao escolheu (usa a padrao).
+  async daLoja(lojaId) {
+    const loja = await this.lojas().doc(String(lojaId || '')).get();
+    if (!loja.exists) throw recusa('Loja não encontrada.', 'loja_nao_encontrada', 404);
+    return { lojaId: loja.id, conjuntoIcones: conjuntoDaLoja(loja.data() || {}) };
+  }
+
   // Conjunto da loja. null ou "lineares" apaga o campo: a loja fica sem escolha e usa a colecao
   // padrao (cola B56-17).
   async escolherDaLoja(lojaId, conjuntoId) {

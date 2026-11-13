@@ -511,6 +511,10 @@ export function createAdminRoutes({
     }));
 
     // Conjunto da loja: null ou "lineares" volta para a lista padrao.
+    router.get('/estabelecimentos/:lojaId/conjunto-icones', asyncHandler(async (request, response) => {
+      response.json({ data: await conjuntosDeIcones.daLoja(request.params.lojaId) });
+    }));
+
     router.patch('/estabelecimentos/:lojaId/conjunto-icones', asyncHandler(async (request, response) => {
       const { conjuntoId } = conjuntoDaLojaSchema.parse(request.body);
       const resultado = await conjuntosDeIcones.escolherDaLoja(request.params.lojaId, conjuntoId);

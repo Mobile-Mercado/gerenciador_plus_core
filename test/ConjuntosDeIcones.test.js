@@ -253,3 +253,12 @@ test('rota do Admin (B56-17): PUT /conjuntos-icones/:id/padrao marca a colecao p
     assert.ok(acoes.some(([acao, status]) => acao === 'conjunto_icones_padrao' && status === 200));
   });
 });
+
+test('rota do Admin (B56-17): GET /estabelecimentos/:lojaId/conjunto-icones diz a colecao da loja (lineares sem escolha)', async () => {
+  await comRotas(async ({ chamar }) => {
+    assert.deepEqual((await (await chamar('GET', '/api/admin/estabelecimentos/loja-1/conjunto-icones')).json()).data, { lojaId: 'loja-1', conjuntoIcones: 'lineares' });
+    await chamar('PATCH', '/api/admin/estabelecimentos/loja-1/conjunto-icones', { conjuntoId: 'ilus' });
+    assert.deepEqual((await (await chamar('GET', '/api/admin/estabelecimentos/loja-1/conjunto-icones')).json()).data, { lojaId: 'loja-1', conjuntoIcones: 'ilus' });
+    assert.equal((await chamar('GET', '/api/admin/estabelecimentos/nao-existe/conjunto-icones')).status, 404);
+  });
+});
