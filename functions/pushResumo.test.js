@@ -1,0 +1,103 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const {
+  chaveDaLoja,
+  contarEnvios,
+  contarFalhaGeral,
+  gravarResultadoDosEnvios,
+  incrementosDoDia,
+  resultadoDoErro,
+  semToken,
+} = require('./pushResumo');
+
+const increment = (n) => ({ inc: n });
+
+test('resultado: aceito, token inexistente, sem APNs (401 do FCM) e outro', () => {
+  assert.equal(resultadoDoErro('messaging/registration-token-not-registered'), 'token_inexistente');
+  assert.equal(resultadoDoErro('messaging/invalid-registration-token'), 'token_inexistente');
+  assert.equal(resultadoDoErro('messaging/third-party-auth-error'), 'sem_apns');
+  assert.equal(resultadoDoErro('messaging/internal-error'), 'outro');
+});
+
+test('contagem do sendEachForMulticast por plataforma e resultado, com os codigos que falharam', () => {
+  const { contagens, codigos } = contarEnvios([
+    { success: true },
+    { success: true },
+    { success: false, error: { code: 'messaging/third-party-auth-error' } },
+    { success: false, error: { code: 'messaging/registration-token-not-registered' } },
+    { success: false, error: { code: 'messaging/internal-error' } },
+  ], ['android', 'ios', 'ios', undefined, 'android']);
+  assert.deepEqual(contagens, [
+    { plataforma: 'android', resultado: 'aceito', vezes: 1 },
+    { plataforma: 'ios', resultado: 'aceito', vezes: 1 },
+    { plataforma: 'ios', resultado: 'sem_apns', vezes: 1 },
+    { plataforma: 'desconhecida', resultado: 'token_inexistente', vezes: 1 },
+    { plataforma: 'android', resultado: 'outro', vezes: 1 },
+  ]);
+  assert.deepEqual(codigos, {
+    messaging_third_party_auth_error: 1,
+    messaging_registration_token_not_registered: 1,
+    messaging_internal_error: 1,
+  });
+  assert.deepEqual(contarFalhaGeral('app/network-error', ['web', 'web']).contagens, [{ plataforma: 'web', resultado: 'outro', vezes: 2 }]);
+  assert.deepEqual(semToken().contagens, [{ plataforma: 'nenhuma', resultado: 'sem_token', vezes: 1 }]);
+});
+
+test('incrementos do dia: total, loja > origem > audiencia > plataforma > resultado, e codigos; sem loja vira sem-loja', () => {
+  const objeto = incrementosDoDia({
+    dia: '2026-11-14',
+    loja: 'zg',
+    origem: 'sendOrderNotification',
+    audiencia: 'lojista',
+    contagens: [
+      { plataforma: 'web', resultado: 'aceito', vezes: 2 },
+      { plataforma: 'web', resultado: 'token_inexistente', vezes: 1 },
+      { plataforma: 'web', resultado: 'aceito', vezes: 1 },
+    ],
+    codigos: { messaging_registration_token_not_registered: 1 },
+    increment,
+  });
+  assert.deepEqual(objeto, {
+    dia: '2026-11-14',
+    total: { aceito: { inc: 3 }, token_inexistente: { inc: 1 } },
+    lojas: { zg: { sendordernotification: { lojista: { web: { aceito: { inc: 3 }, token_inexistente: { inc: 1 } } } } } },
+    codigos: { messaging_registration_token_not_registered: { inc: 1 } },
+  });
+  assert.equal(chaveDaLoja(null), 'sem-loja');
+  assert.equal(chaveDaLoja('a/b'), 'sem-loja');
+  assert.equal(chaveDaLoja('q0IPIusmpEq3pHbMyfWY'), 'q0IPIusmpEq3pHbMyfWY');
+});
+
+test('gravacao: um documento por dia em PushResumo, com merge; falha no banco nao lanca', async () => {
+  const gravados = [];
+  const db = {
+    collection: (nome) => ({
+      doc: (id) => ({ set: async (valor, opcoes) => { gravados.push({ caminho: `${nome}/${id}`, valor, opcoes }); } }),
+    }),
+  };
+  const FieldValue = { increment, serverTimestamp: () => 'carimbo' };
+  const ok = await gravarResultadoDosEnvios({
+    db, FieldValue, agora: new Date('2026-11-14T02:30:00Z'), loja: 'zg', origem: 'avisarMensagemNova', audiencia: 'lojista', ...semToken(),
+  });
+  assert.equal(ok, true);
+  assert.equal(gravados[0].caminho, 'PushResumo/2026-11-13');
+  assert.deepEqual(gravados[0].opcoes, { merge: true });
+  assert.equal(gravados[0].valor.atualizadoEm, 'carimbo');
+  assert.deepEqual(gravados[0].valor.total, { sem_token: { inc: 1 } });
+  // Nada a contar: nao grava.
+  assert.equal(await gravarResultadoDosEnvios({ db, FieldValue, origem: 'x', audiencia: 'y' }), false);
+  const quebrado = { collection: () => ({ doc: () => ({ set: async () => { throw new Error('sem banco'); } }) }) };
+  assert.equal(await gravarResultadoDosEnvios({ db: quebrado, FieldValue, origem: 'x', audiencia: 'y', ...semToken() }), false);
+});
+
+test('index.js: o envio a loja conta cada resultado, sem token e sem texto da mensagem', () => {
+  const index = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+  const envio = index.slice(index.indexOf('async function enviarAvisoParaLoja('), index.indexOf('exports.sendOrderNotification'));
+  assert.ok(envio.includes('await contarNoDia(semToken());'));
+  assert.ok(envio.includes("juntar(contarEnvios(response.responses, chunk.map(() => 'web')));"));
+  assert.ok(envio.includes('await contarNoDia({ contagens, codigos });'));
+  const contar = envio.slice(envio.indexOf('const contarNoDia'), envio.indexOf('if (tokenDocsSnap.empty)'));
+  ['token', 'title', 'body'].forEach((campo) => assert.ok(!new RegExp(`\\b${campo}\\b`).test(contar), campo));
+});
