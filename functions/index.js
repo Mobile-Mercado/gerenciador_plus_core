@@ -5,6 +5,7 @@ const {
   onDocumentWritten,
 } = require('firebase-functions/v2/firestore');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { HttpsError, onCall } = require('firebase-functions/v2/https');
 const { defineSecret, defineString } = require('firebase-functions/params');
 const { getStorage } = require('firebase-admin/storage');
 const { applicationDefault } = require('firebase-admin/app');
@@ -46,6 +47,19 @@ const {
   segmentoDoCliente,
 } = require('./resumoClientes');
 const { atualizarResumoDoPedido } = require('./resumoPedidos');
+const {
+  RegistroInvalido,
+  gravarTentativas,
+  listasFechadas,
+  rodarResumoDeLogin,
+  validarChamada,
+} = require('./tentativasDeLogin');
+const {
+  contarEnvios,
+  contarFalhaGeral,
+  gravarResultadoDosEnvios,
+  semToken,
+} = require('./pushResumo');
 const { atualizarResumoDeVendas } = require('./resumoVendas');
 const { atualizarGruposDoPedido } = require('./resumoDoMes');
 const { atualizarSemGiro } = require('./semGiro');
@@ -437,8 +451,20 @@ async function enviarAvisoParaLoja({
     .where('active', '==', true)
     .get();
 
+  // Resultado de cada envio em PushResumo/{dia} (cola RP-172, item 5): so contagens, sem
+  // token e sem texto. Navegador do painel: plataforma "web".
+  const contarNoDia = (contagem) => gravarResultadoDosEnvios({
+    db,
+    FieldValue: admin.firestore.FieldValue,
+    loja: companyId,
+    origem,
+    audiencia: 'lojista',
+    ...contagem,
+  });
+
   if (tokenDocsSnap.empty) {
     console.log(`[${origem}] Nenhum token ativo para ${companyId}`);
+    await contarNoDia(semToken());
     return null;
   }
 
@@ -478,6 +504,14 @@ async function enviarAvisoParaLoja({
   const cleanupPromises = [];
 
   const tokenChunks = chunkArray(tokenEntries, MAX_TOKENS_PER_REQUEST);
+  const contagens = [];
+  const codigos = {};
+  const juntar = (parcial) => {
+    contagens.push(...parcial.contagens);
+    Object.entries(parcial.codigos).forEach(([codigo, vezes]) => {
+      codigos[codigo] = (codigos[codigo] || 0) + vezes;
+    });
+  };
 
   for (const chunk of tokenChunks) {
     const chunkTokens = chunk.map((entry) => entry.token);
@@ -487,6 +521,7 @@ async function enviarAvisoParaLoja({
       const response = await admin.messaging().sendEachForMulticast(message);
       totalSuccess += response.successCount;
       totalFailures += response.failureCount;
+      juntar(contarEnvios(response.responses, chunk.map(() => 'web')));
 
       response.responses.forEach((resp, idx) => {
         if (resp.success) return;
@@ -509,6 +544,7 @@ async function enviarAvisoParaLoja({
       });
     } catch (chunkError) {
       console.error(`[${origem}] Erro ao enviar chunk de tokens`, chunkError);
+      juntar(contarFalhaGeral(chunkError?.code || 'desconhecido', chunk.map(() => 'web')));
     }
   }
 
@@ -522,6 +558,7 @@ async function enviarAvisoParaLoja({
   console.log(
     `[${origem}] Envio concluído. Sucessos: ${totalSuccess}, Falhas: ${totalFailures}`
   );
+  await contarNoDia({ contagens, codigos });
 
   return { totalSuccess, totalFailures };
 }
@@ -1003,6 +1040,113 @@ exports.syncLoginProvidersNightly = onSchedule(
 
     const result = { ...resumo, segundos: Math.round((Date.now() - startedAt) / 1000) };
     console.log('[syncLoginProvidersNightly] Passada concluida', result);
+    return result;
+  },
+);
+
+// Tentativas de login do app do cliente (cola RP-172, itens 1 e 2). A falha acontece antes
+// do login, entao o app nao grava direto no banco: manda para esta function, que aceita
+// chamada sem login, confere cada campo pela lista fechada (tentativasDeLogin.js), limita
+// o volume por aparelho e grava em LoginAttempts. O uid so vai no registro "entrou", e vem
+// do token da chamada. Nada do corpo vai para o log.
+const LISTAS_DO_LOGIN_VALIDADE_MS = 30 * 60 * 1000;
+let listasDoLogin = { lidasEm: 0, valor: null };
+
+async function listasFechadasDoLogin() {
+  if (listasDoLogin.valor && Date.now() - listasDoLogin.lidasEm < LISTAS_DO_LOGIN_VALIDADE_MS) {
+    return listasDoLogin.valor;
+  }
+  const snapshot = await db.collection('estabelecimentos').select('whitelabelId').get();
+  const valor = listasFechadas(snapshot.docs.map((documento) => ({
+    id: documento.id,
+    whitelabelId: documento.get('whitelabelId'),
+  })));
+  listasDoLogin = { lidasEm: Date.now(), valor };
+  return valor;
+}
+
+exports.registrarTentativaDeLogin = onCall(
+  {
+    region: 'us-central1',
+    memory: '256MiB',
+    timeoutSeconds: 30,
+    maxInstances: 10,
+  },
+  async (request) => {
+    const agora = new Date();
+    let chamada;
+    try {
+      chamada = validarChamada(request.data, {
+        ...(await listasFechadasDoLogin()),
+        uidDoLogin: request.auth?.uid || null,
+        agora,
+      });
+    } catch (error) {
+      if (error instanceof RegistroInvalido) {
+        throw new HttpsError('invalid-argument', `Campo recusado: ${error.message}`);
+      }
+      throw error;
+    }
+    const gravacao = await gravarTentativas({
+      db,
+      validos: chamada.validos,
+      aparelho: chamada.aparelho,
+      agora,
+      recebidoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    if (chamada.invalidos || gravacao.descartadosPeloLimite) {
+      console.warn('[registrarTentativaDeLogin] Registros fora', {
+        invalidos: chamada.invalidos,
+        motivos: chamada.motivos,
+        descartadosPeloLimite: gravacao.descartadosPeloLimite,
+      });
+    }
+    return {
+      gravados: gravacao.gravados,
+      invalidos: chamada.invalidos,
+      descartadosPeloLimite: gravacao.descartadosPeloLimite,
+    };
+  },
+);
+
+// Resumo das tentativas de login do dia anterior (cola RP-172, item 3), no molde do resumo
+// de buscas: LoginResumo/todas e estabelecimentos/{loja}/Stats/loginResumo, com o topo de
+// um ano e o documento de cada dia por 90 dias. Depois, apaga LoginAttempts com mais de 90
+// dias. As 3h30, sozinha na faixa.
+exports.summarizeLoginAttemptsNightly = onSchedule(
+  {
+    schedule: '30 3 * * *',
+    timeZone: 'America/Sao_Paulo',
+    region: 'us-central1',
+    memory: '512MiB',
+    timeoutSeconds: 1800,
+    retryCount: 0,
+  },
+  async () => {
+    const startedAt = Date.now();
+    const configSnapshot = await db.doc(IMAGE_CHECK_CONFIG_PATH).get();
+    const configuredIds = configuredEstablishmentIds(configSnapshot.data());
+    const storeSnapshots = configuredIds.length
+      ? await db.getAll(...configuredIds.map((id) => db.collection('estabelecimentos').doc(id)))
+      : [];
+    const lojas = storeSnapshots
+      .filter((snapshot) => snapshot.exists)
+      .map((snapshot) => ({ id: snapshot.id, whitelabelId: snapshot.get('whitelabelId') || null }));
+
+    const resultado = await rodarResumoDeLogin({
+      db,
+      lojas,
+      atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    for (const snapshot of storeSnapshots.filter((store) => store.exists)) {
+      const daLoja = resultado.lojas.find((item) => item.establishmentId === snapshot.id);
+      await registrarNoite(snapshot.ref, 'summarizeLoginAttemptsNightly', {
+        dados: { dia: resultado.dia, tentativas: daLoja?.tentativas ?? 0, falhas: daLoja?.falhas ?? 0 },
+      });
+    }
+
+    const result = { ...resultado, segundos: Math.round((Date.now() - startedAt) / 1000) };
+    console.log('[summarizeLoginAttemptsNightly] Passada concluida', result);
     return result;
   },
 );
