@@ -235,8 +235,8 @@ export class ImportProductsFromCsvUseCase {
       const priceRaw = pick(row, ['Preço', 'preço', 'Preco', 'preco']);
       const ean = pick(row, ['EAN', 'ean']);
       const searchKeys = productSearchKeys({ name, barCode: ean });
-      const categoryName = pick(row, ['Mercadológico nível 1', 'Mercadologico nivel 1', 'mercadológico nível 1', 'mercadologico nivel 1']);
-      const subcategoryName = pick(row, ['Mercadológico nível 2', 'Mercadologico nivel 2', 'mercadológico nível 2', 'mercadologico nivel 2']);
+      const categoryName = pick(row, ['Mercadológico nível 1', 'Mercadologico nivel 1', 'mercadológico nível 1', 'mercadologico nivel 1', 'Categoria', 'categoria']);
+      const subcategoryName = pick(row, ['Mercadológico nível 2', 'Mercadologico nivel 2', 'mercadológico nível 2', 'mercadologico nivel 2', 'Subcategoria', 'subcategoria']);
       const photoUrl = pick(row, ['Foto do produto', 'foto do produto']);
       const price = parsePriceValue(priceRaw);
 
