@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import {
-  BLOCOS_DA_HOME, COBRADO_EM, FORMAS_DE_PAGAMENTO, FUNCOES_DO_APP, PREPOSICOES_DA_BUSCA,
+  BLOCOS_COM_AJUSTES, BLOCOS_DA_HOME, COBRADO_EM, FORMAS_DE_PAGAMENTO, FUNCOES_DO_APP, PREPOSICOES_DA_BUSCA,
 } from '../../domain/loja/appDoCliente.js';
 
 // Contrato da versao 55 (cola RP-13): o que o Admin e a loja gravam para o app do cliente. Os
@@ -12,6 +12,12 @@ export const appDoClienteSchema = z.object({
   aparenciaHome: z.object({
     ...Object.fromEntries(Object.entries(BLOCOS_DA_HOME).map(([bloco, { maximo }]) => [bloco, z.number().int().min(1).max(maximo).optional()])),
     preposicaoBusca: z.enum(PREPOSICOES_DA_BUSCA).optional(),
+    // Cola B56-08 (B4.g): modelo (id em modelosAparencia ou null) e ajustes de cada bloco; as
+    // faixas de cada ajuste sao conferidas no caso de uso (variacoesDaHome.js).
+    ...Object.fromEntries(BLOCOS_COM_AJUSTES.flatMap((bloco) => [
+      [`${bloco}Modelo`, z.string().regex(/^[A-Za-z0-9_-]{1,120}$/).nullable().optional()],
+      [`${bloco}Ajustes`, z.record(z.union([z.number(), z.string().max(20), z.boolean(), z.null()])).optional()],
+    ])),
   }).strict().optional(),
 }).strict();
 

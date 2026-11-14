@@ -13,9 +13,10 @@ export const FUNCOES_DO_APP = Object.freeze({
   cuponsFiscais: false,
 });
 
-// Item 6: blocos da Home por loja. Valor ausente ou fora da faixa vale o padrao.
+// Item 6: blocos da Home por loja. Valor ausente ou fora da faixa vale o padrao. Topo 4 a 6
+// (cola B56-08): o desenho guardado em TopoPreviaAntiga.
 export const BLOCOS_DA_HOME = Object.freeze({
-  topo: Object.freeze({ maximo: 3, padrao: 2 }),
+  topo: Object.freeze({ maximo: 6, padrao: 2 }),
   meio: Object.freeze({ maximo: 3, padrao: 2 }),
   fim: Object.freeze({ maximo: 4, padrao: 2 }),
   rodape: Object.freeze({ maximo: 2, padrao: 2 }),
@@ -54,4 +55,20 @@ export function aparenciaDaHome(gravada) {
     ...blocos,
     preposicaoBusca: PREPOSICOES_DA_BUSCA.includes(valor.preposicaoBusca) ? valor.preposicaoBusca : PREPOSICAO_PADRAO,
   };
+}
+
+// Cola B56-08 (B3.c): o modelo de cada bloco (id em modelosAparencia, ou null) e os ajustes finais ja
+// resolvidos (topoAjustes, meioAjustes, fimAjustes), como estao gravados; sem gravacao, null.
+export const BLOCOS_COM_AJUSTES = Object.freeze(['topo', 'meio', 'fim']);
+
+export function ajustesDaHome(gravada) {
+  const valor = gravada && typeof gravada === 'object' ? gravada : {};
+  return Object.fromEntries(BLOCOS_COM_AJUSTES.flatMap((bloco) => {
+    const modelo = valor[`${bloco}Modelo`];
+    const ajustes = valor[`${bloco}Ajustes`];
+    return [
+      [`${bloco}Modelo`, typeof modelo === 'string' && modelo ? modelo : null],
+      [`${bloco}Ajustes`, ajustes && typeof ajustes === 'object' && !Array.isArray(ajustes) ? ajustes : null],
+    ];
+  }));
 }

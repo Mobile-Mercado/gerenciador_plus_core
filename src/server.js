@@ -17,7 +17,10 @@ import { JornadaDoCadastro } from './application/cadastro/JornadaDoCadastro.js';
 import { LimiteDeTentativas } from './application/cadastro/LimiteDeTentativas.js';
 import { BannersDaLoja } from './application/loja/BannersDaLoja.js';
 import { AppDoClienteDaLoja } from './application/loja/AppDoClienteDaLoja.js';
+import { AparenciaDaLoja } from './application/loja/AparenciaDaLoja.js';
 import { ConjuntosDeIcones } from './application/admin/ConjuntosDeIcones.js';
+import { AparenciaDaHome } from './application/admin/AparenciaDaHome.js';
+import { BannersNoAdmin } from './application/admin/BannersNoAdmin.js';
 import { EntregadoresDaLoja } from './application/loja/EntregadoresDaLoja.js';
 import { FormasDePagamento } from './application/loja/FormasDePagamento.js';
 import { FirestoreRest } from './infra/firebase/FirestoreRest.js';
@@ -131,8 +134,16 @@ const app = createApp({
   jornadaDeEntrada: new JornadaDeEntrada({ firestore }),
   entregaDaLoja: new EntregaDaLoja({ firestore }),
   appDoClienteDaLoja: new AppDoClienteDaLoja({ firestore }),
-  // Conjuntos de icones (cola B56-04).
+  // Aparencias (cola B56-04): conjuntos de icones, Ofertas e Abertura.
   conjuntosDeIcones: new ConjuntosDeIcones({ firestore, bucket: getStorageBucket(env.STORAGE_BUCKET) }),
+  aparenciaDaLoja: new AparenciaDaLoja({ firestore, bucket: getStorageBucket(env.STORAGE_BUCKET) }),
+  // Cola B56-08: variacoes, modelos e padroes da Inicio, e os banners da loja pelo Admin.
+  aparenciaDaHome: new AparenciaDaHome({ firestore }),
+  bannersNoAdmin: new BannersNoAdmin({
+    firestore,
+    bucket: getStorageBucket(env.STORAGE_BUCKET),
+    restFirestore: new FirestoreRest({ projectId: env.FIRESTORE_PROJECT_ID }),
+  }),
   formasDePagamento: new FormasDePagamento({ firestore }),
   entregadoresDaLoja: new EntregadoresDaLoja({ firestore }),
   verificarAppCheck: (token) => getFirebaseAppCheck().verifyToken(token),

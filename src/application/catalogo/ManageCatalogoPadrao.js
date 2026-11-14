@@ -416,8 +416,9 @@ export class ManageCatalogoPadrao {
   //
   // Pedidos do cadastro novo (status diferente de aprovada) ficam em Pedidos de loja, nao aqui.
   // Loja sem name mostra nomeEstabelecimento quando existir.
+  // logoUrl (chatProfileImageUrl): o seletor de loja da tela Aparencias (cola B56-05).
   async estabelecimentos() {
-    const snapshot = await this.firestore.collection('estabelecimentos').select('name', 'fantasyName', 'nomeEstabelecimento', 'address', 'isActive', 'createdAt', 'status').get();
+    const snapshot = await this.firestore.collection('estabelecimentos').select('name', 'fantasyName', 'nomeEstabelecimento', 'address', 'isActive', 'createdAt', 'status', 'chatProfileImageUrl').get();
     const lojas = snapshot.docs.filter((documento) => !documento.data()?.status || documento.data()?.status === 'aprovada');
     return Promise.all(lojas.map(async (documento) => {
       const data = documento.data() || {};
@@ -431,6 +432,7 @@ export class ManageCatalogoPadrao {
         uf: data.address?.uf || data.address?.state || null,
         ativa: data.isActive !== false,
         produtos: Number(contagem.data()?.count) || 0,
+        logoUrl: data.chatProfileImageUrl || null,
       };
     }));
   }

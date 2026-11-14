@@ -4,8 +4,12 @@ import { formatarNome } from '../../domain/catalogo/formatarNome.js';
 import { asyncHandler } from '../middlewares/asyncHandler.js';
 import { corpoDeImagem } from '../middlewares/corpoDeImagem.js';
 import { appDoClienteSchema, formasDePagamentoSchema } from './appDoClienteSchema.js';
+import {
+  afetadasSchema, alterarBannerSchema, alterarModeloSchema, alvoDoArquivoSchema, aparenciaDaLojaSchema, arquivoDaAparenciaSchema,
+  bannerParamsSchema, conjuntoDaLojaSchema, conjuntoNomeSchema, iconeDoConjuntoSchema, modelosConsultaSchema, novoBannerSchema,
+  novoModeloSchema, padraoSchema, variacaoParamsSchema, voltarAoOriginalSchema,
+} from './aparenciaSchema.js';
 import { entregaSchema } from './entregaSchema.js';
-import { conjuntoDaLojaSchema, conjuntoNomeSchema, iconeDoConjuntoSchema } from './aparenciaSchema.js';
 import { AMBIENTES_DA_SAFRA } from '../../application/loja/FormasDePagamento.js';
 
 // Rotas do Admin da plataforma. A barreira (requirePlatformAdmin) e o registro de quem agiu
@@ -105,7 +109,8 @@ const sugestoesClientesSchema = z.object({
 export function createAdminRoutes({
   manageCatalogoPadrao, sugestoesDosClientes, pedidosDeLoja, lojaNoAdmin, franquias, administradores, dadosDoAdmin,
   manageImplantationPipelines, jornadaDeEntrada = null, entregaDaLoja = null, appDoClienteDaLoja = null,
-  formasDePagamento = null, instalacoesDosApps = null, conjuntosDeIcones = null,
+  formasDePagamento = null, instalacoesDosApps = null, conjuntosDeIcones = null, aparenciaDaLoja = null,
+  aparenciaDaHome = null, bannersNoAdmin = null,
 }) {
   const router = Router();
 
@@ -522,6 +527,123 @@ export function createAdminRoutes({
         acao: 'conjunto_icones_da_loja', campos: ['aparencia.conjuntoIcones'], antes: resultado.antes, depois: resultado.conjuntoIcones,
       };
       response.json({ data: resultado });
+    }));
+  }
+
+  // Variacoes da Inicio (cola B56-08, B4): tabela, modelos, padroes e quantas lojas cada gravacao
+  // muda. Modelo e padrao gravam na hora e regravam as lojas afetadas (lojasAlvo na auditoria).
+  if (aparenciaDaHome) {
+    router.get('/aparencia-home/variacoes', asyncHandler(async (_request, response) => {
+      response.json({ data: await aparenciaDaHome.variacoes() });
+    }));
+
+    router.get('/aparencia-home/afetadas', asyncHandler(async (request, response) => {
+      const { bloco, numero, modelo } = afetadasSchema.parse(request.query);
+      response.json({ data: await aparenciaDaHome.afetadas({ bloco, numero, modeloId: modelo }) });
+    }));
+
+    router.get('/modelos-aparencia', asyncHandler(async (request, response) => {
+      const { bloco } = modelosConsultaSchema.parse(request.query);
+      response.json({ data: await aparenciaDaHome.listarModelos(bloco || null) });
+    }));
+
+    router.post('/modelos-aparencia', asyncHandler(async (request, response) => {
+      const entrada = novoModeloSchema.parse(request.body);
+      const modelo = await aparenciaDaHome.criarModelo(entrada, atorDe(request));
+      response.locals.auditoria = { acao: 'modelo_aparencia_criado', modeloId: modelo.id, bloco: modelo.bloco, base: modelo.base, nome: modelo.nome };
+      response.status(201).json({ data: modelo });
+    }));
+
+    router.patch('/modelos-aparencia/:modeloId', asyncHandler(async (request, response) => {
+      const entrada = alterarModeloSchema.parse(request.body);
+      const resultado = await aparenciaDaHome.salvarModelo(request.params.modeloId, entrada, atorDe(request));
+      response.locals.lojasAlvo = resultado.lojas;
+      response.locals.auditoria = {
+        acao: 'modelo_aparencia_salvo', modeloId: request.params.modeloId, antes: resultado.antes, lojasAlteradas: resultado.lojasAlteradas,
+      };
+      response.json({ data: { modelo: resultado.modelo, lojasAlteradas: resultado.lojasAlteradas } });
+    }));
+
+    router.put('/aparencia-padrao/:bloco/:numero', asyncHandler(async (request, response) => {
+      const { bloco, numero } = variacaoParamsSchema.parse(request.params);
+      const { ajustes, incluirAjusteProprio = false } = padraoSchema.parse(request.body);
+      const resultado = await aparenciaDaHome.mudarPadrao(bloco, numero, ajustes, atorDe(request), { incluirAjusteProprio });
+      response.locals.lojasAlvo = resultado.lojas;
+      response.locals.auditoria = {
+        acao: 'padrao_aparencia_mudado', bloco, numero, antes: resultado.antes, lojasAlteradas: resultado.lojasAlteradas,
+        incluirAjusteProprio, lojasComAjusteProprio: resultado.lojasComAjusteProprio,
+      };
+      response.json({ data: { bloco, numero, ajustes: resultado.ajustes, lojasAlteradas: resultado.lojasAlteradas, lojasComAjusteProprio: resultado.lojasComAjusteProprio } });
+    }));
+
+    router.delete('/aparencia-padrao/:bloco/:numero', asyncHandler(async (request, response) => {
+      const { bloco, numero } = variacaoParamsSchema.parse(request.params);
+      const incluirAjusteProprio = voltarAoOriginalSchema.parse(request.query).incluirAjusteProprio === 'true';
+      const resultado = await aparenciaDaHome.voltarAoOriginal(bloco, numero, atorDe(request), { incluirAjusteProprio });
+      response.locals.lojasAlvo = resultado.lojas;
+      response.locals.auditoria = {
+        acao: 'padrao_aparencia_original', bloco, numero, antes: resultado.antes, lojasAlteradas: resultado.lojasAlteradas,
+        incluirAjusteProprio, lojasComAjusteProprio: resultado.lojasComAjusteProprio,
+      };
+      response.json({ data: { bloco, numero, ajustes: resultado.ajustes, lojasAlteradas: resultado.lojasAlteradas, lojasComAjusteProprio: resultado.lojasComAjusteProprio } });
+    }));
+  }
+
+  // Banners da loja pelo Admin (cola B56-08, B5): o corpo do envio e a imagem; tipo e periodo na consulta.
+  if (bannersNoAdmin) {
+    router.get('/estabelecimentos/:lojaId/banners', asyncHandler(async (request, response) => {
+      response.json({ data: await bannersNoAdmin.listar(request.params.lojaId) });
+    }));
+
+    router.post('/estabelecimentos/:lojaId/banners', corpoDeImagem, asyncHandler(async (request, response) => {
+      const { tipo, inicio, fim } = novoBannerSchema.parse(request.query);
+      const banner = await bannersNoAdmin.criar(request.params.lojaId, tipo, request.body, request.headers['content-type'], { inicio, fim });
+      response.locals.auditoria = { acao: 'banner_criado', bannerId: banner.id, tipo };
+      response.status(201).json({ data: banner });
+    }));
+
+    router.put('/estabelecimentos/:lojaId/banners/:bannerId/imagem', corpoDeImagem, asyncHandler(async (request, response) => {
+      const { lojaId, bannerId } = bannerParamsSchema.parse(request.params);
+      const resultado = await bannersNoAdmin.trocarImagem(lojaId, bannerId, request.body, request.headers['content-type']);
+      response.locals.auditoria = { acao: 'banner_imagem_trocada', bannerId, antes: resultado.antes };
+      response.json({ data: resultado.banner });
+    }));
+
+    router.patch('/estabelecimentos/:lojaId/banners/:bannerId', asyncHandler(async (request, response) => {
+      const { lojaId, bannerId } = bannerParamsSchema.parse(request.params);
+      const entrada = alterarBannerSchema.parse(request.body);
+      const resultado = await bannersNoAdmin.alterar(lojaId, bannerId, entrada);
+      response.locals.auditoria = { acao: 'banner_alterado', bannerId, campos: resultado.campos, antes: resultado.antes };
+      response.json({ data: resultado.banner });
+    }));
+
+    router.delete('/estabelecimentos/:lojaId/banners/:bannerId', asyncHandler(async (request, response) => {
+      const { lojaId, bannerId } = bannerParamsSchema.parse(request.params);
+      const resultado = await bannersNoAdmin.apagar(lojaId, bannerId);
+      response.locals.auditoria = { acao: 'banner_apagado', bannerId, antes: resultado.antes };
+      response.json({ data: resultado });
+    }));
+  }
+
+  // Ofertas, Abertura e Primeira tela da loja, com o valor de antes na auditoria.
+  if (aparenciaDaLoja) {
+    router.get('/estabelecimentos/:lojaId/aparencias', asyncHandler(async (request, response) => {
+      response.json({ data: await aparenciaDaLoja.ler(request.params.lojaId) });
+    }));
+
+    router.patch('/estabelecimentos/:lojaId/aparencias', asyncHandler(async (request, response) => {
+      const entrada = aparenciaDaLojaSchema.parse(request.body);
+      const resultado = await aparenciaDaLoja.salvar(request.params.lojaId, entrada);
+      response.locals.auditoria = { acao: 'aparencias', campos: resultado.campos, antes: resultado.antes };
+      response.json({ data: resultado.aparencia });
+    }));
+
+    router.post('/estabelecimentos/:lojaId/aparencias/arquivos/:alvo', asyncHandler(async (request, response) => {
+      const alvo = alvoDoArquivoSchema.parse(request.params.alvo);
+      const entrada = arquivoDaAparenciaSchema.parse(request.body);
+      const resultado = await aparenciaDaLoja.enviarArquivo(request.params.lojaId, alvo, entrada);
+      response.locals.auditoria = { acao: 'aparencias_arquivo', alvo, campos: resultado.campos, antes: resultado.antes };
+      response.json({ data: resultado.aparencia });
     }));
   }
 

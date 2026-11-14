@@ -1,6 +1,13 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
-import { aparenciaDaHome, funcoesDoApp } from '../../domain/loja/appDoCliente.js';
+import {
+  BLOCOS_COM_AJUSTES, BLOCOS_DA_HOME, ajustesDaHome, aparenciaDaHome, funcoesDoApp,
+} from '../../domain/loja/appDoCliente.js';
+import { ajustesFinais, conferirAjustes } from '../../domain/loja/variacoesDaHome.js';
+
+// Cola B56-08 (B3): modelos e padroes mudados das variacoes da Inicio.
+export const COLECAO_DE_MODELOS = 'modelosAparencia';
+export const DOCUMENTO_DE_PADROES = 'aparenciaPadrao/padroes';
 
 // Funcoes do app e aparencia da Home de cada loja (contrato da versao 55, itens 5 e 6; cola
 // RP-13). O Admin grava: featureFlags.{retirada, substituicao, resumoDoMes, cuponsFiscais}
@@ -44,10 +51,23 @@ export class AppDoClienteDaLoja {
         mudancas[`featureFlags.${chave}`] = valor;
         antes[`featureFlags.${chave}`] = funcoesAntes[chave];
       });
-      Object.entries(entrada.aparenciaHome || {}).forEach(([chave, valor]) => {
+      const ajustesAntes = ajustesDaHome(atual.aparenciaHome);
+      const home = entrada.aparenciaHome || {};
+      // Rodape e preposicao como antes; topo, meio e fim com a variacao, o modelo e os ajustes finais.
+      Object.entries(home).forEach(([chave, valor]) => {
+        if (BLOCOS_COM_AJUSTES.some((bloco) => chave === bloco || chave === `${bloco}Modelo` || chave === `${bloco}Ajustes`)) return;
         mudancas[`aparenciaHome.${chave}`] = valor;
         antes[`aparenciaHome.${chave}`] = aparenciaAntes[chave];
       });
+      const tocados = BLOCOS_COM_AJUSTES.filter((bloco) => [bloco, `${bloco}Modelo`, `${bloco}Ajustes`].some((chave) => chave in home));
+      const padroes = tocados.length ? ((await transacao.get(this.firestore.doc(DOCUMENTO_DE_PADROES))).data() || {}) : {};
+      for (const bloco of tocados) {
+        const resolvido = await this.resolverBloco(transacao, bloco, home, aparenciaAntes, ajustesAntes, padroes);
+        Object.entries(resolvido).forEach(([chave, valor]) => {
+          mudancas[`aparenciaHome.${chave}`] = valor;
+          antes[`aparenciaHome.${chave}`] = chave === bloco ? aparenciaAntes[bloco] : ajustesAntes[chave];
+        });
+      }
       if (!Object.keys(mudancas).length) throw recusa('Nada para gravar.', 'app_do_cliente_sem_mudancas');
 
       transacao.update(ref, { ...mudancas, updatedAt: this.serverTimestamp() });
@@ -55,8 +75,47 @@ export class AppDoClienteDaLoja {
     });
     return { ...resultado, app: await this.ler(lojaId) };
   }
+
+  // Um bloco da Inicio (cola B56-08, B4.g): a variacao (topo 1-6, meio 1-3, fim 1-4), o modelo (que
+  // fixa a variacao na base dele) e os ajustes finais. Ajustes enviados sao conferidos pelas faixas
+  // (B2) e vao por cima dos da variacao ou do modelo; sem eles, os da variacao ou do modelo.
+  // Trocar a variacao sem dizer o modelo tira o modelo.
+  async resolverBloco(transacao, bloco, home, aparenciaAntes, ajustesAntes, padroes) {
+    const chaveDoModelo = `${bloco}Modelo`;
+    let numero = home[bloco] ?? aparenciaAntes[bloco];
+    let modeloId = chaveDoModelo in home ? home[chaveDoModelo] : (bloco in home ? null : ajustesAntes[chaveDoModelo]);
+    let modelo = null;
+    if (modeloId) {
+      const documento = await transacao.get(this.firestore.collection(COLECAO_DE_MODELOS).doc(modeloId));
+      if (!documento.exists || documento.data()?.bloco !== bloco) {
+        throw recusa(`Modelo de ${bloco} não encontrado.`, 'modelo_nao_encontrado', 404);
+      }
+      modelo = documento.data();
+      numero = modelo.base;
+    } else {
+      modeloId = null;
+    }
+    if (!Number.isInteger(numero) || numero < 1 || numero > BLOCOS_DA_HOME[bloco].maximo) {
+      throw recusa(`Variação de ${bloco} inválida.`, 'variacao_invalida');
+    }
+    let ajustes = ajustesFinais(bloco, { numero, modelo, padroes });
+    const enviados = home[`${bloco}Ajustes`];
+    if (enviados) {
+      const { ajustes: conferidos, problemas } = conferirAjustes(bloco, enviados, { numero });
+      if (problemas.length) {
+        throw new AppError(`Ajuste fora da faixa: ${problemas.join('; ')}.`, { statusCode: 400, code: 'ajuste_fora_da_faixa', details: { problemas } });
+      }
+      ajustes = { ...ajustes, ...conferidos };
+    }
+    return { [bloco]: numero, [chaveDoModelo]: modeloId, [`${bloco}Ajustes`]: ajustes };
+  }
 }
 
 function paraATela(lojaId, data) {
-  return { lojaId, featureFlags: funcoesDoApp(data.featureFlags), aparenciaHome: aparenciaDaHome(data.aparenciaHome) };
+  return {
+    lojaId,
+    featureFlags: funcoesDoApp(data.featureFlags),
+    aparenciaHome: aparenciaDaHome(data.aparenciaHome),
+    ajustesDaHome: ajustesDaHome(data.aparenciaHome),
+  };
 }

@@ -189,7 +189,7 @@ test('Mercearia e Todos nao mudam de nome, nao desligam, nao arquivam e nao trav
 
 test('estabelecimentos lista nome, cidade, ativa e produtos; a loja mostra as categorias com a trava', async () => {
   const firestore = banco({
-    'estabelecimentos/loja-a': { name: 'Loja A', address: { city: 'Goiânia', uf: 'GO' }, isActive: true },
+    'estabelecimentos/loja-a': { name: 'Loja A', address: { city: 'Goiânia', uf: 'GO' }, isActive: true, chatProfileImageUrl: 'https://logo/a.webp' },
     'estabelecimentos/loja-c': { name: 'Loja C', isActive: false },
     'categoriasProdutos/tabacaria': { nome: 'Tabacaria', name: 'Tabacaria', travada: true },
     'estabelecimentos/loja-a/ProductCategories/tabacaria': { name: 'Tabacaria', isActive: false },
@@ -198,6 +198,8 @@ test('estabelecimentos lista nome, cidade, ativa e produtos; a loja mostra as ca
   const catalogo = new ManageCatalogoPadrao({ firestore });
   const lista = await catalogo.estabelecimentos();
   const a = lista.find((loja) => loja.id === 'loja-a');
+  assert.equal(a.logoUrl, 'https://logo/a.webp', 'a logo para o seletor da tela Aparencias');
+  assert.equal(lista.find((loja) => loja.id === 'loja-c').logoUrl, null);
   assert.equal(a.cidade, 'Goiânia');
   assert.equal(a.ativa, true);
   assert.equal(a.produtos, 2);
