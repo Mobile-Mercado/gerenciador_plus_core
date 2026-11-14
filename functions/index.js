@@ -1144,8 +1144,9 @@ exports.registrarTentativaDeLogin = onCall(
 );
 
 // Resumo das tentativas de login do dia anterior (cola RP-172, item 3), no molde do resumo
-// de buscas: LoginResumo/todas e estabelecimentos/{loja}/Stats/loginResumo, com o topo de
-// um ano e o documento de cada dia por 90 dias. Depois, apaga LoginAttempts com mais de 90
+// de buscas: LoginResumo/todas e LoginResumo/{loja}, com o topo de um ano e o documento de
+// cada dia por 90 dias. So o Admin le (cola RP-174): fica fora de estabelecimentos/{loja}/
+// Stats, que a regra abre para qualquer conta logada. Depois, apaga LoginAttempts com mais de 90
 // dias. As 3h30, sozinha na faixa.
 exports.summarizeLoginAttemptsNightly = onSchedule(
   {
@@ -1174,8 +1175,10 @@ exports.summarizeLoginAttemptsNightly = onSchedule(
     });
     for (const snapshot of storeSnapshots.filter((store) => store.exists)) {
       const daLoja = resultado.lojas.find((item) => item.establishmentId === snapshot.id);
+      // So o dia e se a loja falhou: Stats/rotinasNoturnas e lido por qualquer conta logada,
+      // e as contagens de login sao so do Admin (cola RP-174).
       await registrarNoite(snapshot.ref, 'summarizeLoginAttemptsNightly', {
-        dados: { dia: resultado.dia, tentativas: daLoja?.tentativas ?? 0, falhas: daLoja?.falhas ?? 0 },
+        dados: { dia: resultado.dia, situacao: daLoja?.status || 'ok' },
       });
     }
 
