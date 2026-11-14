@@ -269,7 +269,7 @@ test('por loja: o registro da loja vai para ela; so com a marca, vai para a loja
   assert.equal(porLoja.get('gs2').length, 1);
 });
 
-test('rotina: grava LoginResumo/todas e o de cada loja no molde do resumo de buscas; LoginAttempts fica, so a janela de limite sai (RP-175)', async () => {
+test('rotina: grava LoginResumo/todas e o de cada loja no molde do resumo de buscas; LoginAttempts e o topo antigo ficam, so a janela de limite sai (RP-175 e RP-176)', async () => {
   const db = bancoFalso({
     'LoginAttempts/a': { ...doDia({ etapa: 'falhou', erro: 'unknown' }) },
     'LoginAttempts/b': { ...doDia({ tentativa: 'tent-0002', loja: 'gs', marca: 'br.com.gsatacarejo', etapa: 'entrou' }) },
@@ -293,10 +293,11 @@ test('rotina: grava LoginResumo/todas e o de cada loja no molde do resumo de bus
   assert.equal(todas.tentativas, 2);
   assert.equal(todas.atualizadoEm, 'carimbo');
   const topoZg = db.dados.get('LoginResumo/zg');
-  // A linha de um ano atras sai do topo; a do dia entra.
-  assert.deepEqual(topoZg.dias, [{
+  // A linha de um ano atras fica no topo (sem prazo, RP-176); a do dia entra depois dela.
+  assert.deepEqual(topoZg.dias, [{ dia: '2025-11-01', tentativas: 1, documento: false }, {
     dia: '2026-11-13', tentativas: 1, entradas: 0, falhas: 1, semResultado: 0, canceladas: 0, aparelhosSemEntrar: 1, documento: true,
   }]);
+  assert.equal(topoZg.primeiroDia, '2025-11-01');
   assert.ok(db.dados.has('LoginResumo/gs/dias/2026-11-13'));
   assert.ok(db.dados.has('LoginAttempts/velho'));
   assert.ok(db.dados.has('LoginAttempts/a'));
@@ -397,4 +398,51 @@ test('RP-175: no Core, so tentativasDeLogin.js toca em LoginAttempts, para grava
   assert.ok(codigo.includes("const snapshot = await db.collection(COLECAO)\n    .where('em', '>=', inicio)"));
   assert.ok(!codigo.includes('DIAS_DE_RETENCAO'));
   assert.ok(!codigo.includes('expiraEm: new Date(em.'));
+});
+
+test('RP-176: a rotina nao apaga documento de dia do resumo nem tira linha do topo, por mais antigos que sejam; a janela de limite vencida continua saindo', async () => {
+  const linhaAntiga = (dia) => ({
+    dia, tentativas: 2, entradas: 1, falhas: 1, semResultado: 0, canceladas: 0, aparelhosSemEntrar: 1, documento: true,
+  });
+  const antigos = ['2023-01-10', '2025-11-01', '2026-06-01', '2026-11-01'];
+  const inicial = {
+    'LoginAttempts/a': { ...doDia({ etapa: 'falhou', erro: 'unknown' }) },
+    'LoginAttemptsLimite/x_2026111410': { registros: 3, expiraEm: new Date('2026-11-14T12:00:00Z') },
+    'LoginAttemptsLimite/x_2026111416': { registros: 1, expiraEm: new Date('2026-11-14T18:00:00Z') },
+  };
+  for (const topo of ['todas', 'zg']) {
+    inicial[`LoginResumo/${topo}`] = { dias: antigos.map(linhaAntiga) };
+    for (const dia of antigos) inicial[`LoginResumo/${topo}/dias/${dia}`] = { dia, tentativas: 2 };
+  }
+  const db = bancoFalso(inicial);
+  const resultado = await rodarResumoDeLogin({
+    db, lojas: [{ id: 'zg', whitelabelId: 'br.com.zero.grau' }], agora: AGORA, atualizadoEm: 'carimbo',
+  });
+  for (const topo of ['todas', 'zg']) {
+    for (const dia of antigos) {
+      assert.deepEqual(db.dados.get(`LoginResumo/${topo}/dias/${dia}`), { dia, tentativas: 2 }, `${topo}/${dia}`);
+    }
+    const documento = db.dados.get(`LoginResumo/${topo}`);
+    assert.deepEqual(documento.dias.map((linha) => linha.dia), [...antigos, '2026-11-13']);
+    assert.ok(documento.dias.every((linha) => linha.documento === true));
+    assert.equal(documento.primeiroDia, '2023-01-10');
+    assert.equal(documento.ultimoDia, '2026-11-13');
+    assert.ok(db.dados.has(`LoginResumo/${topo}/dias/2026-11-13`));
+  }
+  assert.ok(!db.dados.has('LoginAttemptsLimite/x_2026111410'));
+  assert.ok(db.dados.has('LoginAttemptsLimite/x_2026111416'));
+  assert.deepEqual(resultado.limpeza, { limitesRemovidos: 1 });
+});
+
+test('RP-176: em tentativasDeLogin.js, o unico apagamento e o da limpeza das janelas de limite', () => {
+  const codigo = fs.readFileSync(path.join(__dirname, 'tentativasDeLogin.js'), 'utf8');
+  assert.equal(codigo.split('.delete()').length - 1, 1);
+  const inicio = codigo.indexOf('async function limparAntigos(');
+  const fim = codigo.indexOf('\n}\n', inicio);
+  const limpeza = codigo.slice(inicio, fim);
+  assert.ok(inicio > 0 && limpeza.includes('.delete()'));
+  assert.ok(limpeza.includes('db.collection(COLECAO_DO_LIMITE)'));
+  assert.ok(!limpeza.includes('db.collection(COLECAO)'));
+  assert.ok(!limpeza.includes('RESUMO'));
+  assert.ok(!/DIAS_NO_TOPO|DIAS_COM_DOCUMENTO|diasNoTopo|diasComDocumento/.test(codigo));
 });

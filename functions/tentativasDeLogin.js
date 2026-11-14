@@ -12,7 +12,7 @@
 // do login: o uid so vai no registro "entrou", e vem do token da chamada, nao do corpo.
 
 const crypto = require('node:crypto');
-const { diaAnterior, diaDe, diaMenos, limitesDoDia } = require('./buscasResumo');
+const { diaAnterior, diaDe, limitesDoDia } = require('./buscasResumo');
 
 const COLECAO = 'LoginAttempts';
 const COLECAO_DO_LIMITE = 'LoginAttemptsLimite';
@@ -35,9 +35,8 @@ const MAX_REGISTROS_POR_CHAMADA = 20;
 // tentativas por hora, bem acima do que uma pessoa faz, e corta um laco.
 const MAX_REGISTROS_POR_APARELHO_POR_HORA = 60;
 // Os registros de LoginAttempts nao tem prazo: nao levam expiraEm e nenhuma rotina os apaga
-// (decisao do Thay, cola RP-175; o prazo de guarda fica para depois).
-const DIAS_NO_TOPO = 365;
-const DIAS_COM_DOCUMENTO = 90;
+// (decisao do Thay, cola RP-175; o prazo de guarda fica para depois). O resumo tambem nao tem
+// prazo: os documentos de cada dia e a contagem de cada dia no topo ficam (cola RP-176).
 // Registro guardado sem internet e mandado depois: vale a hora do aparelho se for de ate 7
 // dias atras e nao estiver no futuro (5 min de folga no relogio).
 const ATRASO_MAXIMO_MS = 7 * 24 * 60 * 60 * 1000;
@@ -343,14 +342,13 @@ function registrosPorLoja({ registros = [], lojas = [] }) {
   return porLoja;
 }
 
-// Topo (uma linha de contagem por dia, ate um ano) e o documento do dia (90 dias), no
-// molde de Stats/buscasResumo. `referencia` e o documento do topo.
+// Topo (uma linha de contagem por dia) e o documento do dia, no molde de Stats/buscasResumo,
+// mas sem prazo: nenhuma linha sai do topo e nenhum documento de dia e apagado (decisao do
+// Thay, cola RP-176). `referencia` e o documento do topo.
 async function escreverResumoDeLogin({
   referencia,
   resumo,
   atualizadoEm,
-  diasNoTopo = DIAS_NO_TOPO,
-  diasComDocumento = DIAS_COM_DOCUMENTO,
 }) {
   const doDia = (dia) => referencia.collection(DIAS_SUBCOLECAO).doc(dia);
   await doDia(resumo.dia).set({ ...resumo, atualizadoEm });
@@ -367,18 +365,9 @@ async function escreverResumoDeLogin({
     aparelhosSemEntrar: resumo.aparelhosSemEntrar,
     documento: true,
   };
-  const limiteDoTopo = diaMenos(resumo.dia, diasNoTopo);
   const dias = [...anteriores.filter((entrada) => entrada?.dia !== resumo.dia), linha]
-    .filter((entrada) => entrada?.dia && String(entrada.dia) >= limiteDoTopo)
-    .sort((a, b) => String(a.dia).localeCompare(String(b.dia)))
-    .slice(-diasNoTopo);
-
-  const corte = diaMenos(resumo.dia, diasComDocumento);
-  for (const entrada of dias) {
-    if (entrada.documento === false || String(entrada.dia) >= corte) continue;
-    await doDia(entrada.dia).delete();
-    entrada.documento = false;
-  }
+    .filter((entrada) => entrada?.dia)
+    .sort((a, b) => String(a.dia).localeCompare(String(b.dia)));
 
   await referencia.set({
     version: RESUMO_VERSION,
@@ -387,11 +376,6 @@ async function escreverResumoDeLogin({
     ultimoDia: dias.at(-1)?.dia || resumo.dia,
     dias,
   });
-
-  const mantidos = new Set(dias.map((entrada) => entrada.dia));
-  for (const entrada of anteriores) {
-    if (entrada?.dia && !mantidos.has(entrada.dia)) await doDia(entrada.dia).delete();
-  }
   return { dias: dias.length };
 }
 
