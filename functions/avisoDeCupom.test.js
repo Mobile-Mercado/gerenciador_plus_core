@@ -162,8 +162,8 @@ test('RP-179 item 7: no maximo um aviso por cliente e loja por dia de Sao Paulo,
   // Outro cliente e outra loja no mesmo dia avisam.
   c.banco.set('Users/cli-2', { name: 'Bruno' });
   c.banco.set('estabelecimentos/loja-2', { userReference: { id: 'dono-1' } });
-  assert.equal((await c.rodar({ establishmentId: 'loja-1', userId: 'cli-2' })).enviado, true);
-  assert.equal((await c.rodar({ establishmentId: 'loja-2', userId: 'cli-1' })).enviado, true);
+  assert.equal((await c.rodar({ establishmentId: 'loja-1', userId: 'cli-2', userName: 'Bruno' })).enviado, true);
+  assert.equal((await c.rodar({ establishmentId: 'loja-2', userId: 'cli-1', userName: 'Ana' })).enviado, true);
 });
 
 test('RP-179 item 7: sem nome no cadastro nao manda nada, nao reserva o dia e registra no log', async () => {
@@ -193,8 +193,34 @@ test('RP-179 item 7: pedido com loja ou cliente invalido, ou loja inexistente, n
   const c = cenario();
   assert.equal((await c.rodar({ establishmentId: 'a/b', userId: 'cli-1' })).motivo, 'pedido_invalido');
   assert.equal((await c.rodar({ establishmentId: 'loja-1' })).motivo, 'pedido_invalido');
-  assert.equal((await c.rodar({ establishmentId: 'loja-x', userId: 'cli-1' })).motivo, 'loja_inexistente');
+  assert.equal((await c.rodar({ establishmentId: 'loja-x', userId: 'cli-1', userName: 'Ana' })).motivo, 'loja_inexistente');
   assert.equal(c.mensagens.length + c.avisosWeb.length + c.criados.length, 0);
+});
+
+test('RP-179 item 7 (Thay, 14/11): pedido sem nome (ausente, vazio ou so espacos) e ignorado, mesmo com nome no cadastro', async () => {
+  for (const userName of [undefined, null, '', '   ', '\t \n', 7]) {
+    const c = cenario();
+    const avisos = [];
+    const original = console.warn;
+    console.warn = (...args) => avisos.push(args.join(' '));
+    let resultado;
+    try {
+      resultado = await c.rodar({ establishmentId: 'loja-1', userId: 'cli-1', userName });
+    } finally {
+      console.warn = original;
+    }
+    assert.deepEqual(resultado, { enviado: false, motivo: 'pedido_sem_nome' }, JSON.stringify(userName));
+    assert.equal(c.mensagens.length, 0);
+    assert.equal(c.avisosWeb.length, 0);
+    assert.equal(c.criados.length, 0, 'nao reserva o dia');
+    assert.equal(c.contagens.length, 0);
+    assert.ok(avisos.some((linha) => linha.includes('sem nome; ignorado')));
+  }
+  // Com nome no pedido, o titulo continua com o nome do cadastro.
+  const c = cenario();
+  const resultado = await c.rodar({ establishmentId: 'loja-1', userId: 'cli-1', userName: ' Ana ' });
+  assert.equal(resultado.enviado, true);
+  assert.equal(c.avisosWeb[0].title, 'Ana Paula quer cupom');
 });
 
 test('RP-179 item 7: dono sem aparelho conta sem_token e o navegador ainda recebe; loja sem dono so o navegador', async () => {

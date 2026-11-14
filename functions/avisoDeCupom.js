@@ -3,6 +3,8 @@
 // O app do cliente grava CouponRequests/{id} = { establishmentId, userId, userName,
 // requestedAt } (mobile_cliente, coupon_request_repository.dart). O gatilho
 // avisarPedidoDeCupom (functions/index.js) chama avisarPedidoDeCupomUmaVez, que:
+//   0. ignora o pedido sem nome (userName ausente, vazio ou so espacos), que a versao 1.0.36
+//      do app ainda grava;
 //   1. le o nome do cliente no cadastro (Users/{userId}.name); sem nome, nao avisa;
 //   2. le a loja (estabelecimentos/{loja}) e o dono dela (userReference);
 //   3. reserva o aviso do dia: cria AvisosDePedidoDeCupom/{loja}_{cliente}_{dia}, com create(),
@@ -60,6 +62,13 @@ function nomeDoCadastro(usuario = {}) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 100);
+}
+
+// O pedido traz o userName que o app mandou. Sem ele (ausente, vazio ou so espacos), o pedido e
+// ignorado: a versao 1.0.36 do app ainda grava pedidos assim (Thay, 14/11). O titulo continua
+// com o nome do cadastro.
+function pedidoTemNome(pedido = {}) {
+  return typeof pedido?.userName === 'string' && pedido.userName.trim().length > 0;
 }
 
 function avisoDePedidoDeCupom(nome) {
@@ -172,6 +181,12 @@ async function avisarPedidoDeCupomUmaVez({
   if (!idValido(lojaId) || !idValido(clienteId)) {
     console.warn(`[${origem}] Pedido de cupom ${pedidoId} sem loja ou cliente validos; nao avisa`);
     return { enviado: false, motivo: 'pedido_invalido' };
+  }
+  // Pedido sem nome (userName ausente, vazio ou so espacos): ignorado, sem aviso e sem reservar o
+  // dia. Ainda chegam assim da versao 1.0.36 do app (decisao do Thay, 14/11).
+  if (!pedidoTemNome(pedido)) {
+    console.warn(`[${origem}] Pedido de cupom ${pedidoId} sem nome; ignorado, nao avisa a loja ${lojaId}`);
+    return { enviado: false, motivo: 'pedido_sem_nome' };
   }
 
   const usuario = await db.collection('Users').doc(clienteId).get();
