@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { FieldValue } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 import { chaveDoNome } from '../../domain/catalogo/formatarNome.js';
@@ -76,6 +77,25 @@ export class AparenciaDaHome {
   usaVariacao(loja, bloco, numero) {
     const escolha = escolhaDaLoja(loja.home, bloco);
     return !escolha.modelo && escolha.numero === numero;
+  }
+
+  // Cola B56-21 (Passo 0): a loja da variacao tem ajuste proprio quando o {bloco}Ajustes gravado
+  // e diferente dos ajustes da variacao antes da mudanca (a tabela com o padrao de entao). Sem
+  // ajustes gravados, nao tem.
+  temAjusteProprio(loja, bloco, ajustesAntes) {
+    const gravados = loja.home?.[`${bloco}Ajustes`];
+    if (!gravados || typeof gravados !== 'object' || Array.isArray(gravados)) return false;
+    return !isDeepStrictEqual({ ...gravados }, { ...ajustesAntes });
+  }
+
+  // As lojas da variacao (sem modelo), separadas em sem e com ajuste proprio.
+  lojasDaVariacao(lojas, bloco, numero, padroes) {
+    const antes = ajustesDaVariacao(bloco, numero, padroes);
+    const daVariacao = lojas.filter((loja) => this.usaVariacao(loja, bloco, numero));
+    return {
+      semAjuste: daVariacao.filter((loja) => !this.temAjusteProprio(loja, bloco, antes)),
+      comAjuste: daVariacao.filter((loja) => this.temAjusteProprio(loja, bloco, antes)),
+    };
   }
 
   // A tabela (B1), as faixas (B2) e os padroes mudados, para a tela.
@@ -176,43 +196,49 @@ export class AparenciaDaHome {
     return { modelo: this.paraATela(await atual.ref.get(), afetadas.length), lojasAlteradas: ids.length, lojas: ids, antes: data.ajustes || {} };
   }
 
-  // B4.d: o padrao de uma variacao para todas as lojas que a usam sem modelo.
-  async mudarPadrao(bloco, numero, ajustes = {}, ator = {}) {
+  // B4.d: o padrao de uma variacao para as lojas que a usam sem modelo. Cola B56-21: so as sem
+  // ajuste proprio; as com ajuste proprio so com `incluirAjusteProprio` (a caixa da janela).
+  async mudarPadrao(bloco, numero, ajustes = {}, ator = {}, { incluirAjusteProprio = false } = {}) {
     blocoValido(bloco);
     const valor = numeroDe(bloco, numero);
     const padroes = await this.padroes();
     const antes = padroes?.[bloco]?.[String(valor)] || null;
     const novos = { ...(antes || {}), ...conferidos(bloco, ajustes, valor) };
+    const { semAjuste, comAjuste } = this.lojasDaVariacao(await this.lojas(), bloco, valor, padroes);
     await this.firestore.doc(DOCUMENTO_DE_PADROES).set({
       [bloco]: { ...(padroes[bloco] || {}), [String(valor)]: novos },
       atualizadoEm: this.serverTimestamp(),
       atualizadoPor: ator.uid || null,
     }, { merge: true });
     const final = ajustesDaVariacao(bloco, valor, { [bloco]: { [String(valor)]: novos } });
-    const afetadas = (await this.lojas()).filter((loja) => this.usaVariacao(loja, bloco, valor));
+    const afetadas = incluirAjusteProprio ? [...semAjuste, ...comAjuste] : semAjuste;
     const ids = await this.regravar(afetadas, bloco, () => final);
-    return { bloco, numero: valor, ajustes: final, lojasAlteradas: ids.length, lojas: ids, antes };
+    return { bloco, numero: valor, ajustes: final, lojasAlteradas: ids.length, lojas: ids, lojasComAjusteProprio: comAjuste.length, antes };
   }
 
-  // B4.e: apaga o padrao mudado e regrava as lojas com a tabela.
-  async voltarAoOriginal(bloco, numero, ator = {}) {
+  // B4.e: apaga o padrao mudado e regrava as lojas com a tabela. Cola B56-21: a mesma regra do
+  // mudarPadrao; e so a chave desta variacao sai do documento (os outros blocos e as outras
+  // variacoes continuam como estao).
+  async voltarAoOriginal(bloco, numero, ator = {}, { incluirAjusteProprio = false } = {}) {
     blocoValido(bloco);
     const valor = numeroDe(bloco, numero);
     const padroes = await this.padroes();
     const antes = padroes?.[bloco]?.[String(valor)] || null;
     if (!antes) throw recusa('Esta variação já está no original.', 'padrao_ja_original', 409);
+    const { semAjuste, comAjuste } = this.lojasDaVariacao(await this.lojas(), bloco, valor, padroes);
     const restantes = { ...(padroes[bloco] || {}) };
     delete restantes[String(valor)];
-    await this.firestore.doc(DOCUMENTO_DE_PADROES).set({
+    await this.firestore.doc(DOCUMENTO_DE_PADROES).update({
       [bloco]: restantes, atualizadoEm: this.serverTimestamp(), atualizadoPor: ator.uid || null,
     });
     const final = { ...VARIACOES[bloco][valor] };
-    const afetadas = (await this.lojas()).filter((loja) => this.usaVariacao(loja, bloco, valor));
+    const afetadas = incluirAjusteProprio ? [...semAjuste, ...comAjuste] : semAjuste;
     const ids = await this.regravar(afetadas, bloco, () => final);
-    return { bloco, numero: valor, ajustes: final, lojasAlteradas: ids.length, lojas: ids, antes };
+    return { bloco, numero: valor, ajustes: final, lojasAlteradas: ids.length, lojas: ids, lojasComAjusteProprio: comAjuste.length, antes };
   }
 
-  // B4.f: quantas lojas uma gravacao vai mudar, para a janela de confirmacao.
+  // B4.f: quantas lojas uma gravacao vai mudar, para a janela de confirmacao. Na variacao (cola
+  // B56-21): `lojas` sem ajuste proprio (N) e `comAjusteProprio` (M), que so mudam com a caixa.
   async afetadas({ bloco, numero, modeloId } = {}) {
     const lojas = await this.lojas();
     if (modeloId) {
@@ -221,6 +247,7 @@ export class AparenciaDaHome {
     }
     blocoValido(bloco);
     const valor = numeroDe(bloco, numero);
-    return { lojas: lojas.filter((loja) => this.usaVariacao(loja, bloco, valor)).length };
+    const { semAjuste, comAjuste } = this.lojasDaVariacao(lojas, bloco, valor, await this.padroes());
+    return { lojas: semAjuste.length, comAjusteProprio: comAjuste.length };
   }
 }

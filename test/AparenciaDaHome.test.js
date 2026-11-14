@@ -96,7 +96,7 @@ test('padrao para todas as lojas (B4.d) e voltar ao original (B4.e): so quem usa
   const modelo = await home.criarModelo({ nome: 'Topo X', bloco: 'topo', base: 2 });
   await app.salvar('loja-2', { aparenciaHome: { topoModelo: modelo.id } });
   // loja-1 sem aparenciaHome (usa o Topo 2 padrao), loja-2 no modelo, loja-3 no Topo 5.
-  assert.deepEqual(await home.afetadas({ bloco: 'topo', numero: 2 }), { lojas: 1 });
+  assert.deepEqual(await home.afetadas({ bloco: 'topo', numero: 2 }), { lojas: 1, comAjusteProprio: 0 });
   const mudado = await home.mudarPadrao('topo', 2, { alturaBusca: 42 }, { uid: 'admin-1' });
   assert.equal(mudado.lojasAlteradas, 1);
   assert.deepEqual(mudado.lojas, ['loja-1']);
@@ -116,6 +116,89 @@ test('padrao para todas as lojas (B4.d) e voltar ao original (B4.e): so quem usa
   assert.equal(banco.dados('aparenciaPadrao/padroes').topo['2'], undefined);
   await assert.rejects(home.voltarAoOriginal('topo', 2), (erro) => erro.code === 'padrao_ja_original');
   await assert.rejects(home.mudarPadrao('topo', 2, { distanciaTopo: 90 }), (erro) => erro.code === 'ajuste_fora_da_faixa');
+});
+
+// ----- Cola B56-21 (Passo 0): padrao e voltar ao original so nas lojas da versao sem ajuste
+// proprio; as com ajuste proprio so com a caixa marcada (incluirAjusteProprio). -----
+
+// loja-a e loja-b na versao 2 do topo (loja-a sem nada gravado, loja-b com os ajustes da tabela);
+// loja-c no Topo 3; loja-d no Topo 2 com ajuste proprio (alturaBusca 44, fora da tabela).
+function montarAjusteProprio() {
+  const tabela = { ...VARIACOES.topo[2] };
+  return montar({
+    'estabelecimentos/loja-a': { name: 'A' },
+    'estabelecimentos/loja-b': { name: 'B', aparenciaHome: { topo: 2, topoModelo: null, topoAjustes: tabela } },
+    'estabelecimentos/loja-c': { name: 'C', aparenciaHome: { topo: 3, topoAjustes: { ...VARIACOES.topo[3] } } },
+    'estabelecimentos/loja-d': { name: 'D', aparenciaHome: { topo: 2, topoAjustes: { ...tabela, alturaBusca: 44 } } },
+  });
+}
+
+function semLojasAntigas(banco) {
+  ['loja-1', 'loja-2', 'loja-3'].forEach((id) => banco.docs.delete(`estabelecimentos/${id}`));
+  return banco;
+}
+
+const alturaDe = (banco, id) => banco.dados(`estabelecimentos/${id}`).aparenciaHome?.topoAjustes?.alturaBusca;
+
+for (const acao of ['mudarPadrao', 'voltarAoOriginal']) {
+  // voltarAoOriginal precisa de um padrao mudado antes: muda o topo 2 para 40 com a caixa marcada
+  // (todas as da versao ficam com 40) e grava o ajuste proprio da loja-d de novo (44).
+  async function preparar() {
+    const { banco, home } = montarAjusteProprio();
+    semLojasAntigas(banco);
+    if (acao === 'voltarAoOriginal') {
+      await home.mudarPadrao('topo', 2, { alturaBusca: 40 }, {}, { incluirAjusteProprio: true });
+      const d = banco.dados('estabelecimentos/loja-d');
+      banco.docs.set('estabelecimentos/loja-d', { ...d, aparenciaHome: { ...d.aparenciaHome, topoAjustes: { ...d.aparenciaHome.topoAjustes, alturaBusca: 44 } } });
+    }
+    const executar = (opcoes) => (acao === 'mudarPadrao'
+      ? home.mudarPadrao('topo', 2, { alturaBusca: 42 }, {}, opcoes)
+      : home.voltarAoOriginal('topo', 2, {}, opcoes));
+    const esperado = acao === 'mudarPadrao' ? 42 : VARIACOES.topo[2].alturaBusca;
+    return { banco, home, executar, esperado };
+  }
+
+  test(`${acao} (B56-21): mesma versao sem ajuste muda; afetadas conta N e M`, async () => {
+    const { banco, home, executar, esperado } = await preparar();
+    assert.deepEqual(await home.afetadas({ bloco: 'topo', numero: 2 }), { lojas: 2, comAjusteProprio: 1 });
+    const resultado = await executar();
+    assert.equal(alturaDe(banco, 'loja-a'), esperado, 'loja sem nada gravado, na versao 2');
+    assert.equal(alturaDe(banco, 'loja-b'), esperado, 'loja com os ajustes da versao');
+    assert.equal(resultado.lojasAlteradas, 2);
+    assert.equal(resultado.lojasComAjusteProprio, 1);
+  });
+
+  test(`${acao} (B56-21): outra versao fica`, async () => {
+    const { banco, executar } = await preparar();
+    await executar({ incluirAjusteProprio: true });
+    assert.equal(alturaDe(banco, 'loja-c'), VARIACOES.topo[3].alturaBusca);
+  });
+
+  test(`${acao} (B56-21): com ajuste proprio e caixa desmarcada, fica`, async () => {
+    const { banco, executar } = await preparar();
+    const resultado = await executar({ incluirAjusteProprio: false });
+    assert.equal(alturaDe(banco, 'loja-d'), 44);
+    assert.deepEqual(resultado.lojas.sort(), ['loja-a', 'loja-b']);
+  });
+
+  test(`${acao} (B56-21): com ajuste proprio e caixa marcada, muda`, async () => {
+    const { banco, executar, esperado } = await preparar();
+    const resultado = await executar({ incluirAjusteProprio: true });
+    assert.equal(alturaDe(banco, 'loja-d'), esperado);
+    assert.equal(resultado.lojasAlteradas, 3);
+  });
+}
+
+test('voltar ao original (B56-21) mantem os padroes mudados dos outros blocos e das outras versoes', async () => {
+  const { banco, home } = montar();
+  await home.mudarPadrao('topo', 2, { alturaBusca: 42 });
+  await home.mudarPadrao('topo', 3, { alturaBusca: 40 });
+  await home.mudarPadrao('meio', 2, { fileiras: 1 });
+  await home.voltarAoOriginal('topo', 2);
+  const padroes = banco.dados('aparenciaPadrao/padroes');
+  assert.equal(padroes.topo['2'], undefined, 'o topo 2 volta ao original');
+  assert.equal(padroes.topo['3'].alturaBusca, 40, 'o topo 3 continua mudado');
+  assert.equal(padroes.meio['2'].fileiras, 1, 'o meio 2 continua mudado');
 });
 
 test('regravacao em lotes: mais de 400 lojas no mesmo padrao', async () => {
@@ -250,9 +333,17 @@ test('rotas do Admin: variacoes, afetadas, modelos, padrao e banners, com audito
     const criado = await chamar('POST', '/modelos-aparencia', { nome: 'Fim largo', bloco: 'fim', base: 2, ajustes: { larguraCards: 150 } });
     assert.equal(criado.status, 201);
     assert.equal((await chamar('POST', '/modelos-aparencia', { nome: 'Fim estreito', bloco: 'fim', base: 2, ajustes: { larguraCards: 90 } })).status, 400);
+    // Cola B56-21: loja-4 no Topo 2 com ajuste proprio (tamanhoLogo 140) conta em M e so muda com a caixa.
+    banco.docs.set('estabelecimentos/loja-4', { name: 'Loja 4', aparenciaHome: { topo: 2, topoAjustes: { ...VARIACOES.topo[2], tamanhoLogo: 140 } } });
+    assert.deepEqual((await (await chamar('GET', '/aparencia-home/afetadas?bloco=topo&numero=2')).json()).data, { lojas: 2, comAjusteProprio: 1 });
     const padrao = await chamar('PUT', '/aparencia-padrao/topo/2', { ajustes: { tamanhoLogo: 120 } });
-    assert.equal((await padrao.json()).data.lojasAlteradas, 2);
-    assert.equal((await chamar('DELETE', '/aparencia-padrao/topo/2')).status, 200);
+    assert.deepEqual((await padrao.json()).data.lojasAlteradas, 2);
+    assert.equal(banco.dados('estabelecimentos/loja-4').aparenciaHome.topoAjustes.tamanhoLogo, 140, 'caixa desmarcada: a loja com ajuste proprio fica');
+    assert.equal((await chamar('PUT', '/aparencia-padrao/topo/2', { ajustes: {}, incluirAjusteProprio: 'sim' })).status, 400);
+    const original = await chamar('DELETE', '/aparencia-padrao/topo/2?incluirAjusteProprio=true');
+    assert.equal(original.status, 200);
+    assert.equal((await original.json()).data.lojasAlteradas, 3, 'caixa marcada: entram as 2 e a loja-4');
+    assert.equal(banco.dados('estabelecimentos/loja-4').aparenciaHome.topoAjustes.tamanhoLogo, VARIACOES.topo[2].tamanhoLogo);
     assert.equal((await chamar('DELETE', '/aparencia-padrao/topo/2')).status, 409);
     assert.equal((await chamar('PATCH', '/estabelecimentos/loja-1/app-do-cliente', { aparenciaHome: { meio: 3, meioAjustes: { tamanhoIcones: 50 } } })).status, 200);
     assert.equal((await chamar('PATCH', '/estabelecimentos/loja-1/app-do-cliente', { aparenciaHome: { meioAjustes: { tamanhoIcones: 90 } } })).status, 400);

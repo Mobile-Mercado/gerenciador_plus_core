@@ -78,7 +78,10 @@ export const alterarModeloSchema = z.object({
   ajustes: ajustesSchema.optional(),
 }).strict();
 
-export const padraoSchema = z.object({ ajustes: ajustesSchema }).strict();
+// Cola B56-21: incluirAjusteProprio e a caixa "Mudar tambem as M lojas com ajuste proprio" (padrao
+// desmarcada). No DELETE (voltar ao original) vai na consulta.
+export const padraoSchema = z.object({ ajustes: ajustesSchema, incluirAjusteProprio: z.boolean().optional() }).strict();
+export const voltarAoOriginalSchema = z.object({ incluirAjusteProprio: z.enum(['true', 'false']).optional() });
 export const variacaoParamsSchema = z.object({ bloco: blocoSchema, numero: z.coerce.number().int().min(1).max(6) });
 export const afetadasSchema = z.object({
   bloco: blocoSchema.optional(),

@@ -7,7 +7,7 @@ import { appDoClienteSchema, formasDePagamentoSchema } from './appDoClienteSchem
 import {
   afetadasSchema, alterarBannerSchema, alterarModeloSchema, alvoDoArquivoSchema, aparenciaDaLojaSchema, arquivoDaAparenciaSchema,
   bannerParamsSchema, conjuntoDaLojaSchema, conjuntoNomeSchema, iconeDoConjuntoSchema, modelosConsultaSchema, novoBannerSchema,
-  novoModeloSchema, padraoSchema, variacaoParamsSchema,
+  novoModeloSchema, padraoSchema, variacaoParamsSchema, voltarAoOriginalSchema,
 } from './aparenciaSchema.js';
 import { entregaSchema } from './entregaSchema.js';
 import { AMBIENTES_DA_SAFRA } from '../../application/loja/FormasDePagamento.js';
@@ -566,19 +566,26 @@ export function createAdminRoutes({
 
     router.put('/aparencia-padrao/:bloco/:numero', asyncHandler(async (request, response) => {
       const { bloco, numero } = variacaoParamsSchema.parse(request.params);
-      const { ajustes } = padraoSchema.parse(request.body);
-      const resultado = await aparenciaDaHome.mudarPadrao(bloco, numero, ajustes, atorDe(request));
+      const { ajustes, incluirAjusteProprio = false } = padraoSchema.parse(request.body);
+      const resultado = await aparenciaDaHome.mudarPadrao(bloco, numero, ajustes, atorDe(request), { incluirAjusteProprio });
       response.locals.lojasAlvo = resultado.lojas;
-      response.locals.auditoria = { acao: 'padrao_aparencia_mudado', bloco, numero, antes: resultado.antes, lojasAlteradas: resultado.lojasAlteradas };
-      response.json({ data: { bloco, numero, ajustes: resultado.ajustes, lojasAlteradas: resultado.lojasAlteradas } });
+      response.locals.auditoria = {
+        acao: 'padrao_aparencia_mudado', bloco, numero, antes: resultado.antes, lojasAlteradas: resultado.lojasAlteradas,
+        incluirAjusteProprio, lojasComAjusteProprio: resultado.lojasComAjusteProprio,
+      };
+      response.json({ data: { bloco, numero, ajustes: resultado.ajustes, lojasAlteradas: resultado.lojasAlteradas, lojasComAjusteProprio: resultado.lojasComAjusteProprio } });
     }));
 
     router.delete('/aparencia-padrao/:bloco/:numero', asyncHandler(async (request, response) => {
       const { bloco, numero } = variacaoParamsSchema.parse(request.params);
-      const resultado = await aparenciaDaHome.voltarAoOriginal(bloco, numero, atorDe(request));
+      const incluirAjusteProprio = voltarAoOriginalSchema.parse(request.query).incluirAjusteProprio === 'true';
+      const resultado = await aparenciaDaHome.voltarAoOriginal(bloco, numero, atorDe(request), { incluirAjusteProprio });
       response.locals.lojasAlvo = resultado.lojas;
-      response.locals.auditoria = { acao: 'padrao_aparencia_original', bloco, numero, antes: resultado.antes, lojasAlteradas: resultado.lojasAlteradas };
-      response.json({ data: { bloco, numero, ajustes: resultado.ajustes, lojasAlteradas: resultado.lojasAlteradas } });
+      response.locals.auditoria = {
+        acao: 'padrao_aparencia_original', bloco, numero, antes: resultado.antes, lojasAlteradas: resultado.lojasAlteradas,
+        incluirAjusteProprio, lojasComAjusteProprio: resultado.lojasComAjusteProprio,
+      };
+      response.json({ data: { bloco, numero, ajustes: resultado.ajustes, lojasAlteradas: resultado.lojasAlteradas, lojasComAjusteProprio: resultado.lojasComAjusteProprio } });
     }));
   }
 
