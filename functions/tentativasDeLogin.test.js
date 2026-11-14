@@ -112,7 +112,7 @@ test('listas fechadas: as lojas do banco e as marcas delas, mais a do app geral'
   assert.deepEqual([...LISTAS.marcas].sort(), ['br.com.gsatacarejo', 'br.com.mobile.cliente', 'br.com.zero.grau']);
 });
 
-test('registro valido: os campos da cola, o aparelho resumido, a validade de 90 dias e nenhum uid antes do login', () => {
+test('registro valido: os campos da cola, o aparelho resumido, sem prazo (sem expiraEm, RP-175) e nenhum uid antes do login', () => {
   const gravado = validar({}, { uidDoLogin: 'uid-anonimo' });
   assert.deepEqual(gravado, {
     tentativa: 'tent-0001',
@@ -126,7 +126,6 @@ test('registro valido: os campos da cola, o aparelho resumido, a validade de 90 
     uid: null,
     aparelho: 'abc',
     em: AGORA,
-    expiraEm: new Date('2027-02-12T15:00:00Z'),
   });
 });
 
@@ -270,7 +269,7 @@ test('por loja: o registro da loja vai para ela; so com a marca, vai para a loja
   assert.equal(porLoja.get('gs2').length, 1);
 });
 
-test('rotina: grava LoginResumo/todas e o de cada loja no molde do resumo de buscas, e apaga o que passou de 90 dias', async () => {
+test('rotina: grava LoginResumo/todas e o de cada loja no molde do resumo de buscas; LoginAttempts fica, so a janela de limite sai (RP-175)', async () => {
   const db = bancoFalso({
     'LoginAttempts/a': { ...doDia({ etapa: 'falhou', erro: 'unknown' }) },
     'LoginAttempts/b': { ...doDia({ tentativa: 'tent-0002', loja: 'gs', marca: 'br.com.gsatacarejo', etapa: 'entrou' }) },
@@ -299,10 +298,10 @@ test('rotina: grava LoginResumo/todas e o de cada loja no molde do resumo de bus
     dia: '2026-11-13', tentativas: 1, entradas: 0, falhas: 1, semResultado: 0, canceladas: 0, aparelhosSemEntrar: 1, documento: true,
   }]);
   assert.ok(db.dados.has('LoginResumo/gs/dias/2026-11-13'));
-  assert.ok(!db.dados.has('LoginAttempts/velho'));
+  assert.ok(db.dados.has('LoginAttempts/velho'));
   assert.ok(db.dados.has('LoginAttempts/a'));
   assert.ok(!db.dados.has('LoginAttemptsLimite/x_2026111410'));
-  assert.deepEqual(resultado.limpeza, { removidos: 1, limitesRemovidos: 1 });
+  assert.deepEqual(resultado.limpeza, { limitesRemovidos: 1 });
 });
 
 test('RP-174: o resumo de cada loja fica em LoginResumo/{loja}, nunca em estabelecimentos (que a regra abre para conta logada)', async () => {
@@ -343,4 +342,59 @@ test('index.js: registrarTentativaDeLogin aceita chamada sem login e so le o cor
   assert.match(index, /exports\.summarizeLoginAttemptsNightly = onSchedule\(\s+\{\s+schedule: '30 3 \* \* \*',\s+timeZone: 'America\/Sao_Paulo'/);
   const horarios = [...index.matchAll(/schedule: '([^']+)'/g)].map((achado) => achado[1]);
   assert.equal(horarios.filter((horario) => horario.startsWith('30 3 ')).length, 1);
+});
+
+test('RP-175: a rotina nao apaga nenhum registro de LoginAttempts, nem o de anos atras nem o antigo com expiraEm vencido; o registro novo nao leva expiraEm', async () => {
+  const db = bancoFalso({
+    'LoginAttempts/ontem': { ...doDia({}) },
+    'LoginAttempts/doisAnos': { ...doDia({}), em: new Date('2024-11-01T12:00:00Z') },
+    'LoginAttempts/comPrazoVencido': { ...doDia({}), em: new Date('2026-01-01T12:00:00Z'), expiraEm: new Date('2026-04-01T12:00:00Z') },
+    'LoginAttemptsLimite/x_2026111410': { registros: 3, expiraEm: new Date('2026-11-14T12:00:00Z') },
+    'LoginAttemptsLimite/x_2026111416': { registros: 1, expiraEm: new Date('2026-11-14T18:00:00Z') },
+  });
+  const antes = [...db.dados.keys()].filter((caminho) => caminho.startsWith('LoginAttempts/'));
+  const resultado = await rodarResumoDeLogin({ db, lojas: [{ id: 'zg', whitelabelId: 'br.com.zero.grau' }], agora: AGORA, atualizadoEm: 'carimbo' });
+  assert.deepEqual([...db.dados.keys()].filter((caminho) => caminho.startsWith('LoginAttempts/')), antes);
+  // So a janela de limite que ja passou sai; a da hora corrente fica.
+  assert.ok(!db.dados.has('LoginAttemptsLimite/x_2026111410'));
+  assert.ok(db.dados.has('LoginAttemptsLimite/x_2026111416'));
+  assert.deepEqual(resultado.limpeza, { limitesRemovidos: 1 });
+
+  const gravacao = bancoFalso();
+  await gravarTentativas({ db: gravacao, validos: [validar({})], aparelho: 'abc', agora: AGORA });
+  const novos = [...gravacao.dados.entries()].filter(([caminho]) => caminho.startsWith('LoginAttempts/'));
+  assert.equal(novos.length, 1);
+  assert.ok(!('expiraEm' in novos[0][1]));
+});
+
+test('RP-175: no Core, so tentativasDeLogin.js toca em LoginAttempts, para gravar e ler o dia; nada o apaga', () => {
+  const raiz = path.join(__dirname, '..');
+  const arquivos = [];
+  const varrer = (pasta) => {
+    for (const item of fs.readdirSync(pasta, { withFileTypes: true })) {
+      if (['node_modules', '.git', 'coverage'].includes(item.name)) continue;
+      const caminho = path.join(pasta, item.name);
+      if (item.isDirectory()) varrer(caminho);
+      else if (/\.(js|mjs|cjs|ts)$/.test(item.name) && !item.name.endsWith('.test.js') && !caminho.includes(`${path.sep}test${path.sep}`)) arquivos.push(caminho);
+    }
+  };
+  varrer(path.join(raiz, 'functions'));
+  varrer(path.join(raiz, 'src'));
+  const comNome = arquivos.filter((arquivo) => fs.readFileSync(arquivo, 'utf8').includes('LoginAttempts'))
+    .map((arquivo) => path.relative(raiz, arquivo).split(path.sep).join('/')).sort();
+  assert.deepEqual(comNome, ['functions/index.js', 'functions/tentativasDeLogin.js']);
+
+  // index.js so cita LoginAttempts em comentario e no nome da rotina, sem a colecao em texto.
+  const index = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+  assert.ok(!/['"`]LoginAttempts/.test(index));
+  assert.ok(!/(COLECAO|limparAntigos)/.test(index.slice(0, index.indexOf("require('./tentativasDeLogin')"))
+    .split('const {').at(-1)));
+
+  // Em tentativasDeLogin.js, a colecao dos registros so aparece no create e na leitura do dia.
+  const codigo = fs.readFileSync(path.join(__dirname, 'tentativasDeLogin.js'), 'utf8');
+  assert.equal(codigo.split('db.collection(COLECAO)').length - 1, 2);
+  assert.ok(codigo.includes('transacao.create(db.collection(COLECAO).doc()'));
+  assert.ok(codigo.includes("const snapshot = await db.collection(COLECAO)\n    .where('em', '>=', inicio)"));
+  assert.ok(!codigo.includes('DIAS_DE_RETENCAO'));
+  assert.ok(!codigo.includes('expiraEm: new Date(em.'));
 });

@@ -1146,8 +1146,9 @@ exports.registrarTentativaDeLogin = onCall(
 // Resumo das tentativas de login do dia anterior (cola RP-172, item 3), no molde do resumo
 // de buscas: LoginResumo/todas e LoginResumo/{loja}, com o topo de um ano e o documento de
 // cada dia por 90 dias. So o Admin le (cola RP-174): fica fora de estabelecimentos/{loja}/
-// Stats, que a regra abre para qualquer conta logada. Depois, apaga LoginAttempts com mais de 90
-// dias. As 3h30, sozinha na faixa.
+// Stats, que a regra abre para qualquer conta logada. Depois, apaga so as janelas de limite
+// por aparelho que ja passaram; LoginAttempts nao e apagado (cola RP-175). As 3h30, sozinha na
+// faixa.
 exports.summarizeLoginAttemptsNightly = onSchedule(
   {
     schedule: '30 3 * * *',

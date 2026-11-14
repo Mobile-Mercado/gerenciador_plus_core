@@ -34,7 +34,8 @@ const MAX_REGISTROS_POR_CHAMADA = 20;
 // Por aparelho e por hora. Uma tentativa pelo SMS gera ate 4 registros; 60 cobre 15
 // tentativas por hora, bem acima do que uma pessoa faz, e corta um laco.
 const MAX_REGISTROS_POR_APARELHO_POR_HORA = 60;
-const DIAS_DE_RETENCAO = 90;
+// Os registros de LoginAttempts nao tem prazo: nao levam expiraEm e nenhuma rotina os apaga
+// (decisao do Thay, cola RP-175; o prazo de guarda fica para depois).
 const DIAS_NO_TOPO = 365;
 const DIAS_COM_DOCUMENTO = 90;
 // Registro guardado sem internet e mandado depois: vale a hora do aparelho se for de ate 7
@@ -128,7 +129,6 @@ function validarRegistro(bruto, {
     uid: etapa === 'entrou' && uidDoLogin ? uidDoLogin : null,
     aparelho,
     em,
-    expiraEm: new Date(em.getTime() + DIAS_DE_RETENCAO * 24 * 60 * 60 * 1000),
   };
 }
 
@@ -404,13 +404,12 @@ async function carregarRegistrosDoDia({ db, dia }) {
   return snapshot.docs.map((documento) => documento.data());
 }
 
-// Apaga em lotes o que passou de 90 dias, mesmo que a politica de TTL do Firestore ainda
-// nao esteja ligada; e as janelas de limite de horas que ja passaram.
+// Apaga em lotes so as janelas de limite por aparelho (LoginAttemptsLimite) que ja passaram:
+// um contador por aparelho e por hora, sem registro de login. Nao apaga LoginAttempts
+// (cola RP-175).
 async function limparAntigos({
   db, agora = new Date(), lote = 300, maximo = 5000,
 }) {
-  const antesDe = new Date(agora.getTime() - DIAS_DE_RETENCAO * 24 * 60 * 60 * 1000);
-  let removidos = 0;
   const apagar = async (consulta) => {
     let feitos = 0;
     while (feitos < maximo) {
@@ -424,13 +423,12 @@ async function limparAntigos({
     }
     return feitos;
   };
-  removidos += await apagar(db.collection(COLECAO).where('em', '<', antesDe));
   const limites = await apagar(db.collection(COLECAO_DO_LIMITE).where('expiraEm', '<', agora));
-  return { removidos, limitesRemovidos: limites };
+  return { limitesRemovidos: limites };
 }
 
 // Dia anterior: resumo de todas as lojas (LoginResumo/todas) e de cada loja da lista da
-// rotina (LoginResumo/{loja}); depois, a limpeza.
+// rotina (LoginResumo/{loja}); depois, a limpeza das janelas de limite (LoginAttempts fica).
 //
 // So o Admin le o resumo (decisao do Thay, cola RP-174): por isso ele fica na raiz, em
 // LoginResumo, que a regra do Firestore nao abre para conta de app nem para lojista (cai no
@@ -498,7 +496,6 @@ async function rodarResumoDeLogin({
 module.exports = {
   COLECAO,
   COLECAO_DO_LIMITE,
-  DIAS_DE_RETENCAO,
   ETAPAS,
   MARCA_DO_APP_GERAL,
   MAX_REGISTROS_POR_APARELHO_POR_HORA,
