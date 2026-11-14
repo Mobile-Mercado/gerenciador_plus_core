@@ -276,7 +276,7 @@ test('rotina: grava LoginResumo/todas e o de cada loja no molde do resumo de bus
     'LoginAttempts/b': { ...doDia({ tentativa: 'tent-0002', loja: 'gs', marca: 'br.com.gsatacarejo', etapa: 'entrou' }) },
     'LoginAttempts/velho': { ...doDia({}), em: new Date('2026-08-01T12:00:00Z') },
     'LoginAttemptsLimite/x_2026111410': { registros: 3, expiraEm: new Date('2026-11-14T12:00:00Z') },
-    'estabelecimentos/zg/Stats/loginResumo': { dias: [{ dia: '2025-11-01', tentativas: 1, documento: false }] },
+    'LoginResumo/zg': { dias: [{ dia: '2025-11-01', tentativas: 1, documento: false }] },
   });
   const resultado = await rodarResumoDeLogin({
     db,
@@ -293,16 +293,44 @@ test('rotina: grava LoginResumo/todas e o de cada loja no molde do resumo de bus
   const todas = db.dados.get('LoginResumo/todas/dias/2026-11-13');
   assert.equal(todas.tentativas, 2);
   assert.equal(todas.atualizadoEm, 'carimbo');
-  const topoZg = db.dados.get('estabelecimentos/zg/Stats/loginResumo');
+  const topoZg = db.dados.get('LoginResumo/zg');
   // A linha de um ano atras sai do topo; a do dia entra.
   assert.deepEqual(topoZg.dias, [{
     dia: '2026-11-13', tentativas: 1, entradas: 0, falhas: 1, semResultado: 0, canceladas: 0, aparelhosSemEntrar: 1, documento: true,
   }]);
-  assert.ok(db.dados.has('estabelecimentos/gs/Stats/loginResumo/dias/2026-11-13'));
+  assert.ok(db.dados.has('LoginResumo/gs/dias/2026-11-13'));
   assert.ok(!db.dados.has('LoginAttempts/velho'));
   assert.ok(db.dados.has('LoginAttempts/a'));
   assert.ok(!db.dados.has('LoginAttemptsLimite/x_2026111410'));
   assert.deepEqual(resultado.limpeza, { removidos: 1, limitesRemovidos: 1 });
+});
+
+test('RP-174: o resumo de cada loja fica em LoginResumo/{loja}, nunca em estabelecimentos (que a regra abre para conta logada)', async () => {
+  const db = bancoFalso({
+    'LoginAttempts/a': { ...doDia({ etapa: 'falhou', erro: 'unknown' }) },
+  });
+  const resultado = await rodarResumoDeLogin({
+    db,
+    lojas: [{ id: 'zg', whitelabelId: 'br.com.zero.grau' }, { id: 'todas', whitelabelId: 'x' }],
+    agora: AGORA,
+    atualizadoEm: 'carimbo',
+    limpar: false,
+  });
+  const caminhos = [...db.dados.keys()].filter((caminho) => !caminho.startsWith('LoginAttempts/'));
+  assert.ok(caminhos.length > 0);
+  assert.ok(caminhos.every((caminho) => caminho.startsWith('LoginResumo/')), caminhos.join(','));
+  assert.ok(db.dados.has('LoginResumo/zg/dias/2026-11-13'));
+  // Um id de loja igual a "todas" nao grava por cima do resumo de todas.
+  assert.deepEqual(resultado.lojas.at(-1), { establishmentId: 'todas', status: 'id-reservado' });
+  assert.equal(db.dados.get('LoginResumo/todas/dias/2026-11-13').tentativas, 1);
+});
+
+test('RP-174: a linha da rotina em Stats/rotinasNoturnas (lido por conta logada) nao leva contagem de login', () => {
+  const index = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+  const rotina = index.slice(index.indexOf('exports.summarizeLoginAttemptsNightly'), index.indexOf("console.log('[summarizeLoginAttemptsNightly] Passada concluida'"));
+  assert.ok(rotina.includes("dados: { dia: resultado.dia, situacao: daLoja?.status || 'ok' },"));
+  assert.ok(!/dados: {[^}]*(tentativas|falhas|entradas)/.test(rotina));
+  assert.ok(!rotina.includes("collection('Stats')"));
 });
 
 test('index.js: registrarTentativaDeLogin aceita chamada sem login e so le o corpo pela validacao; resumo as 3h30, sozinho na faixa', () => {

@@ -16,7 +16,6 @@ const { diaAnterior, diaDe, diaMenos, limitesDoDia } = require('./buscasResumo')
 
 const COLECAO = 'LoginAttempts';
 const COLECAO_DO_LIMITE = 'LoginAttemptsLimite';
-const RESUMO_DOCUMENT = 'loginResumo';
 const RESUMO_DE_TODAS = 'todas';
 const RESUMO_DE_TODAS_COLECAO = 'LoginResumo';
 const DIAS_SUBCOLECAO = 'dias';
@@ -431,7 +430,12 @@ async function limparAntigos({
 }
 
 // Dia anterior: resumo de todas as lojas (LoginResumo/todas) e de cada loja da lista da
-// rotina (estabelecimentos/{loja}/Stats/loginResumo); depois, a limpeza.
+// rotina (LoginResumo/{loja}); depois, a limpeza.
+//
+// So o Admin le o resumo (decisao do Thay, cola RP-174): por isso ele fica na raiz, em
+// LoginResumo, que a regra do Firestore nao abre para conta de app nem para lojista (cai no
+// bloqueio geral). Nao em estabelecimentos/{loja}/Stats, que qualquer conta logada le. O
+// Admin le pelo Core (Admin SDK).
 async function rodarResumoDeLogin({
   db,
   lojas = [],
@@ -452,10 +456,16 @@ async function rodarResumoDeLogin({
   const relatorio = [];
   const porLoja = registrosPorLoja({ registros, lojas });
   for (const { id } of lojas) {
+    // Id de loja igual ao documento de todas (nao acontece com id do Firestore): nao grava
+    // por cima.
+    if (id === RESUMO_DE_TODAS) {
+      relatorio.push({ establishmentId: id, status: 'id-reservado' });
+      continue;
+    }
     try {
       const resumo = resumirTentativas({ registros: porLoja.get(id) || [], dia });
       await escreverResumoDeLogin({
-        referencia: db.collection('estabelecimentos').doc(id).collection('Stats').doc(RESUMO_DOCUMENT),
+        referencia: db.collection(RESUMO_DE_TODAS_COLECAO).doc(id),
         resumo,
         atualizadoEm,
       });
@@ -497,7 +507,6 @@ module.exports = {
   PLATAFORMAS,
   RESUMO_DE_TODAS,
   RESUMO_DE_TODAS_COLECAO,
-  RESUMO_DOCUMENT,
   RegistroInvalido,
   cabemNoLimite,
   carregarRegistrosDoDia,
