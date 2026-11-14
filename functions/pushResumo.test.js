@@ -96,8 +96,43 @@ test('index.js: o envio a loja conta cada resultado, sem token e sem texto da me
   const index = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
   const envio = index.slice(index.indexOf('async function enviarAvisoParaLoja('), index.indexOf('exports.sendOrderNotification'));
   assert.ok(envio.includes('await contarNoDia(semToken());'));
-  assert.ok(envio.includes("juntar(contarEnvios(response.responses, chunk.map(() => 'web')));"));
   assert.ok(envio.includes('await contarNoDia({ contagens, codigos });'));
-  const contar = envio.slice(envio.indexOf('const contarNoDia'), envio.indexOf('if (tokenDocsSnap.empty)'));
-  ['token', 'title', 'body'].forEach((campo) => assert.ok(!new RegExp(`\\b${campo}\\b`).test(contar), campo));
+  const contarNoDia = envio.slice(envio.indexOf('const contarNoDia'), envio.indexOf('if (tokenDocsSnap.empty)'));
+  ['token', 'title', 'body'].forEach((campo) => assert.ok(!new RegExp(`\\b${campo}\\b`).test(contarNoDia), campo));
+});
+
+test('RP-173: a contagem vem depois do envio e da desativacao dos tokens do bloco, e erro nela so vai ao log', () => {
+  const index = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+  const envio = index.slice(index.indexOf('async function enviarAvisoParaLoja('), index.indexOf('exports.sendOrderNotification'));
+  const enviar = envio.indexOf('sendEachForMulticast(message)');
+  const desativar = envio.indexOf('ref.update({ active: false })');
+  const contar = envio.indexOf("juntar(() => contarEnvios(response.responses, chunk.map(() => 'web')));");
+  assert.ok(enviar > 0 && desativar > enviar && contar > desativar);
+  assert.ok(envio.includes("juntar(() => contarFalhaGeral(chunkError?.code || 'desconhecido', chunk.map(() => 'web')));"));
+  assert.match(envio, /const juntar = \(contar\) => \{\s+try \{/);
+  // A ultima gravacao vem depois do envio e nunca lanca (gravarResultadoDosEnvios tem try/catch).
+  assert.ok(envio.indexOf('await contarNoDia({ contagens, codigos });') > envio.lastIndexOf('sendEachForMulticast'));
+});
+
+test('RP-173: o contar que lanca nao chega ao envio (juntar pega e so registra)', () => {
+  const index = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+  const inicio = index.indexOf('  const juntar = (contar) => {');
+  const fim = index.indexOf('\n  };', inicio) + 4;
+  const contagens = [];
+  const codigos = {};
+  const origem = 'teste';
+  const erros = [];
+  const consoleOriginal = console.error;
+  console.error = (...args) => erros.push(args.join(' '));
+  try {
+    // eslint-disable-next-line no-new-func
+    const juntar = new Function('contagens', 'codigos', 'origem', `${index.slice(inicio, fim)}; return juntar;`)(contagens, codigos, origem);
+    assert.doesNotThrow(() => juntar(() => { throw new Error('quebrou'); }));
+    juntar(() => ({ contagens: [{ plataforma: 'web', resultado: 'aceito', vezes: 1 }], codigos: { x: 1 } }));
+  } finally {
+    console.error = consoleOriginal;
+  }
+  assert.equal(erros.length, 1);
+  assert.deepEqual(contagens, [{ plataforma: 'web', resultado: 'aceito', vezes: 1 }]);
+  assert.deepEqual(codigos, { x: 1 });
 });

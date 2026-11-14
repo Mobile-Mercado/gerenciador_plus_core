@@ -506,11 +506,18 @@ async function enviarAvisoParaLoja({
   const tokenChunks = chunkArray(tokenEntries, MAX_TOKENS_PER_REQUEST);
   const contagens = [];
   const codigos = {};
-  const juntar = (parcial) => {
-    contagens.push(...parcial.contagens);
-    Object.entries(parcial.codigos).forEach(([codigo, vezes]) => {
-      codigos[codigo] = (codigos[codigo] || 0) + vezes;
-    });
+  // A contagem nunca interrompe o envio nem a desativacao dos tokens: erro aqui so vai
+  // para o log (cola RP-173, item 1).
+  const juntar = (contar) => {
+    try {
+      const parcial = contar();
+      contagens.push(...parcial.contagens);
+      Object.entries(parcial.codigos).forEach(([codigo, vezes]) => {
+        codigos[codigo] = (codigos[codigo] || 0) + vezes;
+      });
+    } catch (error) {
+      console.error(`[${origem}] Contagem do envio nao feita`, error?.message || String(error));
+    }
   };
 
   for (const chunk of tokenChunks) {
@@ -521,7 +528,6 @@ async function enviarAvisoParaLoja({
       const response = await admin.messaging().sendEachForMulticast(message);
       totalSuccess += response.successCount;
       totalFailures += response.failureCount;
-      juntar(contarEnvios(response.responses, chunk.map(() => 'web')));
 
       response.responses.forEach((resp, idx) => {
         if (resp.success) return;
@@ -542,9 +548,11 @@ async function enviarAvisoParaLoja({
           );
         }
       });
+      // Depois do envio e da desativacao dos tokens do bloco.
+      juntar(() => contarEnvios(response.responses, chunk.map(() => 'web')));
     } catch (chunkError) {
       console.error(`[${origem}] Erro ao enviar chunk de tokens`, chunkError);
-      juntar(contarFalhaGeral(chunkError?.code || 'desconhecido', chunk.map(() => 'web')));
+      juntar(() => contarFalhaGeral(chunkError?.code || 'desconhecido', chunk.map(() => 'web')));
     }
   }
 
