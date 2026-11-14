@@ -73,8 +73,12 @@ test('politica: lojista nao grava status, offerColor nem o contrato; scheduling.
   await assert.rejects(mutar('loja-antiga', { userReference: 'Users/outro' }), (erro) => erro.code === 'campo_so_admin');
   await assert.rejects(mutar('loja-antiga', { userReference: null }), (erro) => erro.code === 'campo_so_admin');
   await assert.rejects(mutar('loja-antiga', { userReference: 'Users/outro' }, 'set', { merge: true }), (erro) => erro.code === 'campo_so_admin');
-  // Conjunto de icones da loja (cola B56-04): so pelo Core.
+  // Aparencias (cola B56-04): so pelo Core, inclusive o fundo de Ofertas do lojista.
   await assert.rejects(mutar('loja-antiga', { 'aparencia.conjuntoIcones': 'x' }), (erro) => erro.code === 'campo_so_admin');
+  await assert.rejects(mutar('loja-antiga', { 'ofertas.fundo.cor': '#000000' }), (erro) => erro.code === 'campo_so_admin');
+  await assert.rejects(mutar('loja-antiga', { ofertas: { lojistaPodeTrocarFundo: true } }, 'set', { merge: true }), (erro) => erro.code === 'campo_so_admin');
+  await assert.rejects(mutar('loja-antiga', { 'abertura.tipo': 'animacao' }), (erro) => erro.code === 'campo_so_admin');
+  await assert.rejects(mutar('loja-antiga', { primeiraTela: { cor: '#000000' } }), (erro) => erro.code === 'campo_so_admin');
   await assert.rejects(mutar('loja-antiga', { 'scheduling.enabled': true }), (erro) => erro.code === 'agendamento_nao_contratado');
   await mutar('loja-contratada', { 'scheduling.enabled': true });
   await mutar('loja-antiga', { paymentMethods: [], updatedAt: { __managerDataType: 'serverTimestamp' } });

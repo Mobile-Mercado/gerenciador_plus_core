@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { AppError } from '../../domain/errors/AppError.js';
-import { ICONE_DO_CONJUNTO_MAX_BYTES, ICONE_DO_CONJUNTO_TIPOS } from '../../domain/loja/aparencias.js';
+import {
+  ANIMACAO_MAX_BYTES, ANIMACAO_TIPOS, ICONE_DO_CONJUNTO_MAX_BYTES, ICONE_DO_CONJUNTO_TIPOS,
+  IMAGEM_DA_APARENCIA_MAX_BYTES, IMAGEM_DA_APARENCIA_TIPOS,
+} from '../../domain/loja/aparencias.js';
 
-// Conferencia do icone de conjunto (cola B56-04; na branch icones-conjuntos, so o icone).
+// Conferencia dos arquivos das Aparencias (cola B56-04): icone de conjunto, imagem e animacao.
 // Nada aqui grava no banco; so confere e, para o Storage, devolve a URL com token, no mesmo
 // formato dos icones da lista padrao (ManageCatalogoPadrao.trocarIcone).
 
@@ -63,6 +66,36 @@ export async function conferirIcone(conteudo, tipoArquivo) {
     );
   }
   throw recusa(`O ícone tem ${kb(conteudo.length)} KB. O limite é 20 KB: reduza o arquivo e envie de novo.`, 'conjunto_icone_tamanho');
+}
+
+// Imagem de Ofertas, Abertura ou Primeira tela: ate 40 KB, sem conversao.
+export async function conferirImagem(conteudo, tipoArquivo) {
+  const extensao = IMAGEM_DA_APARENCIA_TIPOS[tipoArquivo];
+  if (!extensao) throw recusa('Use uma imagem em SVG, PNG, WEBP ou JPG.', 'aparencia_imagem_tipo');
+  if (conteudo.length > IMAGEM_DA_APARENCIA_MAX_BYTES) {
+    throw recusa(`A imagem tem ${kb(conteudo.length)} KB. O limite é 40 KB: reduza o arquivo e envie de novo.`, 'aparencia_imagem_tamanho');
+  }
+  if (!(await medidas(conteudo))) throw recusa('Não deu para abrir esta imagem.', 'aparencia_imagem_ilegivel');
+  return { conteudo, extensao, contentType: tipoArquivo };
+}
+
+// Animacao: .json (Lottie) ate 120 KB, que precisa abrir como objeto JSON.
+export function conferirAnimacao(conteudo, tipoArquivo) {
+  const extensao = ANIMACAO_TIPOS[tipoArquivo];
+  if (!extensao) throw recusa('A animação precisa ser um arquivo .json.', 'aparencia_animacao_tipo');
+  if (conteudo.length > ANIMACAO_MAX_BYTES) {
+    throw recusa(`A animação tem ${kb(conteudo.length)} KB. O limite é 120 KB: reduza o arquivo e envie de novo.`, 'aparencia_animacao_tamanho');
+  }
+  let json;
+  try {
+    json = JSON.parse(conteudo.toString('utf8'));
+  } catch {
+    json = null;
+  }
+  if (!json || typeof json !== 'object' || Array.isArray(json)) {
+    throw recusa('Não deu para abrir esta animação: o .json não é válido.', 'aparencia_animacao_invalida');
+  }
+  return { conteudo, extensao, contentType: 'application/json' };
 }
 
 export async function gravarNoStorage(bucket, caminho, conteudo, contentType) {

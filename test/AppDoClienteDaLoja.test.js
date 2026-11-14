@@ -40,6 +40,8 @@ test('app do cliente: padroes do contrato (so Resumo do mes ligado; Home 2, 2, 2
     lojaId: 'loja-1',
     featureFlags: { retirada: false, substituicao: false, resumoDoMes: true, cuponsFiscais: true },
     aparenciaHome: { topo: 2, meio: 3, fim: 2, rodape: 2, preposicaoBusca: 'no' },
+    // Cola B56-08: modelo e ajustes finais de cada bloco, como gravados; sem gravacao, null.
+    ajustesDaHome: { topoModelo: null, topoAjustes: null, meioModelo: null, meioAjustes: null, fimModelo: null, fimAjustes: null },
   });
 });
 
@@ -48,10 +50,13 @@ test('app do cliente: cada chave gravada sozinha; promotions, banners e allBanne
   const resultado = await app.salvar('loja-1', { featureFlags: { retirada: true, resumoDoMes: false }, aparenciaHome: { fim: 4, rodape: 1, preposicaoBusca: 'na' } });
   const loja = banco.dados(LOJA);
   assert.deepEqual(loja.featureFlags, { promotions: true, banners: true, allBannersTypes: false, retirada: true, resumoDoMes: false });
-  assert.deepEqual(loja.aparenciaHome, { fim: 4, rodape: 1, preposicaoBusca: 'na' });
+  // Cola B56-08: trocar o Fim grava tambem o modelo (nenhum) e os ajustes finais do Fim 4 (tabela B1).
+  const fim4 = { larguraCards: 136, espacoCards: 8, tamanhoTitulo: 21 };
+  assert.deepEqual(loja.aparenciaHome, { fim: 4, fimModelo: null, fimAjustes: fim4, rodape: 1, preposicaoBusca: 'na' });
   assert.deepEqual(resultado.app.aparenciaHome, { topo: 2, meio: 2, fim: 4, rodape: 1, preposicaoBusca: 'na' });
   assert.deepEqual(resultado.antes, {
-    'featureFlags.retirada': false, 'featureFlags.resumoDoMes': true, 'aparenciaHome.fim': 2, 'aparenciaHome.rodape': 2, 'aparenciaHome.preposicaoBusca': 'no',
+    'featureFlags.retirada': false, 'featureFlags.resumoDoMes': true, 'aparenciaHome.fim': 2, 'aparenciaHome.fimModelo': null, 'aparenciaHome.fimAjustes': null,
+    'aparenciaHome.rodape': 2, 'aparenciaHome.preposicaoBusca': 'no',
   });
   await assert.rejects(app.salvar('loja-1', {}), (erro) => erro.code === 'app_do_cliente_sem_mudancas');
   await assert.rejects(app.salvar('nao-existe', { featureFlags: { retirada: true } }), (erro) => erro.code === 'loja_nao_encontrada');
@@ -207,7 +212,8 @@ test('rota do Admin /app-do-cliente: so booleanos nos interruptores e os blocos 
     assert.equal((await chamar('PATCH', caminho, null, { featureFlags: { retirada: 'true' } })).status, 400);
     assert.equal((await chamar('PATCH', caminho, null, { featureFlags: { promotions: false } })).status, 400, 'so as chaves do contrato');
     assert.equal((await chamar('PATCH', caminho, null, { featureFlags: { debito: true } })).status, 400, 'debito saiu das funcoes do app (RP-62, B.6)');
-    assert.equal((await chamar('PATCH', caminho, null, { aparenciaHome: { topo: 4 } })).status, 400);
+    // Cola B56-08: Topo vai de 1 a 6.
+    assert.equal((await chamar('PATCH', caminho, null, { aparenciaHome: { topo: 7 } })).status, 400);
     assert.equal((await chamar('PATCH', caminho, null, { aparenciaHome: { fim: 5 } })).status, 400);
     assert.equal((await chamar('PATCH', caminho, null, { aparenciaHome: { rodape: 3 } })).status, 400);
     assert.equal((await chamar('PATCH', caminho, null, { aparenciaHome: { preposicaoBusca: 'pelo' } })).status, 400);

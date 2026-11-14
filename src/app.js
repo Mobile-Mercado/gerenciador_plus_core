@@ -5,6 +5,7 @@ import { env } from './config/env.js';
 import { createAdminRoutes } from './http/routes/adminRoutes.js';
 import { createAiRoutes } from './http/routes/aiRoutes.js';
 import { createAppDoClienteDaLojaRoutes } from './http/routes/appDoClienteDaLojaRoutes.js';
+import { createAparenciaDaLojaRoutes } from './http/routes/aparenciaDaLojaRoutes.js';
 import { createBannersDaLojaRoutes } from './http/routes/bannersDaLojaRoutes.js';
 import { createEntregaDaLojaRoutes } from './http/routes/entregaDaLojaRoutes.js';
 import { createFormasDePagamentoRoutes } from './http/routes/formasDePagamentoRoutes.js';
@@ -55,6 +56,9 @@ export function createApp({
   entregaDaLoja = null,
   appDoClienteDaLoja = null,
   conjuntosDeIcones = null,
+  aparenciaDaLoja = null,
+  aparenciaDaHome = null,
+  bannersNoAdmin = null,
   formasDePagamento = null,
   entregadoresDaLoja = null,
   verificarAppCheck,
@@ -206,6 +210,14 @@ export function createApp({
     createFirebaseAuthMiddleware({ required: true }),
     createAppDoClienteDaLojaRoutes({ appDoClienteDaLoja, requirePermission, accountForRequest }),
   );
+  // Fundo de Ofertas pela propria loja, so quando o Admin libera (cola B56-04, item 3.4).
+  if (aparenciaDaLoja) {
+    app.use(
+      '/api/loja/aparencia',
+      createFirebaseAuthMiddleware({ required: true }),
+      createAparenciaDaLojaRoutes({ aparenciaDaLoja, requirePermission, accountForRequest }),
+    );
+  }
   // Logo e capa da loja pelo painel: foto como sai do celular, convertida pelo Core.
   app.use(
     '/api/loja/imagens',
@@ -233,6 +245,9 @@ export function createApp({
       formasDePagamento,
       instalacoesDosApps,
       conjuntosDeIcones,
+      aparenciaDaLoja,
+      aparenciaDaHome,
+      bannersNoAdmin,
     }),
   );
 
