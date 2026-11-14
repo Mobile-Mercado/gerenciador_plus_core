@@ -95,8 +95,8 @@ test('gravacao: um documento por dia em PushResumo, com merge; falha no banco na
 test('index.js: o envio a loja conta cada resultado, sem token e sem texto da mensagem', () => {
   const index = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
   const envio = index.slice(index.indexOf('async function enviarAvisoParaLoja('), index.indexOf('exports.sendOrderNotification'));
-  assert.ok(envio.includes('await contarNoDia(semToken());'));
-  assert.ok(envio.includes('await contarNoDia({ contagens, codigos });'));
+  assert.ok(envio.includes('contarNoDia(semToken());'));
+  assert.ok(envio.includes('contarNoDia({ contagens, codigos });'));
   const contarNoDia = envio.slice(envio.indexOf('const contarNoDia'), envio.indexOf('if (tokenDocsSnap.empty)'));
   ['token', 'title', 'body'].forEach((campo) => assert.ok(!new RegExp(`\\b${campo}\\b`).test(contarNoDia), campo));
 });
@@ -110,8 +110,8 @@ test('RP-173: a contagem vem depois do envio e da desativacao dos tokens do bloc
   assert.ok(enviar > 0 && desativar > enviar && contar > desativar);
   assert.ok(envio.includes("juntar(() => contarFalhaGeral(chunkError?.code || 'desconhecido', chunk.map(() => 'web')));"));
   assert.match(envio, /const juntar = \(contar\) => \{\s+try \{/);
-  // A ultima gravacao vem depois do envio e nunca lanca (gravarResultadoDosEnvios tem try/catch).
-  assert.ok(envio.indexOf('await contarNoDia({ contagens, codigos });') > envio.lastIndexOf('sendEachForMulticast'));
+  // A ultima contagem vem depois do envio e nunca lanca (gravarResultadoDosEnvios tem try/catch).
+  assert.ok(envio.indexOf('contarNoDia({ contagens, codigos });') > envio.lastIndexOf('sendEachForMulticast'));
 });
 
 test('RP-173: o contar que lanca nao chega ao envio (juntar pega e so registra)', () => {
@@ -135,4 +135,38 @@ test('RP-173: o contar que lanca nao chega ao envio (juntar pega e so registra)'
   assert.equal(erros.length, 1);
   assert.deepEqual(contagens, [{ plataforma: 'web', resultado: 'aceito', vezes: 1 }]);
   assert.deepEqual(codigos, { x: 1 });
+});
+
+test('RP-173: o envio nao espera a gravacao da contagem; os 4 gatilhos esperam as pendentes so no fim', () => {
+  const index = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+  const envio = index.slice(index.indexOf('async function enviarAvisoParaLoja('), index.indexOf('exports.sendOrderNotification'));
+  assert.ok(!/await contarNoDia/.test(envio), 'enviarAvisoParaLoja nao espera a contagem');
+  assert.ok(envio.includes('const contarNoDia = (contagem) => contarSemEsperar(gravarResultadoDosEnvios({'));
+  ['sendOrderNotification', 'avisarPedidoPagoPeloApp', 'avisarMensagemNova', 'avisarPedidoCancelado'].forEach((nome, i, todos) => {
+    const inicio = index.indexOf(`exports.${nome} = `);
+    const proximo = todos[i + 1] ? index.indexOf(`exports.${todos[i + 1]} = `) : index.indexOf('async function loadStoreOrders');
+    const gatilho = index.slice(inicio, proximo);
+    assert.match(gatilho, /\} finally \{\s+await esperarContagens\(\);\s+\}/, nome);
+  });
+});
+
+test('RP-173: contarSemEsperar guarda a promessa ate terminar; esperarContagens espera e nunca lanca', async () => {
+  const index = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+  const inicio = index.indexOf('const contagensPendentes = new Set();');
+  const fim = index.indexOf('// Envio de Web Push para todos os navegadores ativos da loja');
+  // eslint-disable-next-line no-new-func
+  const { contarSemEsperar, esperarContagens, contagensPendentes } = new Function(
+    `${index.slice(inicio, fim)}; return { contarSemEsperar, esperarContagens, contagensPendentes };`,
+  )();
+  let terminar;
+  let gravou = false;
+  contarSemEsperar(new Promise((resolve) => { terminar = resolve; }).then(() => { gravou = true; }));
+  contarSemEsperar(Promise.reject(new Error('falhou')));
+  assert.equal(contagensPendentes.size, 2);
+  const espera = esperarContagens();
+  terminar();
+  await espera;
+  assert.equal(gravou, true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(contagensPendentes.size, 0);
 });

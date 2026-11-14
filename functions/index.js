@@ -431,6 +431,22 @@ const chunkArray = (items, size) => {
   return chunks;
 };
 
+// Contagens dos envios em andamento (PushResumo). O envio nao espera por elas: o proximo
+// aviso do mesmo gatilho (outra loja do chat, por exemplo) sai sem esperar a gravacao da
+// contagem do anterior. Cada gatilho espera as pendentes no fim, depois de todos os envios,
+// para a instancia nao parar antes de gravar (cola RP-173, item 1).
+const contagensPendentes = new Set();
+
+function contarSemEsperar(promessa) {
+  contagensPendentes.add(promessa);
+  promessa.then(() => undefined, () => undefined).then(() => contagensPendentes.delete(promessa));
+}
+
+// Nunca lanca.
+async function esperarContagens() {
+  await Promise.allSettled([...contagensPendentes]);
+}
+
 // Envio de Web Push para todos os navegadores ativos da loja (FcmTokens com
 // clientId == loja e active == true), em blocos de MAX_TOKENS_PER_REQUEST. Token que o
 // FCM recusa como invalido e desativado. Vai so como dados: o Service Worker do painel
@@ -453,18 +469,18 @@ async function enviarAvisoParaLoja({
 
   // Resultado de cada envio em PushResumo/{dia} (cola RP-172, item 5): so contagens, sem
   // token e sem texto. Navegador do painel: plataforma "web".
-  const contarNoDia = (contagem) => gravarResultadoDosEnvios({
+  const contarNoDia = (contagem) => contarSemEsperar(gravarResultadoDosEnvios({
     db,
     FieldValue: admin.firestore.FieldValue,
     loja: companyId,
     origem,
     audiencia: 'lojista',
     ...contagem,
-  });
+  }));
 
   if (tokenDocsSnap.empty) {
     console.log(`[${origem}] Nenhum token ativo para ${companyId}`);
-    await contarNoDia(semToken());
+    contarNoDia(semToken());
     return null;
   }
 
@@ -566,7 +582,7 @@ async function enviarAvisoParaLoja({
   console.log(
     `[${origem}] Envio concluído. Sucessos: ${totalSuccess}, Falhas: ${totalFailures}`
   );
-  await contarNoDia({ contagens, codigos });
+  contarNoDia({ contagens, codigos });
 
   return { totalSuccess, totalFailures };
 }
@@ -605,15 +621,19 @@ exports.sendOrderNotification = onDocumentCreated(
 
     console.log(`[sendOrderNotification] Processando pedido ${orderId} da empresa ${companyId}`);
 
-    return avisarPedidoNovoUmaVez({
-      db,
-      FieldValue: admin.firestore.FieldValue,
-      order,
-      pedidoId: orderId,
-      companyId,
-      enviar: enviarAvisoParaLoja,
-      origem: 'sendOrderNotification',
-    });
+    try {
+      return await avisarPedidoNovoUmaVez({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        order,
+        pedidoId: orderId,
+        companyId,
+        enviar: enviarAvisoParaLoja,
+        origem: 'sendOrderNotification',
+      });
+    } finally {
+      await esperarContagens();
+    }
   }
 );
 
@@ -645,6 +665,8 @@ exports.avisarPedidoPagoPeloApp = onDocumentUpdated(
         orderId: event.params.orderId,
         error,
       });
+    } finally {
+      await esperarContagens();
     }
   },
 );
@@ -673,6 +695,8 @@ exports.avisarMensagemNova = onDocumentCreated(
         messageId: event.params.messageId,
         error,
       });
+    } finally {
+      await esperarContagens();
     }
   },
 );
@@ -694,6 +718,8 @@ exports.avisarPedidoCancelado = onDocumentUpdated(
         orderId: event.params.orderId,
         error,
       });
+    } finally {
+      await esperarContagens();
     }
   },
 );
