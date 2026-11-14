@@ -81,6 +81,7 @@ const {
   avisoDeMensagem,
   avisoDePedidoCancelado,
 } = require('./avisos');
+const { avisarPedidoDeCupomUmaVez } = require('./avisoDeCupom');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -716,6 +717,39 @@ exports.avisarPedidoCancelado = onDocumentUpdated(
     } catch (error) {
       console.error('[avisarPedidoCancelado] Falha ao avisar cancelamento', {
         orderId: event.params.orderId,
+        error,
+      });
+    } finally {
+      await esperarContagens();
+    }
+  },
+);
+
+// Cliente tocou no sino da tela de cupons do app (CouponRequests): no maximo um aviso por cliente
+// e loja por dia, ao App Gerenciador do dono e ao navegador do gerenciador web (/cupons). Regras
+// e textos em avisoDeCupom.js (cola RP-179, item 7).
+exports.avisarPedidoDeCupom = onDocumentCreated(
+  'CouponRequests/{requestId}',
+  async (event) => {
+    try {
+      const pedido = event.data?.data();
+      if (!pedido) return;
+      await avisarPedidoDeCupomUmaVez({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        messaging: admin.messaging(),
+        contar: (contagem) => contarSemEsperar(gravarResultadoDosEnvios({
+          db,
+          FieldValue: admin.firestore.FieldValue,
+          ...contagem,
+        })),
+        enviarAvisoParaLoja,
+        pedido,
+        pedidoId: event.params.requestId,
+      });
+    } catch (error) {
+      console.error('[avisarPedidoDeCupom] Falha ao avisar pedido de cupom', {
+        requestId: event.params.requestId,
         error,
       });
     } finally {
