@@ -5,6 +5,7 @@ const {
   onDocumentWritten,
 } = require('firebase-functions/v2/firestore');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { HttpsError, onCall } = require('firebase-functions/v2/https');
 const { defineSecret, defineString } = require('firebase-functions/params');
 const { getStorage } = require('firebase-admin/storage');
 const { applicationDefault } = require('firebase-admin/app');
@@ -46,6 +47,19 @@ const {
   segmentoDoCliente,
 } = require('./resumoClientes');
 const { atualizarResumoDoPedido } = require('./resumoPedidos');
+const {
+  RegistroInvalido,
+  gravarTentativas,
+  listasFechadas,
+  rodarResumoDeLogin,
+  validarChamada,
+} = require('./tentativasDeLogin');
+const {
+  contarEnvios,
+  contarFalhaGeral,
+  gravarResultadoDosEnvios,
+  semToken,
+} = require('./pushResumo');
 const { atualizarResumoDeVendas } = require('./resumoVendas');
 const { atualizarGruposDoPedido } = require('./resumoDoMes');
 const { atualizarSemGiro } = require('./semGiro');
@@ -67,6 +81,7 @@ const {
   avisoDeMensagem,
   avisoDePedidoCancelado,
 } = require('./avisos');
+const { avisarPedidoDeCupomUmaVez } = require('./avisoDeCupom');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -417,6 +432,22 @@ const chunkArray = (items, size) => {
   return chunks;
 };
 
+// Contagens dos envios em andamento (PushResumo). O envio nao espera por elas: o proximo
+// aviso do mesmo gatilho (outra loja do chat, por exemplo) sai sem esperar a gravacao da
+// contagem do anterior. Cada gatilho espera as pendentes no fim, depois de todos os envios,
+// para a instancia nao parar antes de gravar (cola RP-173, item 1).
+const contagensPendentes = new Set();
+
+function contarSemEsperar(promessa) {
+  contagensPendentes.add(promessa);
+  promessa.then(() => undefined, () => undefined).then(() => contagensPendentes.delete(promessa));
+}
+
+// Nunca lanca.
+async function esperarContagens() {
+  await Promise.allSettled([...contagensPendentes]);
+}
+
 // Envio de Web Push para todos os navegadores ativos da loja (FcmTokens com
 // clientId == loja e active == true), em blocos de MAX_TOKENS_PER_REQUEST. Token que o
 // FCM recusa como invalido e desativado. Vai so como dados: o Service Worker do painel
@@ -437,8 +468,20 @@ async function enviarAvisoParaLoja({
     .where('active', '==', true)
     .get();
 
+  // Resultado de cada envio em PushResumo/{dia} (cola RP-172, item 5): so contagens, sem
+  // token e sem texto. Navegador do painel: plataforma "web".
+  const contarNoDia = (contagem) => contarSemEsperar(gravarResultadoDosEnvios({
+    db,
+    FieldValue: admin.firestore.FieldValue,
+    loja: companyId,
+    origem,
+    audiencia: 'lojista',
+    ...contagem,
+  }));
+
   if (tokenDocsSnap.empty) {
     console.log(`[${origem}] Nenhum token ativo para ${companyId}`);
+    contarNoDia(semToken());
     return null;
   }
 
@@ -478,6 +521,21 @@ async function enviarAvisoParaLoja({
   const cleanupPromises = [];
 
   const tokenChunks = chunkArray(tokenEntries, MAX_TOKENS_PER_REQUEST);
+  const contagens = [];
+  const codigos = {};
+  // A contagem nunca interrompe o envio nem a desativacao dos tokens: erro aqui so vai
+  // para o log (cola RP-173, item 1).
+  const juntar = (contar) => {
+    try {
+      const parcial = contar();
+      contagens.push(...parcial.contagens);
+      Object.entries(parcial.codigos).forEach(([codigo, vezes]) => {
+        codigos[codigo] = (codigos[codigo] || 0) + vezes;
+      });
+    } catch (error) {
+      console.error(`[${origem}] Contagem do envio nao feita`, error?.message || String(error));
+    }
+  };
 
   for (const chunk of tokenChunks) {
     const chunkTokens = chunk.map((entry) => entry.token);
@@ -507,8 +565,11 @@ async function enviarAvisoParaLoja({
           );
         }
       });
+      // Depois do envio e da desativacao dos tokens do bloco.
+      juntar(() => contarEnvios(response.responses, chunk.map(() => 'web')));
     } catch (chunkError) {
       console.error(`[${origem}] Erro ao enviar chunk de tokens`, chunkError);
+      juntar(() => contarFalhaGeral(chunkError?.code || 'desconhecido', chunk.map(() => 'web')));
     }
   }
 
@@ -522,6 +583,7 @@ async function enviarAvisoParaLoja({
   console.log(
     `[${origem}] Envio concluído. Sucessos: ${totalSuccess}, Falhas: ${totalFailures}`
   );
+  contarNoDia({ contagens, codigos });
 
   return { totalSuccess, totalFailures };
 }
@@ -560,15 +622,19 @@ exports.sendOrderNotification = onDocumentCreated(
 
     console.log(`[sendOrderNotification] Processando pedido ${orderId} da empresa ${companyId}`);
 
-    return avisarPedidoNovoUmaVez({
-      db,
-      FieldValue: admin.firestore.FieldValue,
-      order,
-      pedidoId: orderId,
-      companyId,
-      enviar: enviarAvisoParaLoja,
-      origem: 'sendOrderNotification',
-    });
+    try {
+      return await avisarPedidoNovoUmaVez({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        order,
+        pedidoId: orderId,
+        companyId,
+        enviar: enviarAvisoParaLoja,
+        origem: 'sendOrderNotification',
+      });
+    } finally {
+      await esperarContagens();
+    }
   }
 );
 
@@ -600,6 +666,8 @@ exports.avisarPedidoPagoPeloApp = onDocumentUpdated(
         orderId: event.params.orderId,
         error,
       });
+    } finally {
+      await esperarContagens();
     }
   },
 );
@@ -628,6 +696,8 @@ exports.avisarMensagemNova = onDocumentCreated(
         messageId: event.params.messageId,
         error,
       });
+    } finally {
+      await esperarContagens();
     }
   },
 );
@@ -649,6 +719,41 @@ exports.avisarPedidoCancelado = onDocumentUpdated(
         orderId: event.params.orderId,
         error,
       });
+    } finally {
+      await esperarContagens();
+    }
+  },
+);
+
+// Cliente tocou no sino da tela de cupons do app (CouponRequests): no maximo um aviso por cliente
+// e loja por dia, ao App Gerenciador do dono e ao navegador do gerenciador web (/cupons). Regras
+// e textos em avisoDeCupom.js (cola RP-179, item 7).
+exports.avisarPedidoDeCupom = onDocumentCreated(
+  'CouponRequests/{requestId}',
+  async (event) => {
+    try {
+      const pedido = event.data?.data();
+      if (!pedido) return;
+      await avisarPedidoDeCupomUmaVez({
+        db,
+        FieldValue: admin.firestore.FieldValue,
+        messaging: admin.messaging(),
+        contar: (contagem) => contarSemEsperar(gravarResultadoDosEnvios({
+          db,
+          FieldValue: admin.firestore.FieldValue,
+          ...contagem,
+        })),
+        enviarAvisoParaLoja,
+        pedido,
+        pedidoId: event.params.requestId,
+      });
+    } catch (error) {
+      console.error('[avisarPedidoDeCupom] Falha ao avisar pedido de cupom', {
+        requestId: event.params.requestId,
+        error,
+      });
+    } finally {
+      await esperarContagens();
     }
   },
 );
@@ -1003,6 +1108,117 @@ exports.syncLoginProvidersNightly = onSchedule(
 
     const result = { ...resumo, segundos: Math.round((Date.now() - startedAt) / 1000) };
     console.log('[syncLoginProvidersNightly] Passada concluida', result);
+    return result;
+  },
+);
+
+// Tentativas de login do app do cliente (cola RP-172, itens 1 e 2). A falha acontece antes
+// do login, entao o app nao grava direto no banco: manda para esta function, que aceita
+// chamada sem login, confere cada campo pela lista fechada (tentativasDeLogin.js), limita
+// o volume por aparelho e grava em LoginAttempts. O uid so vai no registro "entrou", e vem
+// do token da chamada. Nada do corpo vai para o log.
+const LISTAS_DO_LOGIN_VALIDADE_MS = 30 * 60 * 1000;
+let listasDoLogin = { lidasEm: 0, valor: null };
+
+async function listasFechadasDoLogin() {
+  if (listasDoLogin.valor && Date.now() - listasDoLogin.lidasEm < LISTAS_DO_LOGIN_VALIDADE_MS) {
+    return listasDoLogin.valor;
+  }
+  const snapshot = await db.collection('estabelecimentos').select('whitelabelId').get();
+  const valor = listasFechadas(snapshot.docs.map((documento) => ({
+    id: documento.id,
+    whitelabelId: documento.get('whitelabelId'),
+  })));
+  listasDoLogin = { lidasEm: Date.now(), valor };
+  return valor;
+}
+
+exports.registrarTentativaDeLogin = onCall(
+  {
+    region: 'us-central1',
+    memory: '256MiB',
+    timeoutSeconds: 30,
+    maxInstances: 10,
+  },
+  async (request) => {
+    const agora = new Date();
+    let chamada;
+    try {
+      chamada = validarChamada(request.data, {
+        ...(await listasFechadasDoLogin()),
+        uidDoLogin: request.auth?.uid || null,
+        agora,
+      });
+    } catch (error) {
+      if (error instanceof RegistroInvalido) {
+        throw new HttpsError('invalid-argument', `Campo recusado: ${error.message}`);
+      }
+      throw error;
+    }
+    const gravacao = await gravarTentativas({
+      db,
+      validos: chamada.validos,
+      aparelho: chamada.aparelho,
+      agora,
+      recebidoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    if (chamada.invalidos || gravacao.descartadosPeloLimite) {
+      console.warn('[registrarTentativaDeLogin] Registros fora', {
+        invalidos: chamada.invalidos,
+        motivos: chamada.motivos,
+        descartadosPeloLimite: gravacao.descartadosPeloLimite,
+      });
+    }
+    return {
+      gravados: gravacao.gravados,
+      invalidos: chamada.invalidos,
+      descartadosPeloLimite: gravacao.descartadosPeloLimite,
+    };
+  },
+);
+
+// Resumo das tentativas de login do dia anterior (cola RP-172, item 3), no molde do resumo
+// de buscas: LoginResumo/todas e LoginResumo/{loja}, com o topo e o documento de cada dia,
+// sem prazo (cola RP-176). So o Admin le (cola RP-174): fica fora de estabelecimentos/{loja}/
+// Stats, que a regra abre para qualquer conta logada. Depois, apaga so as janelas de limite
+// por aparelho que ja passaram; LoginAttempts nao e apagado (cola RP-175). As 3h30, sozinha na
+// faixa.
+exports.summarizeLoginAttemptsNightly = onSchedule(
+  {
+    schedule: '30 3 * * *',
+    timeZone: 'America/Sao_Paulo',
+    region: 'us-central1',
+    memory: '512MiB',
+    timeoutSeconds: 1800,
+    retryCount: 0,
+  },
+  async () => {
+    const startedAt = Date.now();
+    const configSnapshot = await db.doc(IMAGE_CHECK_CONFIG_PATH).get();
+    const configuredIds = configuredEstablishmentIds(configSnapshot.data());
+    const storeSnapshots = configuredIds.length
+      ? await db.getAll(...configuredIds.map((id) => db.collection('estabelecimentos').doc(id)))
+      : [];
+    const lojas = storeSnapshots
+      .filter((snapshot) => snapshot.exists)
+      .map((snapshot) => ({ id: snapshot.id, whitelabelId: snapshot.get('whitelabelId') || null }));
+
+    const resultado = await rodarResumoDeLogin({
+      db,
+      lojas,
+      atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    for (const snapshot of storeSnapshots.filter((store) => store.exists)) {
+      const daLoja = resultado.lojas.find((item) => item.establishmentId === snapshot.id);
+      // So o dia e se a loja falhou: Stats/rotinasNoturnas e lido por qualquer conta logada,
+      // e as contagens de login sao so do Admin (cola RP-174).
+      await registrarNoite(snapshot.ref, 'summarizeLoginAttemptsNightly', {
+        dados: { dia: resultado.dia, situacao: daLoja?.status || 'ok' },
+      });
+    }
+
+    const result = { ...resultado, segundos: Math.round((Date.now() - startedAt) / 1000) };
+    console.log('[summarizeLoginAttemptsNightly] Passada concluida', result);
     return result;
   },
 );
