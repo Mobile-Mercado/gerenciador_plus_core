@@ -5,6 +5,7 @@ import {
   ANIMACAO_MAX_BYTES, ANIMACAO_TIPOS, ICONE_DO_CONJUNTO_MAX_BYTES, ICONE_DO_CONJUNTO_TIPOS,
   IMAGEM_DA_APARENCIA_MAX_BYTES, IMAGEM_DA_APARENCIA_TIPOS,
 } from '../../domain/loja/aparencias.js';
+import { eLottie } from '../../domain/loja/primeiroAcesso.js';
 
 // Conferencia dos arquivos das Aparencias (cola B56-04): icone de conjunto, imagem e animacao.
 // Nada aqui grava no banco; so confere e, para o Storage, devolve a URL com token, no mesmo
@@ -68,12 +69,16 @@ export async function conferirIcone(conteudo, tipoArquivo) {
   throw recusa(`O ícone tem ${kb(conteudo.length)} KB. O limite é 20 KB: reduza o arquivo e envie de novo.`, 'conjunto_icone_tamanho');
 }
 
-// Imagem de Ofertas, Abertura ou Primeira tela: ate 40 KB, sem conversao.
-export async function conferirImagem(conteudo, tipoArquivo) {
-  const extensao = IMAGEM_DA_APARENCIA_TIPOS[tipoArquivo];
-  if (!extensao) throw recusa('Use uma imagem em SVG, PNG, WEBP ou JPG.', 'aparencia_imagem_tipo');
-  if (conteudo.length > IMAGEM_DA_APARENCIA_MAX_BYTES) {
-    throw recusa(`A imagem tem ${kb(conteudo.length)} KB. O limite é 40 KB: reduza o arquivo e envie de novo.`, 'aparencia_imagem_tamanho');
+// Imagem de Ofertas, Abertura ou Primeira tela: ate 40 KB, sem conversao. Cola B56-24 (A2): os
+// quadros da jornada Primeiro acesso passam os seus tipos (PNG, WEBP, SVG) e o seu limite.
+export async function conferirImagem(conteudo, tipoArquivo, { tipos = IMAGEM_DA_APARENCIA_TIPOS, maxBytes = IMAGEM_DA_APARENCIA_MAX_BYTES } = {}) {
+  const extensao = tipos[tipoArquivo];
+  if (!extensao) {
+    const nomes = Object.values(tipos).map((valor) => valor.toUpperCase());
+    throw recusa(`Use uma imagem em ${nomes.slice(0, -1).join(', ')} ou ${nomes.at(-1)}.`, 'aparencia_imagem_tipo');
+  }
+  if (conteudo.length > maxBytes) {
+    throw recusa(`A imagem tem ${kb(conteudo.length)} KB. O limite é ${kb(maxBytes)} KB: reduza o arquivo e envie de novo.`, 'aparencia_imagem_tamanho');
   }
   if (!(await medidas(conteudo))) throw recusa('Não deu para abrir esta imagem.', 'aparencia_imagem_ilegivel');
   return { conteudo, extensao, contentType: tipoArquivo };
@@ -94,6 +99,10 @@ export function conferirAnimacao(conteudo, tipoArquivo) {
   }
   if (!json || typeof json !== 'object' || Array.isArray(json)) {
     throw recusa('Não deu para abrir esta animação: o .json não é válido.', 'aparencia_animacao_invalida');
+  }
+  // Cola B56-24 (A2): o .json precisa ser de Lottie (v, fr, ip, op, w, h e layers).
+  if (!eLottie(json)) {
+    throw recusa('Este .json não é uma animação Lottie. Exporte a animação em Lottie (.json) e envie de novo.', 'aparencia_animacao_nao_lottie');
   }
   return { conteudo, extensao, contentType: 'application/json' };
 }

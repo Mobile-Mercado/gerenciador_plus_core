@@ -3,7 +3,13 @@ import { AppError } from '../../domain/errors/AppError.js';
 import {
   ARQUIVOS_DA_APARENCIA, ARQUIVOS_DO_FUNDO, aberturaDaLoja, conjuntoDaLoja, ofertasDaLoja, primeiraTelaDaLoja,
 } from '../../domain/loja/aparencias.js';
+import { blocoDaLoja } from '../../domain/loja/primeiroAcesso.js';
 import { conferirAnimacao, conferirImagem, decodificar, gravarNoStorage } from './arquivosDaAparencia.js';
+
+// Cola B56-24 (A2): animacao padrao da Abertura de todas as lojas. Leitura aberta na regra (o app
+// le antes do login); gravacao so pelo Core.
+export const DOCUMENTO_DA_ABERTURA_PADRAO = 'aparenciaPadrao/abertura';
+const LOTE = 400;
 
 // Ofertas, Abertura e Primeira tela da loja (cola B56-04, parte 3). Mesmo padrao do
 // AppDoClienteDaLoja: cada chave gravada sozinha (ofertas.fundo.tipo, abertura.cor...), com o
@@ -40,12 +46,68 @@ export class AparenciaDaLoja {
   }
 
   async ler(lojaId) {
-    const loja = await this.lojaRef(lojaId).get();
+    const [loja, padrao] = await Promise.all([this.lojaRef(lojaId).get(), this.aberturaPadrao()]);
     if (!loja.exists) throw recusa('Loja não encontrada.', 'loja_nao_encontrada', 404);
-    return paraATela(loja.id, loja.data() || {});
+    return { ...paraATela(loja.id, loja.data() || {}), aberturaPadrao: padrao };
   }
 
-  // `entrada`: { ofertas?, abertura?, primeiraTela? }, ja conferida pela rota. `soFundo`: a
+  async aberturaPadrao() {
+    const documento = await this.firestore.doc(DOCUMENTO_DA_ABERTURA_PADRAO).get();
+    const data = documento.exists ? documento.data() || {} : {};
+    return {
+      nome: typeof data.nome === 'string' && data.nome ? data.nome : null,
+      animacaoUrl: typeof data.animacaoUrl === 'string' && data.animacaoUrl ? data.animacaoUrl : null,
+    };
+  }
+
+  // Lojas sem animacao propria (usam a padrao) e com animacao propria (abertura.animacaoUrl).
+  async lojasDaAbertura() {
+    const snapshot = await this.firestore.collection('estabelecimentos').select('abertura').get();
+    const semPropria = [];
+    const comPropria = [];
+    snapshot.forEach((loja) => {
+      (blocoDaLoja('abertura', loja.data() || {}).animacaoUrl ? comPropria : semPropria).push(loja);
+    });
+    return { semPropria, comPropria };
+  }
+
+  // Para a janela de confirmacao do Admin: "vale para N lojas" e "as M lojas com animacao propria".
+  async padraoDaAbertura() {
+    const [padrao, { semPropria, comPropria }] = await Promise.all([this.aberturaPadrao(), this.lojasDaAbertura()]);
+    return { ...padrao, lojas: semPropria.length, comAnimacaoPropria: comPropria.length };
+  }
+
+  // Troca a animacao padrao de todas as lojas. Com incluirAnimacaoPropria (a caixa da janela),
+  // apaga abertura.animacaoUrl das lojas com animacao propria, que passam a usar a padrao.
+  async trocarAnimacaoPadrao({ conteudoBase64, tipoArquivo, nome } = {}, ator = {}, { incluirAnimacaoPropria = false } = {}) {
+    const arquivo = conferirAnimacao(decodificar(conteudoBase64), tipoArquivo);
+    const antes = await this.aberturaPadrao();
+    const caminho = `appMobile/aparenciaPadrao/abertura/animacao_${this.agora()}.json`;
+    const url = await gravarNoStorage(this.bucket, caminho, arquivo.conteudo, arquivo.contentType);
+    const nomeFinal = String(nome || '').trim().slice(0, 120) || 'animacao.json';
+    const { semPropria, comPropria } = await this.lojasDaAbertura();
+    await this.firestore.doc(DOCUMENTO_DA_ABERTURA_PADRAO).set({
+      nome: nomeFinal, animacaoUrl: url, atualizadoEm: this.serverTimestamp(), atualizadoPor: ator.uid || null,
+    }, { merge: true });
+    const limpas = incluirAnimacaoPropria ? comPropria : [];
+    for (let inicio = 0; inicio < limpas.length; inicio += LOTE) {
+      const lote = this.firestore.batch();
+      limpas.slice(inicio, inicio + LOTE).forEach((loja) => {
+        lote.update(loja.ref, { 'abertura.animacaoUrl': this.apagarCampo(), updatedAt: this.serverTimestamp() });
+      });
+      await lote.commit();
+    }
+    return {
+      nome: nomeFinal,
+      animacaoUrl: url,
+      lojasAlteradas: semPropria.length + limpas.length,
+      lojasComAnimacaoPropria: comPropria.length,
+      lojasLimpas: limpas.map((loja) => loja.id),
+      antes,
+    };
+  }
+
+  // `entrada`: { ofertas?, abertura?, primeiraTela?, e os blocos da jornada (B56-24) }, ja conferida pela rota. `soFundo`: a
   // gravacao do lojista, que so passa com ofertas.lojistaPodeTrocarFundo ligado.
   async salvar(lojaId, entrada = {}, { soFundo = false } = {}) {
     const ref = this.lojaRef(lojaId);
@@ -84,7 +146,7 @@ export class AparenciaDaLoja {
     const conteudo = decodificar(conteudoBase64);
     const arquivo = destino.tipo === 'animacao'
       ? conferirAnimacao(conteudo, tipoArquivo)
-      : await conferirImagem(conteudo, tipoArquivo);
+      : await conferirImagem(conteudo, tipoArquivo, { tipos: destino.tipos, maxBytes: destino.maxBytes });
     const caminho = `appMobile/companyImages/${loja.id}/aparencia/${alvo}_${this.agora()}.${arquivo.extensao}`;
     const url = await gravarNoStorage(this.bucket, caminho, arquivo.conteudo, arquivo.contentType);
     await ref.update({ [destino.campo]: url, updatedAt: this.serverTimestamp() });
@@ -110,5 +172,10 @@ function paraATela(lojaId, data) {
     ofertas: ofertasDaLoja(data),
     abertura: aberturaDaLoja(data),
     primeiraTela: primeiraTelaDaLoja(data),
+    boasVindas: blocoDaLoja('boasVindas', data),
+    login: blocoDaLoja('login', data),
+    codigoSms: blocoDaLoja('codigoSms', data),
+    folhaNome: blocoDaLoja('folhaNome', data),
+    folhaEndereco: blocoDaLoja('folhaEndereco', data),
   };
 }

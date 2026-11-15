@@ -1,3 +1,5 @@
+import { blocoDaLoja } from './primeiroAcesso.js';
+
 // Aparencias da loja (cola B56-04): conjuntos de icones, Ofertas e Abertura. Limites num lugar
 // so: as rotas validam com eles e os casos de uso usam os padroes.
 
@@ -29,7 +31,17 @@ export const TITULO_MAX = 60;
 export const TEXTO_MAX = 200;
 export const COR = /^#[0-9A-Fa-f]{6}$/;
 
+// Imagens da jornada Primeiro acesso (cola B56-24, A2): PNG, WEBP ou SVG, com o limite de cada
+// quadro do mockup (aparencias-login.html).
+export const IMAGEM_DA_JORNADA_TIPOS = Object.freeze({
+  'image/svg+xml': 'svg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+});
+const daJornada = (campo, maxKb) => Object.freeze({ campo, tipo: 'imagem', tipos: IMAGEM_DA_JORNADA_TIPOS, maxBytes: maxKb * 1024 });
+
 // Onde cada arquivo enviado e gravado. abertura.imagem reaproveita o splashImageUrl de hoje.
+// Sem tipos/maxBytes: imagem ate 40 KB (IMAGEM_DA_APARENCIA_*) ou animacao ate 120 KB.
 export const ARQUIVOS_DA_APARENCIA = Object.freeze({
   'ofertas-fundo-imagem': Object.freeze({ campo: 'ofertas.fundo.imagemUrl', tipo: 'imagem' }),
   'ofertas-fundo-animacao': Object.freeze({ campo: 'ofertas.fundo.animacaoUrl', tipo: 'animacao' }),
@@ -37,6 +49,12 @@ export const ARQUIVOS_DA_APARENCIA = Object.freeze({
   'abertura-imagem': Object.freeze({ campo: 'splashImageUrl', tipo: 'imagem' }),
   'abertura-animacao': Object.freeze({ campo: 'abertura.animacaoUrl', tipo: 'animacao' }),
   'primeira-tela-logo': Object.freeze({ campo: 'primeiraTela.logoUrl', tipo: 'imagem' }),
+  'primeira-tela-imagem': daJornada('primeiraTela.imagemUrl', 300),
+  'boas-vindas-fundo': daJornada('boasVindas.imagemFundoUrl', 120),
+  'boas-vindas-imagem': daJornada('boasVindas.imagemUrl', 150),
+  'login-logo': daJornada('login.logoUrl', 80),
+  'login-fundo': daJornada('login.imagemFundoUrl', 80),
+  'folha-nome-ilustracao': daJornada('folhaNome.ilustracaoUrl', 80),
 });
 // Os do fundo de Ofertas, que o lojista tambem envia quando o Admin libera.
 export const ARQUIVOS_DO_FUNDO = Object.freeze({ imagem: 'ofertas-fundo-imagem', animacao: 'ofertas-fundo-animacao' });
@@ -69,21 +87,21 @@ export function ofertasDaLoja(data = {}) {
   };
 }
 
-// Abertura: a imagem e o splashImageUrl de hoje. Sem tipo gravado, "imagem".
+// Abertura: a imagem e o splashImageUrl de hoje. Sem tipo gravado, "imagem". Cola B56-24 (A2):
+// rodape, tempo minimo e os padroes de primeiroAcesso.js; animacaoPropria diz se a loja tem a sua
+// (sem ela, o app usa a animacao padrao de aparenciaPadrao/abertura).
 export function aberturaDaLoja(data = {}) {
-  const abertura = mapa(data.abertura);
+  const abertura = blocoDaLoja('abertura', data);
   return {
-    tipo: TIPOS_DE_ABERTURA.includes(abertura.tipo) ? abertura.tipo : 'imagem',
+    ...abertura,
     imagemUrl: textoOuNulo(data.splashImageUrl),
-    animacaoUrl: textoOuNulo(abertura.animacaoUrl),
-    cor: corOuNula(abertura.cor),
+    animacaoPropria: Boolean(abertura.animacaoUrl),
   };
 }
 
-// Primeira tela: so guardada; entra no build da marca depois.
+// Primeira tela: so guardada; entra no build da marca (cola B56-24, C2.1).
 export function primeiraTelaDaLoja(data = {}) {
-  const primeiraTela = mapa(data.primeiraTela);
-  return { logoUrl: textoOuNulo(primeiraTela.logoUrl), cor: corOuNula(primeiraTela.cor) };
+  return blocoDaLoja('primeiraTela', data);
 }
 
 // Conjunto de icones da loja: sem campo, a lista padrao (Lineares).

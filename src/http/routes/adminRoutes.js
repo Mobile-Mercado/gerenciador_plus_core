@@ -5,7 +5,7 @@ import { asyncHandler } from '../middlewares/asyncHandler.js';
 import { corpoDeImagem } from '../middlewares/corpoDeImagem.js';
 import { appDoClienteSchema, formasDePagamentoSchema } from './appDoClienteSchema.js';
 import {
-  afetadasSchema, alterarBannerSchema, alterarModeloSchema, alvoDoArquivoSchema, aparenciaDaLojaSchema, arquivoDaAparenciaSchema,
+  afetadasSchema, alterarBannerSchema, animacaoPadraoSchema, alterarModeloSchema, alvoDoArquivoSchema, aparenciaDaLojaSchema, arquivoDaAparenciaSchema,
   bannerParamsSchema, conjuntoDaLojaSchema, conjuntoNomeSchema, iconeDoConjuntoSchema, modelosConsultaSchema, novoBannerSchema,
   novoModeloSchema, padraoSchema, variacaoParamsSchema, voltarAoOriginalSchema,
 } from './aparenciaSchema.js';
@@ -644,6 +644,23 @@ export function createAdminRoutes({
       const resultado = await aparenciaDaLoja.enviarArquivo(request.params.lojaId, alvo, entrada);
       response.locals.auditoria = { acao: 'aparencias_arquivo', alvo, campos: resultado.campos, antes: resultado.antes };
       response.json({ data: resultado.aparencia });
+    }));
+
+    // Cola B56-24 (A2): animacao padrao da Abertura de todas as lojas. O GET da os numeros da
+    // janela de confirmacao ("vale para N lojas", "as M lojas com animacao propria").
+    router.get('/aparencia-padrao-abertura', asyncHandler(async (_request, response) => {
+      response.json({ data: await aparenciaDaLoja.padraoDaAbertura() });
+    }));
+
+    router.put('/aparencia-padrao-abertura', asyncHandler(async (request, response) => {
+      const { incluirAnimacaoPropria = false, ...arquivo } = animacaoPadraoSchema.parse(request.body);
+      const resultado = await aparenciaDaLoja.trocarAnimacaoPadrao(arquivo, atorDe(request), { incluirAnimacaoPropria });
+      response.locals.auditoria = {
+        acao: 'animacao_padrao_abertura', nome: resultado.nome, antes: resultado.antes,
+        lojasAlteradas: resultado.lojasAlteradas, lojasLimpas: resultado.lojasLimpas, incluirAnimacaoPropria,
+      };
+      const { lojasLimpas: _limpas, antes: _antes, ...dados } = resultado;
+      response.json({ data: dados });
     }));
   }
 

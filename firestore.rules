@@ -69,6 +69,12 @@ service cloud.firestore {
     match /aparenciaPadrao/{documentoId} {
       allow read, write: if false;
     }
+    // Animacao padrao da Abertura de todas as lojas (cola B56-24, A2): o app le antes do login
+    // (so o nome e a URL do .json, que ja e publica); so o Core grava.
+    match /aparenciaPadrao/abertura {
+      allow read: if true;
+      allow write: if false;
+    }
 
     // Users - apenas o próprio usuário pode ler seus dados
     // O Core acha a loja do dono pelo Users (campo id e userReference da loja): quem cria o
@@ -254,12 +260,14 @@ service cloud.firestore {
       // acrescenta nem apaga; a gravacao sem o campo, ou com o mesmo valor, passa.
       // Aparencias (cola B56-04): aparencia (conjunto de icones), ofertas, abertura e primeiraTela
       // so pelo Core, como o aparenciaHome; o fundo de Ofertas do lojista vai pela rota do Core.
+      // Cola B56-24 (A2): os blocos da jornada Primeiro acesso tambem so pelo Core.
       function camposDoAdminIguais() {
         let mudou = request.resource.data.diff(resource.data).affectedKeys();
         return !mudou.hasAny(['isActive', 'status', 'motivoRecusa', 'aprovadoPor', 'aprovadoEm',
             'recusadoPor', 'recusadoEm', 'enviadoEm', 'origemCadastro', 'cnpjConferido', 'offerColor',
             'featureFlags', 'aparenciaHome', 'userReference',
-            'aparencia', 'ofertas', 'abertura', 'primeiraTela'])
+            'aparencia', 'ofertas', 'abertura', 'primeiraTela',
+            'boasVindas', 'login', 'codigoSms', 'folhaNome', 'folhaEndereco'])
           && request.resource.data.get('scheduling', {}).get('contracted', null)
             == resource.data.get('scheduling', {}).get('contracted', null);
       }

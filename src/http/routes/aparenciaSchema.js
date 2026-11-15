@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import {
-  ARQUIVOS_DA_APARENCIA, COR, ID_SEGURO, TEXTO_MAX, TIPOS_DE_ABERTURA, TIPOS_DE_FUNDO, TITULO_MAX,
+  ARQUIVOS_DA_APARENCIA, COR, ID_SEGURO, TEXTO_MAX, TIPOS_DE_FUNDO, TITULO_MAX,
 } from '../../domain/loja/aparencias.js';
+import { BLOCOS_DA_JORNADA, TEXTO_DA_JORNADA_MAX, numeroValido } from '../../domain/loja/primeiroAcesso.js';
 
 // Aparencias da loja (cola B56-04). Os limites vem de domain/loja/aparencias.js. As URLs de
 // arquivo so entram pelo envio do arquivo; aqui so podem ser apagadas (null).
@@ -28,7 +29,27 @@ const fundoSchema = z.object({
   animacaoUrl: z.null().optional(),
 }).strict();
 
-// Admin: Ofertas, Abertura e Primeira tela.
+function campoSchema(campo) {
+  switch (campo.tipo) {
+    case 'numero':
+      return z.number().refine((valor) => numeroValido(campo, valor), {
+        message: `Use um número de ${campo.minimo} a ${campo.maximo}, de ${campo.passo} em ${campo.passo}.`,
+      }).nullable().optional();
+    case 'opcao':
+      return z.enum(campo.opcoes).nullable().optional();
+    case 'bool':
+      return z.boolean().nullable().optional();
+    case 'texto':
+      return z.string().max(TEXTO_DA_JORNADA_MAX).nullable().optional();
+    case 'cor':
+      return cor.nullable().optional();
+    default:
+      return z.null().optional(); // URL: so entra pelo envio do arquivo
+  }
+}
+const blocoDaJornadaSchema = (campos) => z.object(Object.fromEntries(Object.entries(campos).map(([chave, campo]) => [chave, campoSchema(campo)]))).strict();
+
+// Admin: Ofertas, Abertura, Primeira tela e a jornada Primeiro acesso.
 export const aparenciaDaLojaSchema = z.object({
   ofertas: z.object({
     fundo: fundoSchema.optional(),
@@ -40,22 +61,18 @@ export const aparenciaDaLojaSchema = z.object({
     }).strict().optional(),
     lojistaPodeTrocarFundo: z.boolean().optional(),
   }).strict().optional(),
-  abertura: z.object({
-    tipo: z.enum(TIPOS_DE_ABERTURA).optional(),
-    cor: cor.nullable().optional(),
-    animacaoUrl: z.null().optional(),
-  }).strict().optional(),
-  primeiraTela: z.object({
-    cor: cor.nullable().optional(),
-    logoUrl: z.null().optional(),
-  }).strict().optional(),
+  // Abertura, Primeira tela e os blocos da jornada Primeiro acesso (cola B56-24, A2), pela tabela
+  // de domain/loja/primeiroAcesso.js. null apaga a chave (volta ao padrao).
+  ...Object.fromEntries(Object.entries(BLOCOS_DA_JORNADA).map(([nome, campos]) => [nome, blocoDaJornadaSchema(campos).optional()])),
 }).strict();
 
 // Lojista: so o fundo de Ofertas.
 export const fundoDeOfertasSchema = fundoSchema;
 
+// Cola B56-24: a imagem da Primeira tela vai ate 300 KB (base64 ~410 mil caracteres); o limite
+// de cada alvo e conferido no caso de uso.
 export const arquivoDaAparenciaSchema = z.object({
-  conteudoBase64: z.string().min(1).max(170000),
+  conteudoBase64: z.string().min(1).max(420000),
   tipoArquivo: z.string().min(1).max(40),
 }).strict();
 
@@ -102,3 +119,11 @@ export const alterarBannerSchema = z.object({
   contador: z.boolean().optional(),
 }).strict();
 export const bannerParamsSchema = z.object({ lojaId: z.string().min(1).max(120), bannerId: z.string().min(1).max(120).regex(/^[^/]+$/) });
+
+// ===== Cola B56-24 (A2): animacao padrao da Abertura de todas as lojas =====
+export const animacaoPadraoSchema = z.object({
+  conteudoBase64: z.string().min(1).max(170000),
+  tipoArquivo: z.string().min(1).max(40),
+  nome: z.string().max(120).optional(),
+  incluirAnimacaoPropria: z.boolean().optional(),
+}).strict();
