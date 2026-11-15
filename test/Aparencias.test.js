@@ -30,11 +30,11 @@ function montar(loja = {}, extras = {}) {
     'categoriasProdutos/bebidas': { name: 'Bebidas', icon: 'https://padrao/bebidas.svg' },
     'categoriasProdutos/mercearia': { name: 'Mercearia', icon: 'https://padrao/mercearia.svg' },
     'categoriasProdutos/sem_icone': { name: 'Sem ícone', icon: '' },
-    ...extras,
+    ...Object.fromEntries(Object.entries(extras).filter(([chave]) => chave !== '__travados')),
   });
   const armazenamento = bucket();
   let relogio = 1000;
-  const comuns = { firestore: banco, bucket: armazenamento, serverTimestamp: () => AGORA, agora: () => relogio++ };
+  const comuns = { firestore: banco, bucket: armazenamento, serverTimestamp: () => AGORA, agora: () => relogio++, arquivosTravados: extras.__travados ?? [] };
   return { banco, armazenamento, conjuntos: new ConjuntosDeIcones(comuns), aparencia: new AparenciaDaLoja(comuns) };
 }
 

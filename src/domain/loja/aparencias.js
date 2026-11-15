@@ -56,6 +56,12 @@ export const ARQUIVOS_DA_APARENCIA = Object.freeze({
   'login-fundo': daJornada('login.imagemFundoUrl', 80),
   'folha-nome-ilustracao': daJornada('folhaNome.ilustracaoUrl', 80),
 });
+// Cola B56-27 (item 2): envios travados ate a build 56 do app estar nas lojas. abertura-imagem grava o
+// splashImageUrl, que o app das lojas de hoje mostra em tela cheia. A mesma frase da tela do Admin
+// (ARQUIVOS_TRAVADOS em aparenciasRascunho.js). Destravar aqui e la.
+export const ARQUIVOS_TRAVADOS = Object.freeze(['abertura-imagem']);
+export const AVISO_DO_ARQUIVO_TRAVADO = 'Travada até a versão 56 do app estar nas lojas.';
+
 // Os do fundo de Ofertas, que o lojista tambem envia quando o Admin libera.
 export const ARQUIVOS_DO_FUNDO = Object.freeze({ imagem: 'ofertas-fundo-imagem', animacao: 'ofertas-fundo-animacao' });
 

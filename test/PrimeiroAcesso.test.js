@@ -142,7 +142,7 @@ test('arquivos da jornada: PNG, WEBP ou SVG, com o limite de cada quadro; JPG re
     (erro) => erro.code === 'aparencia_imagem_tipo' && erro.message === 'Use uma imagem em SVG, PNG ou WEBP.',
   );
   // Os quadros de antes continuam aceitando JPG ate 40 KB.
-  await aparencia.enviarArquivo('loja-1', 'abertura-imagem', { conteudoBase64: base64(jpg), tipoArquivo: 'image/jpeg' });
+  await aparencia.enviarArquivo('loja-1', 'ofertas-cabecalho-imagem', { conteudoBase64: base64(jpg), tipoArquivo: 'image/jpeg' });
 });
 
 test('animacao: so JSON de Lottie (v, fr, ip, op, w, h e layers); outro JSON recusado com mensagem clara', async () => {
@@ -302,4 +302,25 @@ test('rota do lojista: nao grava nenhum bloco da jornada nem envia os arquivos d
 test('padroesDoBloco: os blocos do contrato e so eles', () => {
   assert.deepEqual(Object.keys(BLOCOS_DA_JORNADA), ['primeiraTela', 'abertura', 'boasVindas', 'login', 'codigoSms', 'folhaNome', 'folhaEndereco']);
   assert.equal(padroesDoBloco('abertura').tempoMinimo, 1.5);
+});
+
+test('B56-27: o envio da imagem da Abertura (splashImageUrl) e recusado, pela rota e no caso de uso; o resto continua', async () => {
+  const { aparencia, banco } = montar();
+  const imagem = await sharp({ create: { width: 108, height: 192, channels: 3, background: '#fff' } }).webp().toBuffer();
+  await assert.rejects(
+    aparencia.enviarArquivo('loja-1', 'abertura-imagem', { conteudoBase64: base64(imagem), tipoArquivo: 'image/webp' }),
+    (erro) => erro.code === 'aparencia_arquivo_travado' && erro.statusCode === 409
+      && erro.message === 'Travada até a versão 56 do app estar nas lojas.',
+  );
+  assert.equal(banco.dados(LOJA).splashImageUrl, 'https://splash/antiga.webp', 'o splashImageUrl nao muda');
+  await aparencia.enviarArquivo('loja-1', 'abertura-animacao', { conteudoBase64: base64(json(LOTTIE)), tipoArquivo: 'application/json' });
+  await aparencia.enviarArquivo('loja-1', 'login-fundo', { conteudoBase64: base64(svg(10, 10)), tipoArquivo: 'image/svg+xml' });
+  await comRotas(async ({ chamar, banco: bancoDaRota }) => {
+    const resposta = await chamar('POST', '/api/admin/estabelecimentos/loja-1/aparencias/arquivos/abertura-imagem', { conteudoBase64: base64(imagem), tipoArquivo: 'image/webp' });
+    assert.equal(resposta.status, 409);
+    const corpo = await resposta.json();
+    assert.equal(corpo.error.message, 'Travada até a versão 56 do app estar nas lojas.');
+    assert.equal(corpo.error.code, 'aparencia_arquivo_travado');
+    assert.equal(bancoDaRota.dados(LOJA).splashImageUrl, 'https://splash/antiga.webp');
+  });
 });

@@ -1,7 +1,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 import {
-  ARQUIVOS_DA_APARENCIA, ARQUIVOS_DO_FUNDO, aberturaDaLoja, conjuntoDaLoja, ofertasDaLoja, primeiraTelaDaLoja,
+  ARQUIVOS_DA_APARENCIA, ARQUIVOS_DO_FUNDO, ARQUIVOS_TRAVADOS, AVISO_DO_ARQUIVO_TRAVADO, aberturaDaLoja, conjuntoDaLoja, ofertasDaLoja, primeiraTelaDaLoja,
 } from '../../domain/loja/aparencias.js';
 import { blocoDaLoja, coresPadraoDe } from '../../domain/loja/primeiroAcesso.js';
 import { conferirAnimacao, conferirImagem, decodificar, gravarNoStorage } from './arquivosDaAparencia.js';
@@ -35,8 +35,14 @@ function valorEm(data, caminho) {
 }
 
 export class AparenciaDaLoja {
-  constructor({ firestore, bucket = null, serverTimestamp = () => FieldValue.serverTimestamp(), apagarCampo = () => FieldValue.delete(), agora = () => Date.now() }) {
+  // `arquivosTravados`: os envios recusados (cola B56-27); os testes passam [] para conferir o caminho
+  // de quando destravar.
+  constructor({
+    firestore, bucket = null, serverTimestamp = () => FieldValue.serverTimestamp(), apagarCampo = () => FieldValue.delete(),
+    agora = () => Date.now(), arquivosTravados = ARQUIVOS_TRAVADOS,
+  }) {
     this.firestore = firestore;
+    this.arquivosTravados = arquivosTravados;
     this.bucket = bucket;
     this.serverTimestamp = serverTimestamp;
     this.apagarCampo = apagarCampo;
@@ -155,6 +161,7 @@ export class AparenciaDaLoja {
     if (soFundo && !Object.values(ARQUIVOS_DO_FUNDO).includes(alvo)) {
       throw recusa('O lojista só troca o fundo de Ofertas.', 'ofertas_so_fundo', 403);
     }
+    if (this.arquivosTravados.includes(alvo)) throw recusa(AVISO_DO_ARQUIVO_TRAVADO, 'aparencia_arquivo_travado', 409);
     const ref = this.lojaRef(lojaId);
     const loja = await ref.get();
     if (!loja.exists) throw recusa('Loja não encontrada.', 'loja_nao_encontrada', 404);
