@@ -4,6 +4,7 @@ import test from 'node:test';
 import sharp from 'sharp';
 import { ConjuntosDeIcones } from '../src/application/admin/ConjuntosDeIcones.js';
 import { AparenciaDaLoja } from '../src/application/loja/AparenciaDaLoja.js';
+import { padroesDoBloco } from '../src/domain/loja/primeiroAcesso.js';
 import { FirestoreEmMemoria } from './apoio/firestoreEmMemoria.js';
 
 // Cola B56-04: conjuntos de icones (parte 2) e Ofertas, Abertura e Primeira tela (parte 3).
@@ -29,11 +30,11 @@ function montar(loja = {}, extras = {}) {
     'categoriasProdutos/bebidas': { name: 'Bebidas', icon: 'https://padrao/bebidas.svg' },
     'categoriasProdutos/mercearia': { name: 'Mercearia', icon: 'https://padrao/mercearia.svg' },
     'categoriasProdutos/sem_icone': { name: 'Sem ícone', icon: '' },
-    ...extras,
+    ...Object.fromEntries(Object.entries(extras).filter(([chave]) => chave !== '__travados')),
   });
   const armazenamento = bucket();
   let relogio = 1000;
-  const comuns = { firestore: banco, bucket: armazenamento, serverTimestamp: () => AGORA, agora: () => relogio++ };
+  const comuns = { firestore: banco, bucket: armazenamento, serverTimestamp: () => AGORA, agora: () => relogio++, arquivosTravados: extras.__travados ?? [] };
   return { banco, armazenamento, conjuntos: new ConjuntosDeIcones(comuns), aparencia: new AparenciaDaLoja(comuns) };
 }
 
@@ -191,8 +192,18 @@ test('ofertas: sem ofertas.fundo.cor vale o offerColor; fundo "cor" e lojista se
       cabecalho: { ligado: false, titulo: null, texto: null, imagemUrl: null },
       lojistaPodeTrocarFundo: false,
     },
-    abertura: { tipo: 'imagem', imagemUrl: 'https://splash/antiga.webp', animacaoUrl: null, cor: null },
-    primeiraTela: { logoUrl: null, cor: null },
+    // Cola B56-24 (A2): abertura e primeiraTela com os campos novos e os padroes, e os blocos da jornada.
+    abertura: {
+      tipo: 'imagem', imagemUrl: 'https://splash/antiga.webp', animacaoUrl: null, animacaoPropria: false, cor: null,
+      rodapeLigado: true, rodape: 'Powered by: Móbile', rodapeCor: '#FFFFFF', tempoMinimo: 1.5,
+    },
+    primeiraTela: padroesDoBloco('primeiraTela'),
+    boasVindas: padroesDoBloco('boasVindas'),
+    login: padroesDoBloco('login'),
+    codigoSms: padroesDoBloco('codigoSms'),
+    folhaNome: padroesDoBloco('folhaNome'),
+    folhaEndereco: padroesDoBloco('folhaEndereco'),
+    aberturaPadrao: { nome: null, animacaoUrl: null },
   });
 });
 
@@ -237,7 +248,7 @@ test('arquivos: imagem ate 40 KB e animacao .json ate 120 KB; abertura-imagem gr
   assert.deepEqual(abertura.antes, { splashImageUrl: 'https://splash/antiga.webp' });
   assert.match(banco.dados(LOJA).splashImageUrl, /appMobile%2FcompanyImages%2Floja-1%2Faparencia%2Fabertura-imagem_\d+\.webp/);
   assert.equal(banco.dados(LOJA).abertura, undefined, 'sem abertura.imagemUrl duplicado');
-  const lottie = Buffer.from(JSON.stringify({ v: '5.7.4', fr: 30, layers: [] }));
+  const lottie = Buffer.from(JSON.stringify({ v: '5.7.4', fr: 30, ip: 0, op: 60, w: 200, h: 200, layers: [] }));
   await aparencia.enviarArquivo('loja-1', 'abertura-animacao', { conteudoBase64: base64(lottie), tipoArquivo: 'application/json' });
   assert.match(banco.dados(LOJA).abertura.animacaoUrl, /abertura-animacao_\d+\.json/);
   await aparencia.enviarArquivo('loja-1', 'primeira-tela-logo', { conteudoBase64: base64(svg(64, 64)), tipoArquivo: 'image/svg+xml' });
@@ -354,7 +365,7 @@ test('rotas do Admin: aparencias com o valor de antes na auditoria; campos fora 
     const ok = await chamar('PATCH', caminho, { ofertas: { fundo: { cor: '#00aa00' }, lojistaPodeTrocarFundo: true } });
     assert.equal(ok.status, 200);
     assert.equal((await ok.json()).data.ofertas.fundo.cor, '#00AA00');
-    const animacao = Buffer.from(JSON.stringify({ v: '5', layers: [] }));
+    const animacao = Buffer.from(JSON.stringify({ v: '5', fr: 30, ip: 0, op: 60, w: 200, h: 200, layers: [] }));
     assert.equal((await chamar('POST', `${caminho}/arquivos/abertura-animacao`, { conteudoBase64: base64(animacao), tipoArquivo: 'application/json' })).status, 200);
     assert.equal((await chamar('POST', `${caminho}/arquivos/qualquer`, { conteudoBase64: base64(animacao), tipoArquivo: 'application/json' })).status, 400);
     await esperarAuditoria();

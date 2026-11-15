@@ -1,6 +1,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 import { COLECAO_PEDIDOS, STATUS } from '../cadastro/CadastroDeLoja.js';
+import { coresPadraoDe } from '../../domain/loja/primeiroAcesso.js';
 
 // Estabelecimentos > Pedidos de loja (Admin). Lista os pedidos do cadastro pelo app gerenciador,
 // em pedidosDeLoja/{id}, e decide: aprovar, recusar com motivo ou marcar "Em conversa".
@@ -112,7 +113,8 @@ export class PedidosDeLoja {
   }
 
   // Loja nascida do pedido: os dados do pedido no formato que o cadastro gravava, desligada.
-  lojaDoPedido(pedido, lojaId, ator, agora) {
+  // Cola B56-25 (item 7): nasce com as cores padrao das lojas novas (aparenciaPadrao/cores).
+  lojaDoPedido(pedido, lojaId, ator, agora, cores = coresPadraoDe({})) {
     const data = pedido.data() || {};
     const loja = Object.fromEntries(CAMPOS_DA_LOJA.filter((campo) => data[campo] !== undefined).map((campo) => [campo, data[campo]]));
     return {
@@ -122,6 +124,8 @@ export class PedidosDeLoja {
       userType: 'UserType.noneEmpresa',
       status: STATUS.APROVADA,
       pedidoDeLojaId: pedido.id,
+      primaryColor: cores.loja,
+      secondaryColor: cores.sistema,
       aprovadoPor: ator.uid || null,
       aprovadoEm: agora,
       createdAt: agora,
@@ -137,6 +141,8 @@ export class PedidosDeLoja {
     this.assertAberto(pedido);
     const uid = await this.donoDoPedido(pedido);
     const lojaRef = this.firestore.collection('estabelecimentos').doc();
+    const documentoDasCores = await this.firestore.doc('aparenciaPadrao/cores').get();
+    const cores = coresPadraoDe(documentoDasCores.exists ? documentoDasCores.data() || {} : {});
     const conta = await this.auth.getUser(uid);
     const claimsAntigas = { ...(conta.customClaims || {}) };
     const claimsNovas = { ...claimsAntigas, adminOf: lojaRef.id };
@@ -145,7 +151,7 @@ export class PedidosDeLoja {
     const agora = this.serverTimestamp();
     try {
       const lote = this.firestore.batch();
-      lote.create(lojaRef, this.lojaDoPedido(pedido, lojaRef.id, ator, agora));
+      lote.create(lojaRef, this.lojaDoPedido(pedido, lojaRef.id, ator, agora, cores));
       lote.update(pedido.ref, {
         status: STATUS.APROVADA,
         lojaId: lojaRef.id,

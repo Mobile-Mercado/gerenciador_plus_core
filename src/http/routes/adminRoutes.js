@@ -5,7 +5,7 @@ import { asyncHandler } from '../middlewares/asyncHandler.js';
 import { corpoDeImagem } from '../middlewares/corpoDeImagem.js';
 import { appDoClienteSchema, formasDePagamentoSchema } from './appDoClienteSchema.js';
 import {
-  afetadasSchema, alterarBannerSchema, alterarModeloSchema, alvoDoArquivoSchema, aparenciaDaLojaSchema, arquivoDaAparenciaSchema,
+  afetadasSchema, alterarBannerSchema, animacaoPadraoSchema, coresPadraoSchema, alterarModeloSchema, alvoDoArquivoSchema, aparenciaDaLojaSchema, arquivoDaAparenciaSchema,
   bannerParamsSchema, conjuntoDaLojaSchema, conjuntoNomeSchema, iconeDoConjuntoSchema, modelosConsultaSchema, novoBannerSchema,
   novoModeloSchema, padraoSchema, variacaoParamsSchema, voltarAoOriginalSchema,
 } from './aparenciaSchema.js';
@@ -644,6 +644,36 @@ export function createAdminRoutes({
       const resultado = await aparenciaDaLoja.enviarArquivo(request.params.lojaId, alvo, entrada);
       response.locals.auditoria = { acao: 'aparencias_arquivo', alvo, campos: resultado.campos, antes: resultado.antes };
       response.json({ data: resultado.aparencia });
+    }));
+
+    // Cola B56-24 (A2): animacao padrao da Abertura de todas as lojas. O GET da os numeros da
+    // janela de confirmacao ("vale para N lojas", "as M lojas com animacao propria").
+    router.get('/aparencia-padrao-abertura', asyncHandler(async (_request, response) => {
+      response.json({ data: await aparenciaDaLoja.padraoDaAbertura() });
+    }));
+
+    // Cola B56-25 (item 7): cores com que as lojas novas nascem (loja = primaryColor, sistema =
+    // secondaryColor). As lojas que ja existem nao mudam.
+    router.get('/aparencia-padrao-cores', asyncHandler(async (_request, response) => {
+      response.json({ data: await aparenciaDaLoja.coresPadrao() });
+    }));
+
+    router.put('/aparencia-padrao-cores', asyncHandler(async (request, response) => {
+      const entrada = coresPadraoSchema.parse(request.body);
+      const { antes, ...depois } = await aparenciaDaLoja.mudarCoresPadrao(entrada, atorDe(request));
+      response.locals.auditoria = { acao: 'cores_padrao_lojas_novas', antes, depois };
+      response.json({ data: depois });
+    }));
+
+    router.put('/aparencia-padrao-abertura', asyncHandler(async (request, response) => {
+      const { incluirAnimacaoPropria = false, ...arquivo } = animacaoPadraoSchema.parse(request.body);
+      const resultado = await aparenciaDaLoja.trocarAnimacaoPadrao(arquivo, atorDe(request), { incluirAnimacaoPropria });
+      response.locals.auditoria = {
+        acao: 'animacao_padrao_abertura', nome: resultado.nome, antes: resultado.antes,
+        lojasAlteradas: resultado.lojasAlteradas, lojasLimpas: resultado.lojasLimpas, incluirAnimacaoPropria,
+      };
+      const { lojasLimpas: _limpas, antes: _antes, ...dados } = resultado;
+      response.json({ data: dados });
     }));
   }
 
