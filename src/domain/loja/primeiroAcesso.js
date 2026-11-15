@@ -85,7 +85,8 @@ export const BLOCOS_DA_JORNADA = Object.freeze({
     appleLigado: ligado(true),
   }),
   codigoSms: Object.freeze({
-    cor: cor('#2E4BD6'),
+    // Cola B56-25 (item 5): sem cor propria, a cor da loja (antes #2E4BD6 fixo).
+    cor: cor(null),
     corFundo: cor('#FFFFFF'),
     titulo: texto('Informe o código que você\nrecebeu por SMS:'),
     tempo: numero(10, 120, 5, 10),

@@ -61,7 +61,7 @@ test('padroes: loja sem nada gravado le os padroes do mockup aprovado', async ()
     googleLigado: true, appleLigado: true,
   });
   assert.deepEqual(lida.codigoSms, {
-    cor: '#2E4BD6', corFundo: '#FFFFFF', titulo: 'Informe o código que você\nrecebeu por SMS:', tempo: 10,
+    cor: null, corFundo: '#FFFFFF', titulo: 'Informe o código que você\nrecebeu por SMS:', tempo: 10,
     fraseReenvio: 'Não recebeu o código?', botaoReenvio: 'Reenviar código', outraFormaLigada: true,
     fraseOutraForma: 'Não consegue receber SMS?', botaoOutraForma: 'Acessar de outra forma',
   });
