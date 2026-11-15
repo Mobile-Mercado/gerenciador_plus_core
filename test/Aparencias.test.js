@@ -195,7 +195,7 @@ test('ofertas: sem ofertas.fundo.cor vale o offerColor; fundo "cor" e lojista se
     // Cola B56-24 (A2): abertura e primeiraTela com os campos novos e os padroes, e os blocos da jornada.
     abertura: {
       tipo: 'imagem', imagemUrl: 'https://splash/antiga.webp', animacaoUrl: null, animacaoPropria: false, cor: null,
-      rodapeLigado: true, rodape: 'Powered by: Móbile', tempoMinimo: 1.5,
+      rodapeLigado: true, rodape: 'Powered by: Móbile', rodapeCor: '#FFFFFF', tempoMinimo: 1.5,
     },
     primeiraTela: padroesDoBloco('primeiraTela'),
     boasVindas: padroesDoBloco('boasVindas'),

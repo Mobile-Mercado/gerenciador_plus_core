@@ -120,6 +120,9 @@ export const alterarBannerSchema = z.object({
 }).strict();
 export const bannerParamsSchema = z.object({ lojaId: z.string().min(1).max(120), bannerId: z.string().min(1).max(120).regex(/^[^/]+$/) });
 
+// ===== Cola B56-25 (item 7): cores padrao das lojas novas =====
+export const coresPadraoSchema = z.object({ loja: cor, sistema: cor }).strict();
+
 // ===== Cola B56-24 (A2): animacao padrao da Abertura de todas as lojas =====
 export const animacaoPadraoSchema = z.object({
   conteudoBase64: z.string().min(1).max(170000),

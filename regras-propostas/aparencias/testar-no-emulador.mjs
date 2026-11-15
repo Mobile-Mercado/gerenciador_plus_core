@@ -8,6 +8,8 @@
 // Cola B56-24 (A2): o lojista tambem nao grava os blocos da jornada Primeiro acesso (boasVindas,
 // login, codigoSms, folhaNome, folhaEndereco), e aparenciaPadrao/abertura (a animacao padrao) tem
 // leitura aberta, ate sem login, e gravacao fechada; o resto de aparenciaPadrao continua fechado.
+// Cola B56-25 (item 8): o lojista tambem nao grava primaryColor nem secondaryColor (so o Admin muda
+// as cores da loja), e aparenciaPadrao/cores (cores das lojas novas) fica fechado.
 //
 //   npx firebase-tools@15.30.0 emulators:exec --only firestore --project demo-regras \
 //     "node regras-propostas/aparencias/testar-no-emulador.mjs"
@@ -63,11 +65,13 @@ async function semear() {
     abertura: { tipo: 'imagem' },
     primeiraTela: { cor: '#2E4BD6' },
     boasVindas: { titulo: 'Bem-vindo' },
+    primaryColor: '#2E4BD6', secondaryColor: '#1F9D4E',
     login: { googleLigado: true },
   });
   lote.set(banco.doc('estabelecimentos/loja-1/PermissionGroups/g-admin'), { isAdmin: true, permissions: [] });
   lote.set(banco.doc('modelosAparencia/m1'), { bloco: 'topo', nome: 'Topo X', base: 2, ajustes: {} });
   lote.set(banco.doc('aparenciaPadrao/padroes'), { topo: {} });
+  lote.set(banco.doc('aparenciaPadrao/cores'), { loja: '#2E4BD6', sistema: '#1F9D4E' });
   lote.set(banco.doc('aparenciaPadrao/abertura'), { nome: 'carregando.json', animacaoUrl: 'https://x/a.json' });
   await lote.commit();
 }
@@ -97,6 +101,10 @@ const casos = [
   ['lojista grava folhaEndereco.pularLigado', 'recusa', () => updateDoc(loja(lojista), { 'folhaEndereco.pularLigado': false })],
   ['lojista apaga o mapa boasVindas', 'recusa', () => updateDoc(loja(lojista), { boasVindas: null })],
   ['lojista grava boasVindas e login com o mesmo valor (set com merge)', 'passa', () => setDoc(loja(lojista), { boasVindas: { titulo: 'Bem-vindo' }, login: { googleLigado: true } }, { merge: true })],
+  ['lojista grava primaryColor', 'recusa', () => updateDoc(loja(lojista), { primaryColor: '#000000' })],
+  ['lojista grava secondaryColor', 'recusa', () => updateDoc(loja(lojista), { secondaryColor: '#000000' })],
+  ['lojista apaga primaryColor', 'recusa', () => updateDoc(loja(lojista), { primaryColor: null })],
+  ['lojista grava as cores com o mesmo valor e o nome (set com merge)', 'passa', () => setDoc(loja(lojista), { name: 'Loja 1 b', primaryColor: '#2E4BD6', secondaryColor: '#1F9D4E' }, { merge: true })],
   ['controle: lojista grava aparenciaHome.topo (ja era so do Admin)', 'recusa', () => updateDoc(loja(lojista), { 'aparenciaHome.topo': 3 })],
   ['controle: lojista grava offerColor (ja era so do Admin)', 'recusa', () => updateDoc(loja(lojista), { offerColor: '#000000' })],
   ['lojista grava o nome, sem tocar em ofertas, abertura e primeiraTela', 'passa', () => updateDoc(loja(lojista), { name: 'Loja 1 nova' })],
@@ -113,6 +121,8 @@ const casos = [
   ['logado le aparenciaPadrao/abertura', 'passa', () => getDoc(doc(cliente, 'aparenciaPadrao/abertura'))],
   ['sem login le aparenciaPadrao/padroes', 'recusa', () => getDoc(doc(semLogin, 'aparenciaPadrao/padroes'))],
   ['lojista grava aparenciaPadrao/abertura', 'recusa', () => setDoc(doc(lojista, 'aparenciaPadrao/abertura'), { animacaoUrl: 'https://x/b.json' })],
+  ['logado le aparenciaPadrao/cores', 'recusa', () => getDoc(doc(cliente, 'aparenciaPadrao/cores'))],
+  ['lojista grava aparenciaPadrao/cores', 'recusa', () => setDoc(doc(lojista, 'aparenciaPadrao/cores'), { loja: '#000000' })],
   ['logado grava aparenciaPadrao/abertura', 'recusa', () => setDoc(doc(cliente, 'aparenciaPadrao/abertura'), { animacaoUrl: 'https://x/b.json' })],
 ];
 

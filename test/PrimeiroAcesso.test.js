@@ -42,10 +42,10 @@ test('padroes: loja sem nada gravado le os padroes do mockup aprovado', async ()
   const lida = await aparencia.ler('loja-1');
   assert.deepEqual(lida.primeiraTela, {
     logoUrl: null, logoTamanho: 100, logoY: 50, logoAlinhamento: 'centro', cor: '#FFFFFF', mesmaCorDaAbertura: false,
-    imagemUrl: null, escurecer: 0, rodapeLigado: false, rodape: '',
+    imagemUrl: null, escurecer: 0, rodapeLigado: false, rodape: '', rodapeCor: '#7A8099',
   });
   assert.deepEqual(lida.abertura, {
-    tipo: 'imagem', animacaoUrl: null, cor: null, rodapeLigado: true, rodape: 'Powered by: Móbile', tempoMinimo: 1.5,
+    tipo: 'imagem', animacaoUrl: null, cor: null, rodapeLigado: true, rodape: 'Powered by: Móbile', rodapeCor: '#FFFFFF', tempoMinimo: 1.5,
     imagemUrl: 'https://splash/antiga.webp', animacaoPropria: false,
   });
   assert.deepEqual(lida.boasVindas, {

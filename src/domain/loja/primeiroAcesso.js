@@ -1,3 +1,5 @@
+const COR_VALIDA = /^#[0-9A-Fa-f]{6}$/;
+
 // Jornada "Primeiro acesso" da loja (cola B56-24, item A2). Uma tabela so com os campos de cada
 // bloco, o padrao e a faixa, tirados do mockup aprovado (aparencias-login.html) e do contrato
 // Documentos/rodada-paralela/B56-24/contrato-primeiro-acesso.md. A leitura (com os padroes), a
@@ -31,6 +33,8 @@ export const BLOCOS_DA_JORNADA = Object.freeze({
     escurecer: numero(0, 70, 1, 0),
     rodapeLigado: ligado(false),
     rodape: texto(''),
+    // Cola B56-25 (item 6): cor do texto do rodape.
+    rodapeCor: cor('#7A8099'),
   }),
   abertura: Object.freeze({
     tipo: opcao(['imagem', 'animacao'], 'imagem'),
@@ -38,6 +42,7 @@ export const BLOCOS_DA_JORNADA = Object.freeze({
     cor: cor(null),
     rodapeLigado: ligado(true),
     rodape: texto('Powered by: Móbile'),
+    rodapeCor: cor('#FFFFFF'),
     tempoMinimo: numero(0, 6, 0.5, 1.5),
   }),
   boasVindas: Object.freeze({
@@ -105,9 +110,17 @@ export const BLOCOS_DA_JORNADA = Object.freeze({
   }),
 });
 
+// Cola B56-25 (item 7): cores com que as lojas novas nascem (primaryColor = loja, secondaryColor =
+// sistema), em aparenciaPadrao/cores. Sem documento, estas.
+export const CORES_PADRAO_DE_FABRICA = Object.freeze({ loja: '#2E4BD6', sistema: '#1F9D4E' });
+
+export function coresPadraoDe(data = {}) {
+  const valida = (valor, padrao) => (typeof valor === 'string' && COR_VALIDA.test(valor) ? valor.toUpperCase() : padrao);
+  return { loja: valida(data.loja, CORES_PADRAO_DE_FABRICA.loja), sistema: valida(data.sistema, CORES_PADRAO_DE_FABRICA.sistema) };
+}
+
 export const NOMES_DOS_BLOCOS = Object.freeze(Object.keys(BLOCOS_DA_JORNADA));
 
-const COR_VALIDA = /^#[0-9A-Fa-f]{6}$/;
 const mapa = (valor) => (valor && typeof valor === 'object' && !Array.isArray(valor) ? valor : {});
 
 // O valor gravado vale se passa na faixa do campo; senao, o padrao.

@@ -3,12 +3,14 @@ import { AppError } from '../../domain/errors/AppError.js';
 import {
   ARQUIVOS_DA_APARENCIA, ARQUIVOS_DO_FUNDO, aberturaDaLoja, conjuntoDaLoja, ofertasDaLoja, primeiraTelaDaLoja,
 } from '../../domain/loja/aparencias.js';
-import { blocoDaLoja } from '../../domain/loja/primeiroAcesso.js';
+import { blocoDaLoja, coresPadraoDe } from '../../domain/loja/primeiroAcesso.js';
 import { conferirAnimacao, conferirImagem, decodificar, gravarNoStorage } from './arquivosDaAparencia.js';
 
 // Cola B56-24 (A2): animacao padrao da Abertura de todas as lojas. Leitura aberta na regra (o app
 // le antes do login); gravacao so pelo Core.
 export const DOCUMENTO_DA_ABERTURA_PADRAO = 'aparenciaPadrao/abertura';
+// Cola B56-25 (item 7): cores das lojas novas. So o Core le e grava (regra fechada).
+export const DOCUMENTO_DAS_CORES_PADRAO = 'aparenciaPadrao/cores';
 const LOTE = 400;
 
 // Ofertas, Abertura e Primeira tela da loja (cola B56-04, parte 3). Mesmo padrao do
@@ -58,6 +60,21 @@ export class AparenciaDaLoja {
       nome: typeof data.nome === 'string' && data.nome ? data.nome : null,
       animacaoUrl: typeof data.animacaoUrl === 'string' && data.animacaoUrl ? data.animacaoUrl : null,
     };
+  }
+
+  // Cola B56-25 (item 7): cores com que as lojas novas nascem. As lojas que ja existem nao mudam.
+  async coresPadrao() {
+    const documento = await this.firestore.doc(DOCUMENTO_DAS_CORES_PADRAO).get();
+    return coresPadraoDe(documento.exists ? documento.data() || {} : {});
+  }
+
+  async mudarCoresPadrao({ loja, sistema }, ator = {}) {
+    const antes = await this.coresPadrao();
+    const depois = coresPadraoDe({ loja, sistema });
+    await this.firestore.doc(DOCUMENTO_DAS_CORES_PADRAO).set({
+      ...depois, atualizadoEm: this.serverTimestamp(), atualizadoPor: ator.uid || null,
+    }, { merge: true });
+    return { ...depois, antes };
   }
 
   // Lojas sem animacao propria (usam a padrao) e com animacao propria (abertura.animacaoUrl).
