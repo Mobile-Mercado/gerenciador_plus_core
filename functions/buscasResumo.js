@@ -14,7 +14,9 @@
 const { PROBABLE_ORDER_WINDOW_MS } = require('./agenteConversas');
 const { isTestOrder, orderClientId } = require('./hourlySalesAggregation');
 
-const RESUMO_VERSION = 2;
+// Versao 3 (cola B57-01, item C3): a conversao casa o uid da busca com o id do documento em
+// Users, o que o pedido grava. Dia gravado na versao 2 e refeito enquanto o SearchLogs dele existir.
+const RESUMO_VERSION = 3;
 const RESUMO_DOCUMENT = 'buscasResumo';
 const DIAS_SUBCOLECAO = 'dias';
 // Duas janelas, de proposito. O topo guarda um ano de contagem, para o periodo "Ano" da
@@ -106,6 +108,18 @@ function momentosDePedidoPorCliente(pedidos = [], testAccountIds = new Set()) {
   return porCliente;
 }
 
+// A busca (findProducts, no mobile_firebase_api) grava em clienteId o uid do Authentication; o
+// pedido grava em clientId o id do documento em Users. Na conta antiga os dois sao diferentes
+// (o uid fica no userAuthId do documento), e a busca nunca achava o pedido. Os momentos de
+// pedido da busca sao os do uid e os do documento do uid em Users (indiceDeUsuarios.documentoDe,
+// a mesma traducao do clienteDocId abaixo). Uid sem documento, ou com documento ambiguo, fica
+// so com o proprio uid, como antes.
+function momentosDaBusca(pedidosPorCliente, clienteId, clienteDocId) {
+  const doUid = pedidosPorCliente.get(clienteId) || [];
+  if (!clienteDocId || clienteDocId === clienteId) return doUid;
+  return [...doUid, ...(pedidosPorCliente.get(clienteDocId) || [])];
+}
+
 function virouPedido(momentos = [], quando) {
   if (!quando) return false;
   const buscaEm = quando.getTime();
@@ -125,6 +139,13 @@ function resumirBuscas({
   let convertidas = 0;
   let semPedido = 0;
   let semCliente = 0;
+  // Id do documento em Users de cada uid, calculado uma vez por uid.
+  const documentos = new Map();
+  const documentoDoCliente = (clienteId) => {
+    if (!indiceDeUsuarios) return null;
+    if (!documentos.has(clienteId)) documentos.set(clienteId, indiceDeUsuarios.documentoDe(clienteId, marcaDaLoja));
+    return documentos.get(clienteId);
+  };
 
   buscas.forEach((busca) => {
     const termo = String(busca?.termo ?? '');
@@ -149,7 +170,7 @@ function resumirBuscas({
       return;
     }
 
-    const convertida = virouPedido(pedidosPorCliente.get(clienteId), quando);
+    const convertida = virouPedido(momentosDaBusca(pedidosPorCliente, clienteId, documentoDoCliente(clienteId)), quando);
     if (convertida) convertidas += 1;
     else semPedido += 1;
 
@@ -189,9 +210,7 @@ function resumirBuscas({
         // Id do documento em Users, para o painel casar a busca com o cadastro. Nulo
         // quando o uid nao tem documento, ou quando tem mais de um: escolher no escuro e
         // pior que nao ter. O clienteId segue cru, pela regra do registro bruto.
-        clienteDocId: indiceDeUsuarios
-          ? indiceDeUsuarios.documentoDe(cliente.clienteId, marcaDaLoja)
-          : null,
+        clienteDocId: documentoDoCliente(cliente.clienteId),
         buscas: cliente.buscas,
         convertidas: cliente.convertidas,
         termos: [...cliente.termos.values()].sort(maisVezes),
@@ -433,6 +452,11 @@ async function resumirUmDia({
 // Dia gravado numa versao anterior a atual e refeito a partir de SearchLogs, com teto por
 // passada. Dia cujo SearchLogs ja foi apagado pela retencao fica como esta: refazer com a
 // colecao vazia trocaria numero por zero.
+//
+// Os dias sao olhados do mais novo para o mais velho, e o teto conta so os refeitos: o dia ja
+// na versao atual e pulado e a passada segue para os mais velhos (cola B57-01, item C3). Antes,
+// os candidatos eram so os sete dias mais novos, e um dia mais velho que eles nunca era refeito.
+// Custa uma leitura por documento de dia (ate 90) por loja e por noite.
 async function refazerDiasAntigos({
   storeRef,
   diaCorrente,
@@ -446,11 +470,12 @@ async function refazerDiasAntigos({
     .filter((linha) => linha?.dia && linha.dia !== diaCorrente && linha.documento !== false)
     .map((linha) => linha.dia)
     .sort()
-    .slice(-maximoDeDias);
+    .reverse();
 
   const refeitos = [];
   const semDadoBruto = [];
   for (const dia of candidatos) {
+    if (refeitos.length >= maximoDeDias) break;
     const documento = await diaReference(storeRef, dia).get();
     if (!documento.exists) continue;
     if (Number(documento.get('version') || 0) >= RESUMO_VERSION) continue;
@@ -464,7 +489,7 @@ async function refazerDiasAntigos({
     await escreverResumoDeBuscas({ storeRef, resumo, atualizadoEm });
     refeitos.push(dia);
   }
-  return { diasRefeitos: refeitos, diasSemDadoBruto: semDadoBruto };
+  return { diasRefeitos: refeitos.sort(), diasSemDadoBruto: semDadoBruto.sort() };
 }
 
 // Resumo do dia anterior, gravacao, e so entao a limpeza.
@@ -513,6 +538,7 @@ async function rodarResumoDeBuscas({
     documentIdPath,
     mirroredProducts,
     indiceDeUsuarios,
+    marcaDaLoja,
   });
 
   let removidos = 0;
@@ -565,6 +591,7 @@ module.exports = {
   limitesDoDia,
   limparBuscasAntigas,
   marcarTermosSemResultado,
+  momentosDaBusca,
   momentosDePedidoPorCliente,
   refazerDiasAntigos,
   resumirBuscas,
