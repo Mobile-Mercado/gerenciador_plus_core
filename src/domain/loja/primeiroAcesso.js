@@ -97,7 +97,7 @@ export const BLOCOS_DA_JORNADA = Object.freeze({
     botaoOutraForma: texto('Acessar de outra forma'),
   }),
   folhaNome: Object.freeze({
-    titulo: texto('Como prefere ser chamado?'),
+    titulo: texto('Como podemos te chamar?'),
     campo: texto('Qual seu nome'),
     botao: texto('Salvar'),
     ilustracaoUrl: arquivo(),
