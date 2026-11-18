@@ -3,7 +3,7 @@ import test from 'node:test';
 import { CadastroDeLoja } from '../src/application/cadastro/CadastroDeLoja.js';
 import { converterParaWebp, ImagensDaLoja, LIMITE_ENTRADA_BYTES } from '../src/application/cadastro/ImagensDaLoja.js';
 import { chaveDoLimite, LimiteDeTentativas } from '../src/application/cadastro/LimiteDeTentativas.js';
-import { lerEmpresa } from '../src/infra/cnpj/BrasilApiCnpj.js';
+import { BrasilApiCnpj, lerEmpresa, USER_AGENT } from '../src/infra/cnpj/BrasilApiCnpj.js';
 import { AuthEmMemoria } from './apoio/authEmMemoria.js';
 import { FirestoreEmMemoria } from './apoio/firestoreEmMemoria.js';
 
@@ -506,4 +506,32 @@ test('B57-01 B3: POST /loja/email responde 200 com o e-mail livre e 409 com o e-
   } finally {
     servidor.close();
   }
+});
+
+test('B57-01 B4: a consulta da BrasilAPI manda User-Agent proprio (sem ele, a BrasilAPI responde 429)', async () => {
+  const pedidos = [];
+  // Como a BrasilAPI respondeu em 18/11: 429 para o User-Agent padrao do Node, 200 com o do servico.
+  const fetchImpl = async (url, opcoes) => {
+    pedidos.push({ url, opcoes });
+    const agente = opcoes?.headers?.['User-Agent'];
+    if (!agente || agente === 'node') return { ok: false, status: 429, json: async () => ({}) };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ descricao_situacao_cadastral: 'ATIVA', razao_social: 'MERCADO BOM PRECO LTDA', nome_fantasia: 'BOM PRECO', logradouro: 'SETE DE SETEMBRO', municipio: 'VITORIA', uf: 'ES' }),
+    };
+  };
+  const empresa = await new BrasilApiCnpj({ fetchImpl, baseUrl: 'https://receita.teste' }).consultar(CNPJ);
+  assert.equal(pedidos.length, 1);
+  assert.equal(pedidos[0].opcoes.headers['User-Agent'], USER_AGENT);
+  assert.equal(pedidos[0].opcoes.headers.Accept, 'application/json');
+  assert.equal(empresa.encontrado, true);
+  assert.equal(empresa.ativa, true);
+  assert.equal(empresa.nomeFantasia, 'BOM PRECO');
+  // Na conferencia do cadastro, a resposta vira cnpjConferido true com o nome e o endereco.
+  const { cadastro } = montar({ receita: empresa });
+  const conferido = await cadastro.consultarCnpj(CNPJ, { ip: '200.7.7.7' });
+  assert.equal(conferido.cnpjConferido, true);
+  assert.equal(conferido.nomeFantasia, 'BOM PRECO');
+  assert.equal(conferido.endereco.city, 'VITORIA');
 });

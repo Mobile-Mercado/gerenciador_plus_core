@@ -3,6 +3,11 @@
 // a Receita nao conhece o numero, ou null quando a consulta falhou (rede, prazo, servico fora).
 // Quem chama decide: nenhuma das tres bloqueia o cadastro (ordem nova de 16/10/2026).
 const PRAZO_MS = 6000;
+// Cola B57-01, item B4: a BrasilAPI responde 429 ao pedido sem User-Agent proprio (o fetch do
+// Node manda "node"), e a consulta virava "Nao conferido na Receita". Com um User-Agent do
+// servico, responde 200 (conferido em 18/11/2026 com o CNPJ de uma empresa publica, de fora
+// do Cloud Run).
+export const USER_AGENT = 'gerenciador-plus-core/1.0';
 
 export class BrasilApiCnpj {
   constructor({ fetchImpl = globalThis.fetch, baseUrl = 'https://brasilapi.com.br/api/cnpj/v1', prazoMs = PRAZO_MS } = {}) {
@@ -17,7 +22,7 @@ export class BrasilApiCnpj {
     try {
       const resposta = await this.fetch(`${this.baseUrl}/${cnpj}`, {
         signal: controle.signal,
-        headers: { Accept: 'application/json' },
+        headers: { Accept: 'application/json', 'User-Agent': USER_AGENT },
       });
       if (resposta.status === 404) return { encontrado: false };
       if (!resposta.ok) return null;
