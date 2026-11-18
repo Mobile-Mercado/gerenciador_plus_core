@@ -14,13 +14,13 @@ function lojaNoAdmin(dados = {}) {
   return { banco, admin: new LojaNoAdmin({ firestore: banco, auth: new AuthEmMemoria(), accessRepository: null, serverTimestamp: HORA }) };
 }
 
-test('C6: sem o campo, a aparencia devolve nulo e o padrao #E0566E, a cor de hoje do selo no app', async () => {
+test('C6: sem o campo, a aparencia devolve nulo e o padrao #1F9D4E (B57-01b: texto verde do mockup Selo de desconto)', async () => {
   const { admin } = lojaNoAdmin();
   const aparencia = await admin.aparencia('loja-1');
-  assert.equal(DISCOUNT_BADGE_COLOR_PADRAO, '#E0566E');
+  assert.equal(DISCOUNT_BADGE_COLOR_PADRAO, '#1F9D4E');
   assert.equal(aparencia.discountBadgeColor, null);
-  assert.equal(aparencia.discountBadgeColorPadrao, '#E0566E');
-  assert.equal(aparencia.offerColorPadrao, OFFER_COLOR_PADRAO, 'a cor de oferta nao muda');
+  assert.equal(aparencia.discountBadgeColorPadrao, '#1F9D4E');
+  assert.equal(aparencia.offerColorPadrao, OFFER_COLOR_PADRAO);
 });
 
 test('C6: grava em maiuscula, recusa fora de #RRGGBB, e vazio ou nulo apaga o campo (volta ao padrao)', async () => {
@@ -69,4 +69,22 @@ test('C6: o lojista nao grava discountBadgeColor pelo painel; so o Admin, como o
   });
   await assert.rejects(mutar({ discountBadgeColor: '#000000' }), (erro) => erro.code === 'campo_so_admin');
   await assert.rejects(mutar({ offerColor: '#000000' }), (erro) => erro.code === 'campo_so_admin');
+});
+
+// Cola B57-01b (18/11), item C6: padrao do fundo de Ofertas #F5F5F7 (o do app desde 14/11) e a regra
+// do Firestore com o discountBadgeColor entre os campos que so o Admin muda, como o offerColor.
+test('C6 (B57-01b): o padrao da cor de oferta e #F5F5F7, o fundo de Ofertas do app desde 14/11', async () => {
+  assert.equal(OFFER_COLOR_PADRAO, '#F5F5F7');
+  const { admin } = lojaNoAdmin();
+  assert.equal((await admin.aparencia('loja-1')).offerColorPadrao, '#F5F5F7');
+});
+
+test('C6 (B57-01b): firestore.rules poe discountBadgeColor em camposDoAdminIguais, ao lado do offerColor', async () => {
+  const { readFileSync } = await import('node:fs');
+  const regras = readFileSync(new URL('../firestore.rules', import.meta.url), 'utf8');
+  const inicio = regras.indexOf('function camposDoAdminIguais()');
+  const bloco = regras.slice(inicio, regras.indexOf('}', inicio));
+  assert.ok(inicio > 0);
+  assert.ok(bloco.includes("'offerColor'"));
+  assert.ok(bloco.includes("'primaryColor', 'secondaryColor', 'discountBadgeColor'])"));
 });

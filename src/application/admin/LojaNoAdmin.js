@@ -10,10 +10,12 @@ import { quandoIso } from './PedidosDeLoja.js';
 // uma entra no Gerenciador Plus, "Corrigir acesso", edicao com previa, ligar no app Mobile
 // Supermercados (isActive, sempre manual), excluir so loja vazia, aparencia e agendamento.
 const COR = /^#[0-9A-Fa-f]{6}$/;
-export const OFFER_COLOR_PADRAO = '#FFF4D1';
-// Cor do selo "-N%" do card de produto do app (cola B57-01, item C6). Sem o campo, a cor de hoje
-// do app: Color(0xFFE0566E), _red de home_product_card.dart no mobile_cliente.
-export const DISCOUNT_BADGE_COLOR_PADRAO = '#E0566E';
+// Fundo de Ofertas do app desde 14/11 (cola B57-01b, item C6): #F5F5F7, o FUNDO_DE_OFERTAS_PADRAO da
+// web. Antes, #FFF4D1.
+export const OFFER_COLOR_PADRAO = '#F5F5F7';
+// Cor do selo "-N%" do card de produto do app (cola B57-01, item C6). Sem o campo, #1F9D4E, o
+// "texto verde" do mockup "Selo de desconto" aprovado pelo Thay em 18/11 (cola B57-01b, item C6).
+export const DISCOUNT_BADGE_COLOR_PADRAO = '#1F9D4E';
 const CAMPOS_EDITAVEIS = ['name', 'address', 'phone', 'cnpj'];
 const CAMPOS_ENDERECO = ['street', 'number', 'complement', 'neighborhood', 'city', 'uf', 'zipCode'];
 

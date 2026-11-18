@@ -262,6 +262,7 @@ service cloud.firestore {
       // so pelo Core, como o aparenciaHome; o fundo de Ofertas do lojista vai pela rota do Core.
       // Cola B56-24 (A2): os blocos da jornada Primeiro acesso tambem so pelo Core.
       // Cola B56-25 (item 8): as cores da loja (primaryColor e secondaryColor) so pelo Admin.
+      // Cola B57-01b (item C6): a cor do selo de desconto (discountBadgeColor) so pelo Admin, como o offerColor.
       function camposDoAdminIguais() {
         let mudou = request.resource.data.diff(resource.data).affectedKeys();
         return !mudou.hasAny(['isActive', 'status', 'motivoRecusa', 'aprovadoPor', 'aprovadoEm',
@@ -269,7 +270,7 @@ service cloud.firestore {
             'featureFlags', 'aparenciaHome', 'userReference',
             'aparencia', 'ofertas', 'abertura', 'primeiraTela',
             'boasVindas', 'login', 'codigoSms', 'folhaNome', 'folhaEndereco',
-            'primaryColor', 'secondaryColor'])
+            'primaryColor', 'secondaryColor', 'discountBadgeColor'])
           && request.resource.data.get('scheduling', {}).get('contracted', null)
             == resource.data.get('scheduling', {}).get('contracted', null);
       }

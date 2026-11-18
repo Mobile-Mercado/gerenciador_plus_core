@@ -185,7 +185,8 @@ test('aparencia: cor #RRGGBB e offerColor; agendamento contratado e desligar o c
   await assert.rejects(admin.salvarAparencia('loja-1', { offerColor: 'amarelo' }), (erro) => erro.code === 'aparencia_cor_invalida');
   const aparencia = await admin.salvarAparencia('loja-1', { offerColor: '#fff4d1', primaryColor: '#1F22E6' });
   assert.equal(aparencia.offerColor, '#FFF4D1');
-  assert.equal(aparencia.offerColorPadrao, '#FFF4D1');
+  // Cola B57-01b, item C6: o padrao do fundo de Ofertas no app e #F5F5F7 desde 14/11.
+  assert.equal(aparencia.offerColorPadrao, '#F5F5F7');
   const agendamento = await admin.contratarAgendamento('loja-1', false);
   assert.deepEqual({ contracted: agendamento.contracted, enabled: agendamento.enabled }, { contracted: false, enabled: false });
 });

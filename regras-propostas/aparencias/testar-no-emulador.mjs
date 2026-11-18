@@ -10,6 +10,7 @@
 // leitura aberta, ate sem login, e gravacao fechada; o resto de aparenciaPadrao continua fechado.
 // Cola B56-25 (item 8): o lojista tambem nao grava primaryColor nem secondaryColor (so o Admin muda
 // as cores da loja), e aparenciaPadrao/cores (cores das lojas novas) fica fechado.
+// Cola B57-01b (item C6): o lojista tambem nao grava discountBadgeColor (cor do selo de desconto).
 //
 //   npx firebase-tools@15.30.0 emulators:exec --only firestore --project demo-regras \
 //     "node regras-propostas/aparencias/testar-no-emulador.mjs"
@@ -65,7 +66,7 @@ async function semear() {
     abertura: { tipo: 'imagem' },
     primeiraTela: { cor: '#2E4BD6' },
     boasVindas: { titulo: 'Bem-vindo' },
-    primaryColor: '#2E4BD6', secondaryColor: '#1F9D4E',
+    primaryColor: '#2E4BD6', secondaryColor: '#1F9D4E', discountBadgeColor: '#1F9D4E',
     login: { googleLigado: true },
   });
   lote.set(banco.doc('estabelecimentos/loja-1/PermissionGroups/g-admin'), { isAdmin: true, permissions: [] });
@@ -107,6 +108,9 @@ const casos = [
   ['lojista grava as cores com o mesmo valor e o nome (set com merge)', 'passa', () => setDoc(loja(lojista), { name: 'Loja 1 b', primaryColor: '#2E4BD6', secondaryColor: '#1F9D4E' }, { merge: true })],
   ['controle: lojista grava aparenciaHome.topo (ja era so do Admin)', 'recusa', () => updateDoc(loja(lojista), { 'aparenciaHome.topo': 3 })],
   ['controle: lojista grava offerColor (ja era so do Admin)', 'recusa', () => updateDoc(loja(lojista), { offerColor: '#000000' })],
+  ['lojista grava discountBadgeColor', 'recusa', () => updateDoc(loja(lojista), { discountBadgeColor: '#000000' })],
+  ['lojista apaga discountBadgeColor', 'recusa', () => updateDoc(loja(lojista), { discountBadgeColor: null })],
+  ['lojista grava discountBadgeColor com o mesmo valor e o nome (set com merge)', 'passa', () => setDoc(loja(lojista), { name: 'Loja 1 c', discountBadgeColor: '#1F9D4E' }, { merge: true })],
   ['lojista grava o nome, sem tocar em ofertas, abertura e primeiraTela', 'passa', () => updateDoc(loja(lojista), { name: 'Loja 1 nova' })],
   ['lojista grava scheduling.enabled', 'passa', () => updateDoc(loja(lojista), { 'scheduling.enabled': true })],
   ['lojista grava splashImageUrl (o painel grava direto hoje)', 'passa', () => updateDoc(loja(lojista), { splashImageUrl: 'https://x/s.webp' })],
