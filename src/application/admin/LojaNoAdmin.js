@@ -11,6 +11,9 @@ import { quandoIso } from './PedidosDeLoja.js';
 // Supermercados (isActive, sempre manual), excluir so loja vazia, aparencia e agendamento.
 const COR = /^#[0-9A-Fa-f]{6}$/;
 export const OFFER_COLOR_PADRAO = '#FFF4D1';
+// Cor do selo "-N%" do card de produto do app (cola B57-01, item C6). Sem o campo, a cor de hoje
+// do app: Color(0xFFE0566E), _red de home_product_card.dart no mobile_cliente.
+export const DISCOUNT_BADGE_COLOR_PADRAO = '#E0566E';
 const CAMPOS_EDITAVEIS = ['name', 'address', 'phone', 'cnpj'];
 const CAMPOS_ENDERECO = ['street', 'number', 'complement', 'neighborhood', 'city', 'uf', 'zipCode'];
 
@@ -412,7 +415,7 @@ export class LojaNoAdmin {
     return { ...previa, excluida: true, documento };
   }
 
-  // ===== Aparencia (so campos que o app ja le, mais offerColor) =====
+  // ===== Aparencia (so campos que o app ja le, mais offerColor e discountBadgeColor) =====
 
   async aparencia(lojaId) {
     const data = (await this.loja(lojaId)).data() || {};
@@ -422,6 +425,8 @@ export class LojaNoAdmin {
       secondaryColor: data.secondaryColor || null,
       offerColor: data.offerColor || null,
       offerColorPadrao: OFFER_COLOR_PADRAO,
+      discountBadgeColor: data.discountBadgeColor || null,
+      discountBadgeColorPadrao: DISCOUNT_BADGE_COLOR_PADRAO,
       slogan: data.slogan || null,
       chatProfileImageUrl: data.chatProfileImageUrl || null,
       coverImageUrl: data.coverImageUrl || null,
@@ -433,7 +438,7 @@ export class LojaNoAdmin {
   async salvarAparencia(lojaId, entrada = {}) {
     const loja = await this.loja(lojaId);
     const atualizacao = {};
-    ['primaryColor', 'secondaryColor', 'offerColor'].forEach((campo) => {
+    ['primaryColor', 'secondaryColor', 'offerColor', 'discountBadgeColor'].forEach((campo) => {
       if (entrada[campo] === undefined) return;
       if (entrada[campo] === null || entrada[campo] === '') {
         atualizacao[campo] = FieldValue.delete();
