@@ -487,7 +487,6 @@ service cloud.firestore {
           && request.resource.data.companyId == estabId
           && request.resource.data.read == false
           && request.resource.data.text is string
-          && request.resource.data.text.size() >= 30
           && request.resource.data.text.size() <= 500
           && request.resource.data.userId is string
           && request.resource.data.userId.size() > 0
