@@ -460,3 +460,50 @@ test('C3.2 (temporario): registro do X-Forwarded-For so com quantidade e posicoe
   ]);
   assert.equal(JSON.stringify(registros).includes('203.0.113.7'), false);
 });
+
+test('B57-01 B3: o passo 1 confere o e-mail com a recusa da criacao e os mesmos limites', async () => {
+  const { cadastro } = montar({ contas: [{ uid: 'dono-1', email: 'ana@bompreco.com.br' }] });
+  assert.deepEqual(await cadastro.conferirEmail(' Outra@BomPreco.com.br ', { ip: '200.5.5.5' }), { emailLivre: true });
+  await assert.rejects(
+    cadastro.conferirEmail('ANA@bompreco.com.br', { ip: '200.5.5.5' }),
+    (erro) => erro.code === 'cadastro_email_em_uso' && erro.statusCode === 409 && erro.details.campo === 'email',
+  );
+  await recusa(cadastro.conferirEmail('nao-e-email', { ip: '200.5.5.5' }), 'cadastro_email_invalido');
+  // Conta no limite por IP da criacao (5 por dia): a 6a tentativa do mesmo IP e recusada.
+  for (let tentativa = 0; tentativa < 3; tentativa += 1) {
+    await cadastro.conferirEmail(`livre${tentativa}@bompreco.com.br`, { ip: '200.5.5.5' });
+  }
+  await recusa(cadastro.conferirEmail('mais@bompreco.com.br', { ip: '200.5.5.5' }), 'cadastro_tentativas_excedidas');
+});
+
+test('B57-01 B3: POST /loja/email responde 200 com o e-mail livre e 409 com o e-mail que tem conta', async () => {
+  const { default: express } = await import('express');
+  const { createCadastroRoutes } = await import('../src/http/routes/cadastroRoutes.js');
+  const { createAppCheckMiddleware } = await import('../src/http/middlewares/appCheck.js');
+  const { errorHandler } = await import('../src/http/middlewares/errorHandler.js');
+  const { cadastro } = montar({ contas: [{ uid: 'dono-1', email: 'ana@bompreco.com.br' }] });
+  const app = express();
+  app.use(express.json());
+  app.use('/api/cadastro', createCadastroRoutes({
+    cadastroDeLoja: cadastro,
+    appCheck: createAppCheckMiddleware({ exigir: false, verificar: async () => {} }),
+    exigirLogin: (_request, _response, next) => next(),
+    registrar: () => {},
+  }));
+  app.use(errorHandler);
+  const servidor = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
+  const base = `http://127.0.0.1:${servidor.address().port}/api/cadastro`;
+  const conferir = (email) => fetch(`${base}/loja/email`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+  try {
+    const livre = await conferir('outra@bompreco.com.br');
+    assert.equal(livre.status, 200);
+    assert.deepEqual(await livre.json(), { data: { emailLivre: true } });
+    const usado = await conferir('ana@bompreco.com.br');
+    assert.equal(usado.status, 409);
+    assert.deepEqual(await usado.json(), {
+      error: { code: 'cadastro_email_em_uso', message: 'Este e-mail já tem cadastro. Entre com ele.', details: { campo: 'email' } },
+    });
+  } finally {
+    servidor.close();
+  }
+});

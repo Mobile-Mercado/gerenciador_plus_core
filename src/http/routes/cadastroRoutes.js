@@ -40,6 +40,7 @@ const pedidoSchema = z.object({
   senha: z.string().max(200),
 });
 const cnpjSchema = z.object({ cnpj: z.string().max(32) });
+const emailSchema = z.object({ email: z.string().max(320) });
 const tipoSchema = z.object({ tipo: z.enum(['logo', 'fachada']) });
 // Jornada do cadastro: eventos sem dado pessoal e rascunhos de cada passo (nunca com senha).
 const horaSchema = z.union([z.string().max(40), z.number()]).nullish();
@@ -79,6 +80,12 @@ export function createCadastroRoutes({
   router.post('/loja/cnpj', appCheck, asyncHandler(async (request, response) => {
     const { cnpj } = cnpjSchema.parse(request.body);
     response.json({ data: await cadastroDeLoja.consultarCnpj(cnpj, { ip: origemDaRequisicao(request) }) });
+  }));
+
+  // Cola B57-01, item B3: o passo 1 confere o e-mail (409 cadastro_email_em_uso, como na criacao).
+  router.post('/loja/email', appCheck, asyncHandler(async (request, response) => {
+    const { email } = emailSchema.parse(request.body);
+    response.json({ data: await cadastroDeLoja.conferirEmail(email, { ip: origemDaRequisicao(request) }) });
   }));
 
   router.post('/loja', appCheck, asyncHandler(async (request, response) => {
