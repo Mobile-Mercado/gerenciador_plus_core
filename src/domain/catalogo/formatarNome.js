@@ -4,7 +4,8 @@
 // - abre P/ em "para", C/ em "com" e S/ em "sem";
 // - siglas da lista em maiusculas;
 // - conectivos em minusculo, menos na primeira palavra;
-// - unidade de medida em minusculo (500 ml, 1l, un);
+// - unidade de medida em minusculo (500 ml, un), menos o litro, em maiusculo (2L, 1 L),
+//   pela cola do Thay B57-01 (18/11), item A12;
 // - primeira letra de cada palavra em maiuscula e o resto em minusculo;
 // - palavra nova depois de "/" e de "-";
 // - nao poe nem tira acento.
@@ -28,14 +29,20 @@ function capitalizar(parte) {
   return minusculo.charAt(0).toLocaleUpperCase('pt-BR') + minusculo.slice(1);
 }
 
+// So o litro fica em maiusculo; g, kg, ml e as outras unidades ficam em minusculo.
+function unidade(texto) {
+  const minusculo = texto.toLowerCase();
+  return minusculo === 'l' ? 'L' : minusculo;
+}
+
 function formatarParte(parte, { primeira, anteriorNumero }) {
   if (!parte) return parte;
   const maiusculo = parte.toLocaleUpperCase('pt-BR');
   if (SIGLAS.has(maiusculo)) return maiusculo;
   const comUnidade = parte.match(NUMERO_COM_UNIDADE);
-  if (comUnidade) return `${comUnidade[1]}${comUnidade[2].toLowerCase()}`;
+  if (comUnidade) return `${comUnidade[1]}${unidade(comUnidade[2])}`;
   const minusculo = parte.toLocaleLowerCase('pt-BR');
-  if (UNIDADES.has(minusculo) && (anteriorNumero || minusculo === 'un')) return minusculo;
+  if (UNIDADES.has(minusculo) && (anteriorNumero || minusculo === 'un')) return unidade(minusculo);
   if (!primeira && CONECTIVOS.has(minusculo)) return minusculo;
   return capitalizar(parte);
 }
