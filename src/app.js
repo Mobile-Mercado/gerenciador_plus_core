@@ -74,6 +74,7 @@ export function createApp({
   bannersDaLoja,
   instalacoesDosApps,
   maisVendidosDaLoja = null,
+  alertasDoAdmin = null,
 }) {
   const app = express();
   // Barreira de escrita por chave de permissao, com cache por token.
@@ -260,6 +261,7 @@ export function createApp({
       aparenciaDaLoja,
       aparenciaDaHome,
       bannersNoAdmin,
+      alertasDoAdmin,
     }),
   );
 

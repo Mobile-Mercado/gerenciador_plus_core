@@ -53,6 +53,8 @@ import { BrasilApiCnpj } from './infra/cnpj/BrasilApiCnpj.js';
 import { FieldValue } from 'firebase-admin/firestore';
 import { InstalacoesDosApps } from './application/admin/InstalacoesDosApps.js';
 import { MaisVendidosDaLoja } from './application/app/MaisVendidosDaLoja.js';
+import { AlertasDoAdmin } from './application/admin/AlertasDoAdmin.js';
+import { conferenciasDoChecklist } from './application/admin/ConferenciasDoChecklist.js';
 import { criarFontesDeInstalacoes } from './infra/relatorios/fontesDeInstalacoes.js';
 import { createAdminAuditMiddleware } from './http/middlewares/adminAudit.js';
 import { createAiGateway } from './infra/ai/createAiGateway.js';
@@ -171,6 +173,8 @@ const app = createApp({
   // Tela Instalacoes do Admin: leitura dos Stats/instalacoesApp e o "Atualizar agora".
   // Cola B57-03c, item 5: mais vendidos da loja nos ultimos 30 dias, para o app usuario.
   maisVendidosDaLoja: new MaisVendidosDaLoja({ firestore }),
+  // Cola B57-03c, item 8: aba Alertas do Admin, com as conferencias dos itens 3, 6 e 14.
+  alertasDoAdmin: new AlertasDoAdmin({ firestore, conferencias: conferenciasDoChecklist({ firestore }) }),
   instalacoesDosApps: new InstalacoesDosApps({
     firestore,
     FieldValue,
