@@ -1,11 +1,17 @@
 // Conferencias automaticas da aba "Alertas" do Admin, nesta rodada so os itens 3, 6 e 14 do
 // checklist de funcionamento (cola do Thay B57-03c, item 8). Todas so leem e nenhuma pede
-// permissao nova, chave ou custo: o registro de tentativas de login (LoginAttempts) e os pedidos
+// permissao nova, chave ou custo: o registro de tentativas de login (pela leitura de
+// functions/tentativasDeLogin.js, o unico arquivo que toca nele, regra RP-175) e os pedidos
 // (PurchaseRequests), que o Core ja le, e uma chamada aos tres sites.
 //
 // Os limites que abrem cada alerta ficam aqui, com nome, para o Thay confirmar (relatorio B57-03c).
 
+import tentativasDeLoginModulo from '../../../functions/tentativasDeLogin.js';
+
+const { carregarRegistrosEntre } = tentativasDeLoginModulo;
 const HORA_MS = 60 * 60 * 1000;
+// Folga do relogio do aparelho, como o registro aceita (5 minutos).
+const FOLGA_DO_RELOGIO_MS = 5 * 60 * 1000;
 
 // ---- Item 3: tentativas de login que falharam ----
 
@@ -35,7 +41,8 @@ function maisComum(contagem) {
 export function conferenciaDosLogins({ firestore }) {
   return async ({ agora }) => {
     const desde = new Date(agora.getTime() - JANELA_DOS_LOGINS_MS);
-    const registros = (await firestore.collection('LoginAttempts').where('em', '>=', desde).get()).docs.map((doc) => doc.data() || {});
+    const fim = new Date(agora.getTime() + FOLGA_DO_RELOGIO_MS);
+    const registros = (await carregarRegistrosEntre({ db: firestore, inicio: desde, fim })).map((dados) => dados || {});
     const tentativas = new Map();
     registros.forEach((registro) => {
       if (!registro.tentativa) return;
