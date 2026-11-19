@@ -473,6 +473,22 @@ service cloud.firestore {
         allow write: if false;
       }
 
+      // Registro das acoes da equipe (cola do Thay B57-02, 18/11, item A8). O Gerenciador web
+      // grava pelo servidor (Admin SDK, que ignora estas regras); o App Gerenciador grava
+      // direto, so criando, com origem 'app', a hora do servidor e os campos do formato do web
+      // (registrarAcao.js) mais a versao do app e o aparelho. Ninguem muda nem apaga.
+      match /AcoesEquipe/{acaoId} {
+        allow read: if isAdminOf(estabId);
+        allow create: if isAdminOf(estabId)
+          && request.resource.data.keys().hasOnly(['em', 'quem', 'tela', 'acao', 'alvo', 'antes',
+            'depois', 'origem', 'versaoDoApp', 'aparelho'])
+          && request.resource.data.origem == 'app'
+          && request.resource.data.em == request.time
+          && request.resource.data.acao is string
+          && request.resource.data.tela is string;
+        allow update, delete: if false;
+      }
+
       // Sugestões de melhoria enviadas pelo cliente na tela Ajustes do app.
       // Só cria, com os campos que o app grava (suggestion_document.dart) e o autor
       // sendo quem chama: userId é o id do documento Users do cliente (não o uid), então
