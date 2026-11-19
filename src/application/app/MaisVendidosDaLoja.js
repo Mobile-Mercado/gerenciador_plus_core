@@ -14,7 +14,8 @@ const { contribuicaoDoPedido } = resumoVendasModulo;
 // menos; o app le os produtos como ja le os outros e, sem dados, mostra os Destaques do dia.
 // So le: nada e gravado.
 export const DIAS_DOS_MAIS_VENDIDOS = 30;
-export const LIMITE_DOS_MAIS_VENDIDOS = 20;
+// Ate os 50 mais vendidos (cola B57-03d, item 6).
+export const LIMITE_DOS_MAIS_VENDIDOS = 50;
 
 const LOJA_VALIDA = /^[A-Za-z0-9_-]{1,128}$/;
 const DIA_EM_MS = 24 * 60 * 60 * 1000;

@@ -69,11 +69,12 @@ test(`C1: no maximo ${LIMITE_DOS_MAIS_VENDIDOS} produtos; empate pelo id; loja i
       companyReference: loja('loja-a'),
       currentPurchaseStatus: 'completed',
       createdAt: diasAtras(1),
-      productsCart: Array.from({ length: 25 }, (_, i) => item(`prod-${String(i).padStart(2, '0')}`, 1)),
+      productsCart: Array.from({ length: 55 }, (_, i) => item(`prod-${String(i).padStart(2, '0')}`, 1)),
     },
   }));
   const { produtos } = await mais.listar('loja-a');
   assert.equal(produtos.length, LIMITE_DOS_MAIS_VENDIDOS);
+  assert.equal(LIMITE_DOS_MAIS_VENDIDOS, 50);
   assert.equal(produtos[0].produtoId, 'prod-00');
   await assert.rejects(mais.listar('../x'), (erro) => erro.statusCode === 404 && erro.code === 'loja_nao_encontrada');
 });
