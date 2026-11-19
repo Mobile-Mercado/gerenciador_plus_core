@@ -52,6 +52,7 @@ import { registrarAcaoDoAdmin } from './infra/firebase/registroDoAdmin.js';
 import { BrasilApiCnpj } from './infra/cnpj/BrasilApiCnpj.js';
 import { FieldValue } from 'firebase-admin/firestore';
 import { InstalacoesDosApps } from './application/admin/InstalacoesDosApps.js';
+import { MaisVendidosDaLoja } from './application/app/MaisVendidosDaLoja.js';
 import { criarFontesDeInstalacoes } from './infra/relatorios/fontesDeInstalacoes.js';
 import { createAdminAuditMiddleware } from './http/middlewares/adminAudit.js';
 import { createAiGateway } from './infra/ai/createAiGateway.js';
@@ -168,6 +169,8 @@ const app = createApp({
   adminAuditMiddleware: createAdminAuditMiddleware({ firestore }),
   sugestoesDosClientes: new SugestoesDosClientes({ firestore }),
   // Tela Instalacoes do Admin: leitura dos Stats/instalacoesApp e o "Atualizar agora".
+  // Cola B57-03c, item 5: mais vendidos da loja nos ultimos 30 dias, para o app usuario.
+  maisVendidosDaLoja: new MaisVendidosDaLoja({ firestore }),
   instalacoesDosApps: new InstalacoesDosApps({
     firestore,
     FieldValue,

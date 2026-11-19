@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import { env } from './config/env.js';
 import { createAdminRoutes } from './http/routes/adminRoutes.js';
 import { createAiRoutes } from './http/routes/aiRoutes.js';
+import { createAppUsuarioRoutes } from './http/routes/appUsuarioRoutes.js';
 import { createAppDoClienteDaLojaRoutes } from './http/routes/appDoClienteDaLojaRoutes.js';
 import { createAparenciaDaLojaRoutes } from './http/routes/aparenciaDaLojaRoutes.js';
 import { createBannersDaLojaRoutes } from './http/routes/bannersDaLojaRoutes.js';
@@ -72,6 +73,7 @@ export function createApp({
   registrarAcaoDoAdmin,
   bannersDaLoja,
   instalacoesDosApps,
+  maisVendidosDaLoja = null,
 }) {
   const app = express();
   // Barreira de escrita por chave de permissao, com cache por token.
@@ -120,6 +122,16 @@ export function createApp({
     appCheck: createAppCheckMiddleware({ exigir: env.CADASTRO_EXIGE_APP_CHECK, verificar: verificarAppCheck }),
     exigirLogin: createFirebaseAuthMiddleware({ required: true }),
   }));
+  // App usuario (cola B57-03c, item 5): os mais vendidos da loja, com o login do app (inclusive o
+  // anonimo) e o App Check quando ligado. So leitura.
+  if (maisVendidosDaLoja) {
+    app.use(
+      '/api/app',
+      createAppCheckMiddleware({ exigir: env.APP_USUARIO_EXIGE_APP_CHECK, verificar: verificarAppCheck }),
+      createFirebaseAuthMiddleware({ required: true }),
+      createAppUsuarioRoutes({ maisVendidosDaLoja }),
+    );
+  }
   app.use(
     '/api/session',
     createFirebaseAuthMiddleware({ required: true }),

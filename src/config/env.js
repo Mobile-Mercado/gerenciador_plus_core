@@ -72,6 +72,8 @@ export const env = Object.freeze({
   FIRESTORE_PROJECT_ID: process.env.FIRESTORE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || 'appmobileprod-19505',
   // Cadastro de loja: App Check preparado e desligado ate o app gerenciador mandar o token.
   CADASTRO_EXIGE_APP_CHECK: toBoolean(process.env.CADASTRO_EXIGE_APP_CHECK, false),
+  // Rotas do app usuario (cola B57-03c, item 5): App Check preparado e desligado, como o cadastro.
+  APP_USUARIO_EXIGE_APP_CHECK: toBoolean(process.env.APP_USUARIO_EXIGE_APP_CHECK, false),
   // "Atualizar agora" da tela Instalacoes do Admin: os mesmos parametros da rotina instalacoesAppNightly
   // (functions/.env.appmobileprod-19505), a conta de servico que le os relatorios e o nome do segredo
   // da chave da Apple no Secret Manager. A chave nunca fica aqui.
