@@ -40,6 +40,11 @@ const pedidoSchema = z.object({
   senha: z.string().max(200),
 });
 const cnpjSchema = z.object({ cnpj: z.string().max(32) });
+const celularConfirmadoSchema = z.object({
+  instalacaoId: z.string().min(1).max(120),
+  celular: z.string().max(32),
+  idToken: z.string().min(1).max(4096),
+});
 const emailSchema = z.object({ email: z.string().max(320) });
 const tipoSchema = z.object({ tipo: z.enum(['logo', 'fachada']) });
 // Jornada do cadastro: eventos sem dado pessoal e rascunhos de cada passo (nunca com senha).
@@ -86,6 +91,12 @@ export function createCadastroRoutes({
   router.post('/loja/email', appCheck, asyncHandler(async (request, response) => {
     const { email } = emailSchema.parse(request.body);
     response.json({ data: await cadastroDeLoja.conferirEmail(email, { ip: origemDaRequisicao(request) }) });
+  }));
+
+  // Cola B57-03, A1: "Confirmar celular", antes do CNPJ (sem login, com App Check).
+  router.post('/celular/confirmado', appCheck, asyncHandler(async (request, response) => {
+    const confirmacao = celularConfirmadoSchema.parse(request.body);
+    response.json({ data: await cadastroDeLoja.confirmarCelular(confirmacao) });
   }));
 
   router.post('/loja', appCheck, asyncHandler(async (request, response) => {
