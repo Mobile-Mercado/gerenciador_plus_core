@@ -178,7 +178,7 @@ export function createApp({
   app.use(
     '/api/loja/banners',
     createFirebaseAuthMiddleware({ required: true }),
-    createBannersDaLojaRoutes({ bannersDaLoja, requirePermission, accountForRequest }),
+    createBannersDaLojaRoutes({ bannersDaLoja, bannersPorTipo: bannersNoAdmin, requirePermission, accountForRequest }),
   );
   // Entregadores com o celular, que so o Core le e grava (entregadoresPrivado).
   app.use(
@@ -208,7 +208,7 @@ export function createApp({
   app.use(
     '/api/loja/app-do-cliente',
     createFirebaseAuthMiddleware({ required: true }),
-    createAppDoClienteDaLojaRoutes({ appDoClienteDaLoja, requirePermission, accountForRequest }),
+    createAppDoClienteDaLojaRoutes({ appDoClienteDaLoja, aparenciaDaHome, conjuntosDeIcones, requirePermission, accountForRequest }),
   );
   // Fundo de Ofertas pela propria loja, so quando o Admin libera (cola B56-04, item 3.4).
   if (aparenciaDaLoja) {

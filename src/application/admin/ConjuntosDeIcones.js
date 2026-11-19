@@ -211,6 +211,28 @@ export class ConjuntosDeIcones {
     return { lojaId: loja.id, conjuntoIcones: conjuntoDaLoja(loja.data() || {}) };
   }
 
+  // Cola B57-07, item 9 (previa da tela Loja): os icones das categorias que o app mostra, como o
+  // celular do Admin (colecaoDaLoja e iconeDaCategoria do painel): a colecao escolhida pela loja e,
+  // sem escolha (ou com "lineares"), a colecao padrao. Sem nenhuma, vazio. { [categoriaId]: url }.
+  async iconesDaLoja(lojaId) {
+    const loja = await this.lojas().doc(String(lojaId || '')).get();
+    if (!loja.exists) throw recusa('Loja não encontrada.', 'loja_nao_encontrada', 404);
+    const escolhida = conjuntoDaLoja(loja.data() || {});
+    let documento = null;
+    if (escolhida !== CONJUNTO_LINEARES.id && ID_SEGURO.test(escolhida)) {
+      const lido = await this.colecao().doc(escolhida).get();
+      if (lido.exists) documento = lido;
+    }
+    if (!documento) {
+      const padrao = await this.colecao().where('padrao', '==', true).limit(1).get();
+      documento = padrao.docs[0] || null;
+    }
+    const icones = documento ? (documento.data()?.icones || {}) : {};
+    return Object.fromEntries(Object.entries(icones)
+      .filter(([, icone]) => typeof icone?.url === 'string' && icone.url.trim())
+      .map(([categoriaId, icone]) => [categoriaId, icone.url]));
+  }
+
   // Conjunto da loja. null ou "lineares" apaga o campo: a loja fica sem escolha e usa a colecao
   // padrao (cola B56-17).
   async escolherDaLoja(lojaId, conjuntoId) {

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from '../../domain/errors/AppError.js';
-import { camposDoBanner, documentoRest, medirImagem } from '../loja/BannersDaLoja.js';
+import { camposDoBanner, decimal, documentoRest, inteiro, medirImagem, referencia } from '../loja/BannersDaLoja.js';
 import situacaoDoBannerModulo from '../../../functions/situacaoDoBanner.js';
 
 const { situacaoDoBanner } = situacaoDoBannerModulo;
@@ -33,6 +33,55 @@ const data = (valor) => {
   const quando = typeof valor?.toDate === 'function' ? valor.toDate() : (valor ? new Date(valor) : null);
   return quando && !Number.isNaN(quando.getTime()) ? quando : null;
 };
+
+// "Leva para" (cola B57-07, item 6): nada, os produtos (products) ou a categoria (category) do banner,
+// como o app gerenciador grava (BannerProductAdapter e BannerCategoryAdapter do mobile_core) e o app do
+// cliente le (main_variant_1_page.dart:229-236).
+export const MAXIMO_DE_PRODUTOS_DO_BANNER = 100;
+export function destinoDoBanner(banner) {
+  const produtos = Array.isArray(banner.products) ? banner.products : [];
+  if (produtos.length) return { tipo: 'produtos', quantos: produtos.length, ids: produtos.map((produto) => String(produto?.id || '')).filter(Boolean) };
+  if (banner.category && typeof banner.category === 'object') {
+    return { tipo: 'categoria', id: String(banner.category.id || ''), nome: String(banner.category.name || '') };
+  }
+  return { tipo: 'nada' };
+}
+
+// O produto como o app le (BannerProductAdapter.fromMap): name e barCode textos, itemPrice e
+// previewPrice decimais, images com fileName texto e itsFromPlatform booleano. Campo faltando vira o
+// vazio do tipo: um campo nulo onde o app espera texto derruba a lista de banners da loja.
+const texto = (valor) => (typeof valor === 'string' ? valor : (valor === null || valor === undefined ? '' : String(valor)));
+const numero = (valor) => (Number.isFinite(Number(valor)) ? Number(valor) : 0);
+export function produtoDoBanner(lojaId, id, produto) {
+  const preco = numero(produto.currentPrice ?? produto.price);
+  return {
+    id,
+    name: texto(produto.name),
+    barCode: texto(produto.barCode),
+    reference: referencia(`estabelecimentos/${lojaId}/Products/${id}`),
+    companyRef: referencia(`estabelecimentos/${lojaId}`),
+    images: (Array.isArray(produto.images) ? produto.images : []).filter((imagem) => imagem && typeof imagem === 'object').map((imagem) => ({
+      fileName: texto(imagem.fileName),
+      fileUrl: typeof imagem.fileUrl === 'string' ? imagem.fileUrl : null,
+      folderPath: typeof imagem.folderPath === 'string' ? imagem.folderPath : 'produtosMobile',
+      quality: Number.isFinite(Number(imagem.quality)) && imagem.quality !== null ? inteiro(imagem.quality) : null,
+      itsFromPlatform: imagem.itsFromPlatform === true,
+      reference: typeof imagem.reference === 'string' ? imagem.reference : null,
+    })),
+    externalId: typeof produto.externalId === 'string' ? produto.externalId : null,
+    itemPrice: decimal(preco),
+    previewPrice: decimal(numero(produto.previewPrice ?? preco) || preco),
+  };
+}
+
+export function categoriaDoBanner(lojaId, id, categoria) {
+  return {
+    id,
+    name: texto(categoria.name),
+    reference: referencia(`estabelecimentos/${lojaId}/ProductCategories/${id}`),
+    icon: texto(categoria.icon),
+  };
+}
 
 // Conta para o limite: ligado (ou aguardando o inicio) e ainda nao encerrado.
 export function ocupaVaga(banner, agora) {
@@ -90,6 +139,7 @@ export class BannersNoAdmin {
       contador: banner.showTimer === true,
       situacao: situacaoDoBanner(banner, agora),
       ocupaVaga: ocupaVaga(banner, agora),
+      levaPara: destinoDoBanner(banner),
     };
   }
 
@@ -139,21 +189,25 @@ export class BannersNoAdmin {
     return atual;
   }
 
-  // B5.a e B5.b: banner novo de um tipo, dentro do limite do tipo.
-  async criar(lojaId, tipo, conteudo, tipoArquivo, { inicio, fim }) {
+  // B5.a e B5.b: banner novo de um tipo, dentro do limite do tipo. Cola B57-07 (tela Loja): com
+  // `noLimite: 'desligar'`, o tipo no limite nao recusa; o banner nasce desligado ("Criar novo" fica
+  // sempre a vista e o limite so bloqueia o "Ligado").
+  async criar(lojaId, tipo, conteudo, tipoArquivo, { inicio, fim }, { noLimite = 'recusar' } = {}) {
     const loja = await this.loja(lojaId);
     const regra = this.tipoValido(tipo);
     const datas = this.periodo({ inicio, fim });
     const agora = this.agora();
     const existentes = (await loja.ref.collection('Banners').get()).docs.map((documento) => documento.data() || {});
     const ocupados = existentes.filter((banner) => (banner.type || 'principal') === tipo && ocupaVaga(banner, agora)).length;
-    if (ocupados >= regra.limite) {
+    const noLimiteDoTipo = ocupados >= regra.limite;
+    if (noLimiteDoTipo && noLimite !== 'desligar') {
       throw recusa(`Este tipo já tem ${ocupados} de ${regra.limite} banners. Apague ou desligue um antes de enviar outro.`, 'banner_limite', 409, { ocupados, limite: regra.limite });
     }
     const imagem = await this.conferirImagem(tipo, conteudo, tipoArquivo);
     const gravado = await this.gravarImagem(loja.id, conteudo, imagem);
     const id = this.novoId();
-    const ligacao = datas.inicio.getTime() > agora ? AGUARDANDO : null;
+    let ligacao = datas.inicio.getTime() > agora ? AGUARDANDO : null;
+    if (noLimiteDoTipo) ligacao = DESLIGADO;
     const campos = {
       ...camposDoBanner({ id, ...gravado, largura: imagem.largura, altura: imagem.altura, ...datas, tipo, products: [], novo: true, ligacao }),
       category: null,
@@ -224,6 +278,36 @@ export class BannersNoAdmin {
     if (!Object.keys(campos).length) throw recusa('Nada para gravar.', 'banner_sem_mudancas');
     await this.rest.gravar(this.caminho(lojaId, bannerId), documentoRest(campos), { mascara: Object.keys(campos) });
     return { banner: await this.ler(lojaId, bannerId), antes, campos: Object.keys(campos) };
+  }
+
+  // Cola B57-07, item 6: "Leva para". `levaPara`: { tipo: 'nada' }, { tipo: 'produtos', ids } (so
+  // produtos desta loja, lidos do banco) ou { tipo: 'categoria', id } (categoria desta loja). Grava
+  // products e category juntos: um apaga o outro, como no app gerenciador.
+  async mudarDestino(lojaId, bannerId, levaPara = {}) {
+    const atual = await this.banner(lojaId, bannerId);
+    const dados = atual.data() || {};
+    const loja = this.firestore.collection('estabelecimentos').doc(lojaId);
+    let products = [];
+    let category = null;
+    if (levaPara.tipo === 'produtos') {
+      const ids = [...new Set((levaPara.ids || []).map(String).filter((id) => /^[^/]{1,120}$/.test(id)))];
+      if (!ids.length) throw recusa('Escolha pelo menos um produto.', 'banner_sem_produtos');
+      if (ids.length > MAXIMO_DE_PRODUTOS_DO_BANNER) throw recusa(`Escolha até ${MAXIMO_DE_PRODUTOS_DO_BANNER} produtos.`, 'banner_produtos_demais');
+      const lidos = await Promise.all(ids.map((id) => loja.collection('Products').doc(id).get()));
+      const faltando = lidos.filter((produto) => !produto.exists).map((produto) => produto.id);
+      if (faltando.length) throw recusa('Produto não encontrado nesta loja.', 'banner_produto_nao_encontrado', 404, { ids: faltando });
+      products = lidos.map((produto) => produtoDoBanner(lojaId, produto.id, produto.data() || {}));
+    } else if (levaPara.tipo === 'categoria') {
+      const id = String(levaPara.id || '');
+      if (!/^[^/]{1,120}$/.test(id)) throw recusa('Categoria não encontrada nesta loja.', 'banner_categoria_nao_encontrada', 404);
+      const lida = await loja.collection('ProductCategories').doc(id).get();
+      if (!lida.exists) throw recusa('Categoria não encontrada nesta loja.', 'banner_categoria_nao_encontrada', 404);
+      category = categoriaDoBanner(lojaId, lida.id, lida.data() || {});
+    } else if (levaPara.tipo !== 'nada') {
+      throw recusa('Escolha para onde o banner leva.', 'banner_destino_invalido');
+    }
+    await this.rest.gravar(this.caminho(lojaId, bannerId), documentoRest({ products, category }, this.rest.projectId), { mascara: ['products', 'category'] });
+    return { banner: await this.ler(lojaId, bannerId), antes: { levaPara: destinoDoBanner(dados) } };
   }
 
   // Apaga o documento e o arquivo.
