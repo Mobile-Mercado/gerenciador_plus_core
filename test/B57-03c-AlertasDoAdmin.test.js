@@ -124,8 +124,10 @@ test('D2, item 3: abre com 5 ou mais tentativas falhando e metade ou mais; cance
   const resultado = await conferenciaDosLogins({ firestore: banco })({ agora: AGORA });
   assert.equal(resultado.ok, false);
   assert.equal(resultado.alertas[0].titulo, 'SMS do login falhando');
-  assert.equal(resultado.alertas[0].texto, '5 de 8 tentativas de entrar falharam na última hora. Motivo mais comum: billing-not-enabled.');
+  assert.equal(resultado.alertas[0].texto, '5 de 8 tentativas de entrar falharam na última hora. Motivo mais comum: cobrança do Firebase desativada.');
   assert.deepEqual(resultado.alertas[0].alcance, { tipo: 'todas' });
+
+  assert.deepEqual(resultado.alertas[0].detalhes, ['cobrança do Firebase desativada: 5']);
 
   const poucas = new FirestoreEmMemoria(Object.fromEntries(Object.entries(registros).filter(([caminho]) => !/r[45]-/.test(caminho))));
   assert.equal((await conferenciaDosLogins({ firestore: poucas })({ agora: AGORA })).ok, true, '3 falhas so');
@@ -208,4 +210,19 @@ test('D1: rotas /api/admin/alertas atras da barreira de admin', async () => {
   } finally {
     servidor.close();
   }
+});
+
+test('B57-03d, item 2: motivo do login em portugues nos codigos conhecidos; o desconhecido sai como veio', async () => {
+  const { motivoDoLogin, MOTIVOS_DO_LOGIN } = await import('../src/application/admin/ConferenciasDoChecklist.js');
+  assert.equal(motivoDoLogin('quota-exceeded'), 'cota de SMS do Firebase esgotada');
+  assert.equal(motivoDoLogin('google/usermismatch'), 'conta do Google diferente da escolhida');
+  assert.equal(motivoDoLogin('plataforma/erro-novo'), 'plataforma/erro-novo');
+  assert.ok(Object.keys(MOTIVOS_DO_LOGIN).every((codigo) => codigo === codigo.toLowerCase()), 'como o app grava');
+
+  const registros = {};
+  for (let i = 0; i < 5; i += 1) registros[`LoginAttempts/r${i}`] = { tentativa: `t${i}`, metodo: 'google', etapa: 'falhou', erro: 'google/erro-novo', em: antes(5) };
+  const banco = new FirestoreEmMemoria(registros);
+  const resultado = await conferenciaDosLogins({ firestore: banco })({ agora: AGORA });
+  assert.equal(resultado.alertas[0].titulo, 'Login por Google falhando');
+  assert.equal(resultado.alertas[0].texto, '5 de 5 tentativas de entrar falharam na última hora. Motivo mais comum: google/erro-novo.');
 });

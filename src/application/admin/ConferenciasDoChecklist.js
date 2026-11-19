@@ -21,6 +21,50 @@ export const JANELA_DOS_LOGINS_MS = HORA_MS;
 export const MINIMO_DE_LOGINS_QUE_FALHARAM = 5;
 export const PARTE_DE_LOGINS_QUE_FALHARAM = 0.5;
 
+// Motivo em portugues de cada codigo conhecido (cola B57-03d, item 2; textos para aprovacao no
+// relatorio). Codigo desconhecido aparece como veio. Os codigos sao os do Firebase Auth e os do
+// Google e da Apple que o app grava, em minusculas (loginErrorCode do mobile_core).
+export const MOTIVOS_DO_LOGIN = Object.freeze({
+  'billing-not-enabled': 'cobrança do Firebase desativada',
+  'quota-exceeded': 'cota de SMS do Firebase esgotada',
+  'too-many-requests': 'muitas tentativas seguidas, bloqueadas pelo Firebase',
+  'invalid-verification-code': 'código do SMS errado',
+  'session-expired': 'código do SMS vencido',
+  'invalid-phone-number': 'número de celular inválido',
+  'missing-phone-number': 'número de celular em branco',
+  'captcha-check-failed': 'verificação do reCAPTCHA falhou',
+  'web-context-cancelled': 'verificação no navegador cancelada',
+  'app-not-authorized': 'app não autorizado no Firebase',
+  'invalid-app-credential': 'credencial do app recusada pelo Firebase',
+  'missing-client-identifier': 'verificação do aparelho falhou',
+  'invalid-recaptcha-token': 'verificação do aparelho falhou',
+  'missing-recaptcha-token': 'verificação do aparelho falhou',
+  'operation-not-allowed': 'forma de entrar desligada no Firebase',
+  'user-disabled': 'conta desativada',
+  'network-request-failed': 'aparelho sem internet',
+  'internal-error': 'erro interno do Firebase',
+  'account-exists-with-different-credential': 'e-mail já usado com outra forma de entrar',
+  'invalid-credential': 'credencial recusada pelo Firebase',
+  'credential-already-in-use': 'número já está em outra conta',
+  'requires-recent-login': 'login antigo, a pessoa precisa entrar de novo',
+  'conta-nao-permitida': 'conta não permitida no app',
+  'google/interrupted': 'login do Google interrompido',
+  'google/clientconfigurationerror': 'configuração do Google no app',
+  'google/providerconfigurationerror': 'configuração do Google no Firebase',
+  'google/uiunavailable': 'tela do Google indisponível',
+  'google/usermismatch': 'conta do Google diferente da escolhida',
+  'google/sem-id-token': 'o Google não devolveu o login',
+  'apple/failed': 'login da Apple falhou',
+  'apple/invalidresponse': 'resposta inválida da Apple',
+  'apple/nothandled': 'pedido não tratado pela Apple',
+  'apple/nao-suportado': '"Entrar com Apple" indisponível no aparelho',
+  'apple/credencial': 'credencial da Apple recusada',
+});
+
+export function motivoDoLogin(codigo) {
+  return MOTIVOS_DO_LOGIN[String(codigo || '')] || codigo;
+}
+
 const NOMES_DOS_METODOS = { telefone: 'SMS', google: 'Google', apple: 'Apple', email: 'e-mail', anonimo: 'anônima' };
 
 function paraData(valor) {
@@ -74,8 +118,8 @@ export function conferenciaDosLogins({ firestore }) {
         alcance: { tipo: 'todas' },
         gravidade: 'grave',
         titulo: metodo === 'telefone' ? 'SMS do login falhando' : `Login por ${NOMES_DOS_METODOS[metodo] || metodo} falhando`,
-        texto: `${falharam} de ${comResultado} tentativas de entrar falharam na última hora. Motivo mais comum: ${motivo}.`,
-        detalhes: [...motivos.entries()].sort(([, a], [, b]) => b - a).map(([erro, vezes]) => `${erro}: ${vezes}`),
+        texto: `${falharam} de ${comResultado} tentativas de entrar falharam na última hora. Motivo mais comum: ${motivoDoLogin(motivo)}.`,
+        detalhes: [...motivos.entries()].sort(([, a], [, b]) => b - a).map(([erro, vezes]) => `${motivoDoLogin(erro)}: ${vezes}`),
       }],
     };
   };
