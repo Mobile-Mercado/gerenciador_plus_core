@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import express from 'express';
-import { BannersNoAdmin, destinoDoBanner, produtoDoBanner } from '../src/application/admin/BannersNoAdmin.js';
+import { BannersNoAdmin, destinoDoBanner, precosDoProduto, produtoDoBanner } from '../src/application/admin/BannersNoAdmin.js';
 import { documentoRest } from '../src/application/loja/BannersDaLoja.js';
 import { createBannersDaLojaRoutes } from '../src/http/routes/bannersDaLojaRoutes.js';
 import { createAppDoClienteDaLojaRoutes } from '../src/http/routes/appDoClienteDaLojaRoutes.js';
@@ -203,12 +203,49 @@ test('B57-07, item 6: "Leva para" grava products com referencias e numeros do ap
   }
 });
 
+test('B57-07b, item 13 (parte C): encerrados do mais recente ao mais antigo; "Usar de novo" volta desligado, com o periodo de um novo', async () => {
+  const rota = await subir({
+    documentos: {
+      'estabelecimentos/loja-1': {},
+      'estabelecimentos/loja-1/Banners/e1': banner('principal', { endAt: new Date('2026-11-07T23:59:59Z') }),
+      'estabelecimentos/loja-1/Banners/e2': banner('popup', { endAt: new Date('2026-11-16T23:59:59Z') }),
+      'estabelecimentos/loja-1/Banners/e3': banner('posVertical', { endAt: new Date('2026-11-10T23:59:59Z') }),
+      'estabelecimentos/loja-1/Banners/v1': banner('vertical'),
+    },
+  });
+  try {
+    const { status, corpo } = await rota.chamar('/por-tipo/encerrados');
+    assert.equal(status, 200);
+    assert.deepEqual(corpo.data.map((item) => item.id), ['e2', 'e1'], 'sem Abaixo do vertical e sem os que nao encerraram');
+    const usar = await rota.chamar('/por-tipo/e1/usar-de-novo', { method: 'POST' });
+    assert.equal(usar.status, 200);
+    const gravado = rota.rest.gravados.at(-1);
+    assert.deepEqual(gravado.opcoes.mascara, ['startAt', 'endAt', 'status', 'started', 'aguardandoInicio']);
+    assert.equal(gravado.documento.fields.status.booleanValue, false);
+    assert.equal(gravado.documento.fields.aguardandoInicio.booleanValue, false);
+    assert.equal(gravado.documento.fields.startAt.timestampValue, new Date(AGORA).toISOString());
+    assert.equal(gravado.documento.fields.endAt.timestampValue, '2026-12-20T02:59:59.000Z', 'fim do dia de Brasilia daqui a 30 dias');
+    const deNovo = await rota.chamar('/por-tipo/v1/usar-de-novo', { method: 'POST' });
+    assert.equal(deNovo.status, 409, 'so encerrado');
+  } finally {
+    await rota.fechar();
+  }
+});
+
 test('B57-07: destino e produto do banner sao funcoes puras', () => {
   assert.deepEqual(destinoDoBanner({}), { tipo: 'nada' });
-  const produto = produtoDoBanner('l', 'p', { name: null, images: [null, { fileName: 7 }] });
+  // Fotos como ProductImageAdapter.fromMapItems: sem fileName texto fica de fora; endereco solto vira foto.
+  const produto = produtoDoBanner('l', 'p', { name: null, images: [null, { fileName: 7 }, 'https://x/foto.png', { fileName: 'a.jpg' }] });
   assert.equal(produto.name, '');
-  assert.equal(produto.images.length, 1);
-  assert.equal(produto.images[0].fileName, '7');
+  assert.deepEqual(produto.images.map((imagem) => imagem.fileName), ['foto.png', 'a.jpg']);
+  assert.equal(produto.images[0].folderPath, 'produtosMobile');
+  // Precos como o app gerenciador (PromotionValidityMixin): promocao valendo, o promocional e o riscado.
+  const agora = Date.parse('2026-11-19T15:00:00Z');
+  const emPromocao = { currentPrice: 10, previewPrice: 12, promotionalPrice: 8, promotionStartAt: new Date('2026-11-18T00:00:00Z'), promotionEndAt: new Date('2026-11-20T00:00:00Z') };
+  assert.deepEqual(precosDoProduto(emPromocao, agora), { itemPrice: 8, previewPrice: 10 });
+  assert.deepEqual(precosDoProduto({ ...emPromocao, promotionEndAt: new Date('2026-11-19T00:00:00Z') }, agora), { itemPrice: 10, previewPrice: 12 });
+  assert.deepEqual(precosDoProduto({ currentPrice: 5 }, agora), { itemPrice: 5, previewPrice: 5 });
+  assert.deepEqual(precosDoProduto({ currentPrice: 10, promotionalPrice: 11 }, agora), { itemPrice: 10, previewPrice: 10 }, 'promocional acima do atual nao vale');
   assert.throws(() => documentoRest({ r: { __referencia: 'x' } }), /projeto/);
 });
 

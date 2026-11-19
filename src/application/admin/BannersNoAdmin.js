@@ -52,25 +52,53 @@ export function destinoDoBanner(banner) {
 // vazio do tipo: um campo nulo onde o app espera texto derruba a lista de banners da loja.
 const texto = (valor) => (typeof valor === 'string' ? valor : (valor === null || valor === undefined ? '' : String(valor)));
 const numero = (valor) => (Number.isFinite(Number(valor)) ? Number(valor) : 0);
-export function produtoDoBanner(lojaId, id, produto) {
-  const preco = numero(produto.currentPrice ?? produto.price);
+// Como o app gerenciador (BannerProductAdapter.fromCompanyProduct, mobile_core, e PromotionValidityMixin):
+// itemPrice e o preco efetivo (o promocional, se a promocao vale agora; senao o atual) e previewPrice e o
+// riscado (o atual, durante a promocao), senao o previewPrice do produto, senao o efetivo. As fotos como
+// ProductImageAdapter.fromMapItems: endereco solto vira foto de "produtosMobile"; foto sem fileName fica
+// de fora (o app pula).
+const dataDe = (valor) => (typeof valor?.toDate === "function" ? valor.toDate() : (valor ? new Date(valor) : null));
+export function precosDoProduto(produto, agora = Date.now()) {
+  const atual = numero(produto.currentPrice ?? produto.price);
+  const promocional = Number(produto.promotionalPrice);
+  const inicio = dataDe(produto.promotionStartAt);
+  const fim = dataDe(produto.promotionEndAt);
+  const promocao = Number.isFinite(promocional) && promocional > 0 && promocional < atual
+    && !(inicio && inicio.getTime() > agora) && !(fim && fim.getTime() < agora);
+  const efetivo = promocao ? promocional : atual;
+  const riscado = promocao ? atual : null;
+  const deAntes = Number.isFinite(Number(produto.previewPrice)) && produto.previewPrice !== null ? Number(produto.previewPrice) : null;
+  return { itemPrice: efetivo, previewPrice: riscado ?? deAntes ?? efetivo };
+}
+function fotosDoProduto(imagens) {
+  return (Array.isArray(imagens) ? imagens : []).flatMap((imagem) => {
+    if (typeof imagem === "string") {
+      const url = imagem.trim();
+      return url ? [{ fileName: url.split("/").pop(), fileUrl: url, folderPath: "produtosMobile", quality: null, itsFromPlatform: false, reference: null }] : [];
+    }
+    if (!imagem || typeof imagem !== "object" || typeof imagem.fileName !== "string") return [];
+    return [{
+      fileName: imagem.fileName,
+      fileUrl: typeof imagem.fileUrl === "string" ? imagem.fileUrl : null,
+      folderPath: typeof imagem.folderPath === "string" ? imagem.folderPath : "produtosMobile",
+      quality: Number.isFinite(Number(imagem.quality)) && imagem.quality !== null ? inteiro(imagem.quality) : null,
+      itsFromPlatform: imagem.itsFromPlatform === true,
+      reference: typeof imagem.reference === "string" ? imagem.reference : null,
+    }];
+  });
+}
+export function produtoDoBanner(lojaId, id, produto, agora = Date.now()) {
+  const { itemPrice, previewPrice } = precosDoProduto(produto, agora);
   return {
     id,
     name: texto(produto.name),
     barCode: texto(produto.barCode),
     reference: referencia(`estabelecimentos/${lojaId}/Products/${id}`),
     companyRef: referencia(`estabelecimentos/${lojaId}`),
-    images: (Array.isArray(produto.images) ? produto.images : []).filter((imagem) => imagem && typeof imagem === 'object').map((imagem) => ({
-      fileName: texto(imagem.fileName),
-      fileUrl: typeof imagem.fileUrl === 'string' ? imagem.fileUrl : null,
-      folderPath: typeof imagem.folderPath === 'string' ? imagem.folderPath : 'produtosMobile',
-      quality: Number.isFinite(Number(imagem.quality)) && imagem.quality !== null ? inteiro(imagem.quality) : null,
-      itsFromPlatform: imagem.itsFromPlatform === true,
-      reference: typeof imagem.reference === 'string' ? imagem.reference : null,
-    })),
-    externalId: typeof produto.externalId === 'string' ? produto.externalId : null,
-    itemPrice: decimal(preco),
-    previewPrice: decimal(numero(produto.previewPrice ?? preco) || preco),
+    images: fotosDoProduto(produto.images),
+    externalId: typeof produto.externalId === "string" ? produto.externalId : null,
+    itemPrice: decimal(itemPrice),
+    previewPrice: decimal(previewPrice),
   };
 }
 
@@ -296,7 +324,7 @@ export class BannersNoAdmin {
       const lidos = await Promise.all(ids.map((id) => loja.collection('Products').doc(id).get()));
       const faltando = lidos.filter((produto) => !produto.exists).map((produto) => produto.id);
       if (faltando.length) throw recusa('Produto não encontrado nesta loja.', 'banner_produto_nao_encontrado', 404, { ids: faltando });
-      products = lidos.map((produto) => produtoDoBanner(lojaId, produto.id, produto.data() || {}));
+      products = lidos.map((produto) => produtoDoBanner(lojaId, produto.id, produto.data() || {}, this.agora()));
     } else if (levaPara.tipo === 'categoria') {
       const id = String(levaPara.id || '');
       if (!/^[^/]{1,120}$/.test(id)) throw recusa('Categoria não encontrada nesta loja.', 'banner_categoria_nao_encontrada', 404);
@@ -308,6 +336,32 @@ export class BannersNoAdmin {
     }
     await this.rest.gravar(this.caminho(lojaId, bannerId), documentoRest({ products, category }, this.rest.projectId), { mascara: ['products', 'category'] });
     return { banner: await this.ler(lojaId, bannerId), antes: { levaPara: destinoDoBanner(dados) } };
+  }
+
+  // Cola B57-07b, item 13 (parte C): os encerrados da loja, do que terminou por ultimo para o mais antigo.
+  async encerrados(lojaId) {
+    const loja = await this.loja(lojaId);
+    const agora = this.agora();
+    const snapshot = await loja.ref.collection('Banners').get();
+    return snapshot.docs
+      .map((documento) => this.paraATela(documento.id, documento.data() || {}, agora))
+      .filter((banner) => banner.situacao === 'encerrado')
+      .sort((a, b) => String(b.fim).localeCompare(String(a.fim)));
+  }
+
+  // "Usar de novo": o encerrado volta para o tipo dele, desligado, com o periodo de um banner novo (de
+  // agora ate o fim do dia de Brasilia daqui a 30 dias, como o "Criar novo"); a tela abre a faixa de
+  // edicao para o lojista acertar o "Quando" e ligar. Desligado nao ocupa vaga, entao nao passa do limite.
+  async usarDeNovo(lojaId, bannerId) {
+    const atual = await this.banner(lojaId, bannerId);
+    const dados = atual.data() || {};
+    const agora = this.agora();
+    if (situacaoDoBanner(dados, agora) !== 'encerrado') throw recusa('Este banner não está encerrado.', 'banner_nao_encerrado', 409);
+    const daqui30 = new Date(agora + 30 * 86400000 - 3 * 3600000);
+    const fim = new Date(Date.UTC(daqui30.getUTCFullYear(), daqui30.getUTCMonth(), daqui30.getUTCDate(), 23, 59, 59) + 3 * 3600000);
+    const campos = { startAt: new Date(agora), endAt: fim, ...DESLIGADO };
+    await this.rest.gravar(this.caminho(lojaId, bannerId), documentoRest(campos), { mascara: Object.keys(campos) });
+    return { banner: await this.ler(lojaId, bannerId), antes: { inicio: data(dados.startAt)?.toISOString() || null, fim: data(dados.endAt)?.toISOString() || null } };
   }
 
   // Apaga o documento e o arquivo.

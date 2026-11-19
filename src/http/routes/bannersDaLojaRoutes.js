@@ -36,6 +36,19 @@ export function createBannersDaLojaRoutes({ bannersDaLoja, bannersPorTipo = null
       response.json({ data: { ...lista, tipos } });
     }));
 
+    // Cola B57-07b, item 13 (parte C): os encerrados de Principal, Vertical e Popup, e o "Usar de novo".
+    router.get('/por-tipo/encerrados', asyncHandler(async (request, response) => {
+      const { establishmentId } = await accountForRequest(request);
+      const lista = await bannersPorTipo.encerrados(establishmentId);
+      response.json({ data: lista.filter((banner) => TIPOS_DA_TELA_LOJA.includes(banner.tipo)) });
+    }));
+
+    router.post('/por-tipo/:bannerId/usar-de-novo', requirePermission('settings.edit'), asyncHandler(async (request, response) => {
+      const { bannerId } = idSchema.parse(request.params);
+      const { establishmentId } = await accountForRequest(request);
+      response.json({ data: (await bannersPorTipo.usarDeNovo(establishmentId, bannerId)).banner });
+    }));
+
     // "Criar novo": o tipo no limite cria o banner desligado.
     router.post('/por-tipo', requirePermission('settings.edit'), corpoDeImagem, asyncHandler(async (request, response) => {
       const { tipo, inicio, fim } = novoPorTipoSchema.parse(request.query);
