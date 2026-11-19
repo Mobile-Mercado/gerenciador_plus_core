@@ -270,6 +270,9 @@ test('situacao para o app: em analise, aprovado e recusado com motivo', async ()
   assert.equal(situacao.motivo, 'CNPJ de outra atividade');
   assert.equal(situacao.lojaId, null);
   assert.equal(situacao.emailConfirmado, true);
+  // Cola B57-03, A2: "Voce comecou em" e "E-mail confirmado" com a hora do servidor.
+  assert.equal(situacao.criadoEm, banco.dados(`pedidosDeLoja/${pedidoId}`).createdAt.toISOString());
+  assert.equal(situacao.enviadoEm, '2026-10-13T12:00:00.000Z');
   // Aprovado: o lojaId aparece.
   await banco.doc(`pedidosDeLoja/${pedidoId}`).update({ status: 'aprovada', lojaId: 'loja-nova' });
   const aprovado = await cadastro.situacao(uid);

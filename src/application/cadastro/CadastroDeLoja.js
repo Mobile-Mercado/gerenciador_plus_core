@@ -346,6 +346,8 @@ export class CadastroDeLoja {
       lojaId: aprovado ? dados.lojaId || null : null,
       nomeDaLoja: dados.name || null,
       emailConfirmado: Boolean(usuario?.emailVerified),
+      // Cola B57-03, A2: os horarios dos passos de "Pedido em analise" vem do servidor.
+      criadoEm: paraIso(dados.createdAt),
       enviadoEm: paraIso(dados.enviadoEm),
       aprovadoEm: paraIso(dados.aprovadoEm),
     };
