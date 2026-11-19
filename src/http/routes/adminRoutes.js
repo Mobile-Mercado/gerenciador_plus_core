@@ -81,6 +81,7 @@ const aparenciaSchema = z.object({
   primaryColor: z.string().max(7).nullable().optional(),
   secondaryColor: z.string().max(7).nullable().optional(),
   offerColor: z.string().max(7).nullable().optional(),
+  discountBadgeColor: z.string().max(7).nullable().optional(),
   slogan: z.string().max(200).nullable().optional(),
 });
 const imagemAdminSchema = z.object({ tipo: z.enum(['logo', 'fachada', 'splash', 'loading']) });

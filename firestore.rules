@@ -262,6 +262,7 @@ service cloud.firestore {
       // so pelo Core, como o aparenciaHome; o fundo de Ofertas do lojista vai pela rota do Core.
       // Cola B56-24 (A2): os blocos da jornada Primeiro acesso tambem so pelo Core.
       // Cola B56-25 (item 8): as cores da loja (primaryColor e secondaryColor) so pelo Admin.
+      // Cola B57-01b (item C6): a cor do selo de desconto (discountBadgeColor) so pelo Admin, como o offerColor.
       function camposDoAdminIguais() {
         let mudou = request.resource.data.diff(resource.data).affectedKeys();
         return !mudou.hasAny(['isActive', 'status', 'motivoRecusa', 'aprovadoPor', 'aprovadoEm',
@@ -269,7 +270,7 @@ service cloud.firestore {
             'featureFlags', 'aparenciaHome', 'userReference',
             'aparencia', 'ofertas', 'abertura', 'primeiraTela',
             'boasVindas', 'login', 'codigoSms', 'folhaNome', 'folhaEndereco',
-            'primaryColor', 'secondaryColor'])
+            'primaryColor', 'secondaryColor', 'discountBadgeColor'])
           && request.resource.data.get('scheduling', {}).get('contracted', null)
             == resource.data.get('scheduling', {}).get('contracted', null);
       }
@@ -472,6 +473,22 @@ service cloud.firestore {
         allow write: if false;
       }
 
+      // Registro das acoes da equipe (cola do Thay B57-02, 18/11, item A8). O Gerenciador web
+      // grava pelo servidor (Admin SDK, que ignora estas regras); o App Gerenciador grava
+      // direto, so criando, com origem 'app', a hora do servidor e os campos do formato do web
+      // (registrarAcao.js) mais a versao do app e o aparelho. Ninguem muda nem apaga.
+      match /AcoesEquipe/{acaoId} {
+        allow read: if isAdminOf(estabId);
+        allow create: if isAdminOf(estabId)
+          && request.resource.data.keys().hasOnly(['em', 'quem', 'tela', 'acao', 'alvo', 'antes',
+            'depois', 'origem', 'versaoDoApp', 'aparelho'])
+          && request.resource.data.origem == 'app'
+          && request.resource.data.em == request.time
+          && request.resource.data.acao is string
+          && request.resource.data.tela is string;
+        allow update, delete: if false;
+      }
+
       // Sugestões de melhoria enviadas pelo cliente na tela Ajustes do app.
       // Só cria, com os campos que o app grava (suggestion_document.dart) e o autor
       // sendo quem chama: userId é o id do documento Users do cliente (não o uid), então
@@ -486,7 +503,6 @@ service cloud.firestore {
           && request.resource.data.companyId == estabId
           && request.resource.data.read == false
           && request.resource.data.text is string
-          && request.resource.data.text.size() >= 30
           && request.resource.data.text.size() <= 500
           && request.resource.data.userId is string
           && request.resource.data.userId.size() > 0

@@ -1,0 +1,277 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import express from 'express';
+import { BannersNoAdmin, destinoDoBanner, precosDoProduto, produtoDoBanner } from '../src/application/admin/BannersNoAdmin.js';
+import { documentoRest } from '../src/application/loja/BannersDaLoja.js';
+import { createBannersDaLojaRoutes } from '../src/http/routes/bannersDaLojaRoutes.js';
+import { createAppDoClienteDaLojaRoutes } from '../src/http/routes/appDoClienteDaLojaRoutes.js';
+import { createPermissionGuard } from '../src/http/middlewares/requirePermission.js';
+import { errorHandler } from '../src/http/middlewares/errorHandler.js';
+
+// Cola B57-07 (19/11): a tela Loja do Gerenciador mexe nos banners por tipo (Principal, Vertical e
+// Popup), com os limites e as medidas do Admin, so na propria loja, com a permissao de hoje
+// (settings.edit). "Leva para" grava products e category como o app gerenciador.
+const AGORA = Date.parse('2026-11-19T15:00:00Z');
+const FIM = new Date('2026-11-24T23:59:59Z');
+
+function bancoEmMemoria(documentos) {
+  const lidos = [];
+  const doc = (caminho) => ({
+    id: caminho.split('/').pop(),
+    get: async () => {
+      lidos.push(caminho);
+      const dados = documentos[caminho];
+      return { id: caminho.split('/').pop(), exists: dados !== undefined, data: () => dados, ref: { collection: (nome) => colecao(`${caminho}/${nome}`) } };
+    },
+    collection: (nome) => colecao(`${caminho}/${nome}`),
+  });
+  const colecao = (caminho) => ({
+    doc: (id) => doc(`${caminho}/${id}`),
+    get: async () => ({
+      docs: Object.entries(documentos)
+        .filter(([chave]) => chave.startsWith(`${caminho}/`) && !chave.slice(caminho.length + 1).includes('/'))
+        .map(([chave, dados]) => ({ id: chave.split('/').pop(), data: () => dados })),
+    }),
+  });
+  return { lidos, firestore: { collection: (nome) => colecao(nome), doc } };
+}
+
+// O documento criado passa a existir para a leitura de volta (BannersNoAdmin.ler).
+function restEmMemoria(documentos) {
+  const gravados = [];
+  return {
+    projectId: 'proj',
+    gravados,
+    gravar: async (caminho, documento, opcoes) => {
+      gravados.push({ caminho, documento, opcoes });
+      if (opcoes.criar) documentos[caminho] = { type: documento.fields.type?.stringValue, status: documento.fields.status?.booleanValue, endAt: FIM };
+    },
+    ler: async () => null,
+  };
+}
+
+async function subir({ documentos, chaves = ['settings.edit'], loja = 'loja-1' }) {
+  const { firestore, lidos } = bancoEmMemoria(documentos);
+  const rest = restEmMemoria(documentos);
+  const bannersPorTipo = new BannersNoAdmin({
+    firestore, bucket: { name: 'b', file: () => ({ save: async () => {}, delete: async () => {} }) }, restFirestore: rest,
+    medir: async () => ({ largura: 400, altura: 700 }), agora: () => AGORA, novoId: () => 'novo1',
+  });
+  const accessRepository = {
+    findAccountByClaims: async () => ({ hasEstablishment: true, establishmentId: loja, establishmentDocument: {}, permissions: { isAdmin: false, groupId: 'g', keys: chaves } }),
+  };
+  const { requirePermission, accountForRequest } = createPermissionGuard({ accessRepository });
+  const app = express();
+  app.use(express.json());
+  app.use((request, _response, next) => { request.auth = { uid: 'u1' }; next(); });
+  app.use('/api/loja/banners', createBannersDaLojaRoutes({ bannersDaLoja: null, bannersPorTipo, requirePermission, accountForRequest }));
+  app.use(errorHandler);
+  const servidor = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+  const base = `http://127.0.0.1:${servidor.address().port}/api/loja/banners`;
+  const chamar = async (caminho, { method = 'GET', corpo, tipo } = {}) => {
+    const headers = { Authorization: `Bearer t-${Math.random()}` };
+    let body;
+    if (corpo instanceof Uint8Array) { headers['Content-Type'] = tipo || 'image/jpeg'; body = corpo; } else if (corpo !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(corpo); }
+    const resposta = await fetch(`${base}${caminho}`, { method, headers, body });
+    return { status: resposta.status, corpo: await resposta.json() };
+  };
+  return { rest, lidos, chamar, fechar: () => new Promise((resolve) => { servidor.close(resolve); }) };
+}
+
+const banner = (tipo, extra = {}) => ({ type: tipo, status: true, started: true, startAt: new Date('2026-11-18T03:00:00Z'), endAt: FIM, image: { path: 'https://x', size: { width: 1080, height: 500 } }, ...extra });
+
+test('B57-07: lista por tipo so Principal, Vertical e Popup, com ligados sobre o limite e o destino', async () => {
+  const rota = await subir({
+    documentos: {
+      'estabelecimentos/loja-1': { coverImageUrl: 'https://capa' },
+      'estabelecimentos/loja-1/Banners/p1': banner('principal', { products: [{ id: 'a' }, { id: 'b' }] }),
+      'estabelecimentos/loja-1/Banners/v1': banner('vertical', { category: { id: 'c1', name: 'Limpeza' } }),
+      'estabelecimentos/loja-1/Banners/x1': banner('posVertical'),
+      'estabelecimentos/loja-1/Banners/u1': banner('popup', { status: false, started: false }),
+    },
+  });
+  try {
+    const { status, corpo } = await rota.chamar('/por-tipo');
+    assert.equal(status, 200);
+    assert.deepEqual(Object.keys(corpo.data.tipos), ['principal', 'vertical', 'popup']);
+    assert.equal(corpo.data.tipos.principal.limite, 5);
+    assert.equal(corpo.data.tipos.principal.ocupados, 1);
+    assert.equal(corpo.data.tipos.vertical.limite, 10);
+    assert.equal(corpo.data.tipos.popup.limite, 1);
+    assert.equal(corpo.data.tipos.popup.ocupados, 0);
+    assert.deepEqual(corpo.data.tipos.principal.banners[0].levaPara, { tipo: 'produtos', quantos: 2, ids: ['a', 'b'] });
+    assert.deepEqual(corpo.data.tipos.vertical.banners[0].levaPara, { tipo: 'categoria', id: 'c1', nome: 'Limpeza' });
+    assert.deepEqual(corpo.data.tipos.popup.banners[0].levaPara, { tipo: 'nada' });
+    assert.equal(corpo.data.capaUrl, 'https://capa');
+  } finally {
+    await rota.fechar();
+  }
+});
+
+test('B57-07: so a propria loja; gravar sem settings.edit recusa com 403 e nao grava', async () => {
+  const documentos = { 'estabelecimentos/loja-1': {}, 'estabelecimentos/loja-1/Banners/v1': banner('vertical') };
+  const semChave = await subir({ documentos, chaves: [] });
+  try {
+    assert.equal((await semChave.chamar('/por-tipo/v1', { method: 'PATCH', corpo: { ligado: false } })).status, 403);
+    assert.equal((await semChave.chamar('/por-tipo/v1', { method: 'DELETE' })).status, 403);
+    assert.equal(semChave.rest.gravados.length, 0);
+  } finally {
+    await semChave.fechar();
+  }
+  // Outra loja: o banner v1 da loja-1 nao existe para ela.
+  const outra = await subir({ documentos, loja: 'loja-2' });
+  try {
+    const { status } = await outra.chamar('/por-tipo/v1', { method: 'PATCH', corpo: { ligado: false } });
+    assert.equal(status, 404);
+    assert.equal(outra.rest.gravados.length, 0);
+    assert.ok(outra.lidos.every((caminho) => caminho.startsWith('estabelecimentos/loja-2')));
+  } finally {
+    await outra.fechar();
+  }
+});
+
+test('B57-07, itens 3 e 7: "Criar novo" no limite nasce desligado; ligar alem do limite e recusado (409)', async () => {
+  const rota = await subir({
+    documentos: {
+      'estabelecimentos/loja-1': {},
+      'estabelecimentos/loja-1/Banners/u1': banner('popup'),
+      'estabelecimentos/loja-1/Banners/u2': banner('popup', { status: false, started: false }),
+    },
+  });
+  try {
+    const criado = await rota.chamar(`/por-tipo?tipo=popup&inicio=${encodeURIComponent('2026-11-19T15:00:00Z')}&fim=${encodeURIComponent(FIM.toISOString())}`, {
+      method: 'POST', corpo: new Uint8Array([1, 2, 3]), tipo: 'image/png',
+    });
+    assert.equal(criado.status, 201);
+    const campos = rota.rest.gravados[0].documento.fields;
+    assert.equal(campos.status.booleanValue, false);
+    assert.equal(campos.aguardandoInicio.booleanValue, false);
+    assert.equal(campos.type.stringValue, 'popup');
+    const ligar = await rota.chamar('/por-tipo/u2', { method: 'PATCH', corpo: { ligado: true } });
+    assert.equal(ligar.status, 409);
+    assert.equal(ligar.corpo.error.code, 'banner_limite');
+    assert.equal(rota.rest.gravados.length, 1);
+    // "Abaixo do vertical" nao e criado por esta tela.
+    const pos = await rota.chamar(`/por-tipo?tipo=posVertical&inicio=a&fim=b`, { method: 'POST', corpo: new Uint8Array([1]) });
+    assert.equal(pos.status, 400);
+  } finally {
+    await rota.fechar();
+  }
+});
+
+test('B57-07, item 6: "Leva para" grava products com referencias e numeros do app, e a categoria apaga os produtos', async () => {
+  const rota = await subir({
+    documentos: {
+      'estabelecimentos/loja-1': {},
+      'estabelecimentos/loja-1/Banners/p1': banner('principal'),
+      'estabelecimentos/loja-1/Products/pr1': { name: 'Picanha', barCode: '789', currentPrice: 59.9, previewPrice: 69.9, images: [{ fileName: 'f.jpg', fileUrl: 'https://f', quality: 80 }] },
+      'estabelecimentos/loja-1/Products/pr2': { name: 'Banana', currentPrice: 5 },
+      'estabelecimentos/loja-1/ProductCategories/c1': { name: 'Limpeza', icon: 'https://i' },
+    },
+  });
+  try {
+    const produtos = await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'produtos', ids: ['pr1', 'pr2'] } } });
+    assert.equal(produtos.status, 200);
+    const gravado = rota.rest.gravados.at(-1);
+    assert.deepEqual(gravado.opcoes.mascara, ['products', 'category']);
+    const [primeiro, segundo] = gravado.documento.fields.products.arrayValue.values.map((valor) => valor.mapValue.fields);
+    assert.equal(primeiro.reference.referenceValue, 'projects/proj/databases/(default)/documents/estabelecimentos/loja-1/Products/pr1');
+    assert.equal(primeiro.companyRef.referenceValue, 'projects/proj/databases/(default)/documents/estabelecimentos/loja-1');
+    assert.deepEqual(primeiro.itemPrice, { doubleValue: 59.9 });
+    assert.deepEqual(primeiro.previewPrice, { doubleValue: 69.9 });
+    assert.deepEqual(primeiro.images.arrayValue.values[0].mapValue.fields.quality, { integerValue: '80' });
+    assert.deepEqual(primeiro.images.arrayValue.values[0].mapValue.fields.itsFromPlatform, { booleanValue: false });
+    // Campo faltando vira o vazio do tipo (barCode texto, previewPrice decimal).
+    assert.deepEqual(segundo.barCode, { stringValue: '' });
+    assert.deepEqual(segundo.previewPrice, { doubleValue: 5 });
+    assert.deepEqual(gravado.documento.fields.category, { nullValue: null });
+
+    await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'categoria', id: 'c1' } } });
+    const categoria = rota.rest.gravados.at(-1).documento.fields;
+    assert.deepEqual(categoria.products, { arrayValue: {} });
+    assert.equal(categoria.category.mapValue.fields.reference.referenceValue, 'projects/proj/databases/(default)/documents/estabelecimentos/loja-1/ProductCategories/c1');
+    assert.deepEqual(categoria.category.mapValue.fields.name, { stringValue: 'Limpeza' });
+
+    await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'nada' } } });
+    const nada = rota.rest.gravados.at(-1).documento.fields;
+    assert.deepEqual(nada, { products: { arrayValue: {} }, category: { nullValue: null } });
+
+    const outroProduto = await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'produtos', ids: ['de-outra-loja'] } } });
+    assert.equal(outroProduto.status, 404);
+  } finally {
+    await rota.fechar();
+  }
+});
+
+test('B57-07b, item 13 (parte C): encerrados do mais recente ao mais antigo; "Usar de novo" volta desligado, com o periodo de um novo', async () => {
+  const rota = await subir({
+    documentos: {
+      'estabelecimentos/loja-1': {},
+      'estabelecimentos/loja-1/Banners/e1': banner('principal', { endAt: new Date('2026-11-07T23:59:59Z') }),
+      'estabelecimentos/loja-1/Banners/e2': banner('popup', { endAt: new Date('2026-11-16T23:59:59Z') }),
+      'estabelecimentos/loja-1/Banners/e3': banner('posVertical', { endAt: new Date('2026-11-10T23:59:59Z') }),
+      'estabelecimentos/loja-1/Banners/v1': banner('vertical'),
+    },
+  });
+  try {
+    const { status, corpo } = await rota.chamar('/por-tipo/encerrados');
+    assert.equal(status, 200);
+    assert.deepEqual(corpo.data.map((item) => item.id), ['e2', 'e1'], 'sem Abaixo do vertical e sem os que nao encerraram');
+    const usar = await rota.chamar('/por-tipo/e1/usar-de-novo', { method: 'POST' });
+    assert.equal(usar.status, 200);
+    const gravado = rota.rest.gravados.at(-1);
+    assert.deepEqual(gravado.opcoes.mascara, ['startAt', 'endAt', 'status', 'started', 'aguardandoInicio']);
+    assert.equal(gravado.documento.fields.status.booleanValue, false);
+    assert.equal(gravado.documento.fields.aguardandoInicio.booleanValue, false);
+    assert.equal(gravado.documento.fields.startAt.timestampValue, new Date(AGORA).toISOString());
+    assert.equal(gravado.documento.fields.endAt.timestampValue, '2026-12-20T02:59:59.000Z', 'fim do dia de Brasilia daqui a 30 dias');
+    const deNovo = await rota.chamar('/por-tipo/v1/usar-de-novo', { method: 'POST' });
+    assert.equal(deNovo.status, 409, 'so encerrado');
+  } finally {
+    await rota.fechar();
+  }
+});
+
+test('B57-07: destino e produto do banner sao funcoes puras', () => {
+  assert.deepEqual(destinoDoBanner({}), { tipo: 'nada' });
+  // Fotos como ProductImageAdapter.fromMapItems: sem fileName texto fica de fora; endereco solto vira foto.
+  const produto = produtoDoBanner('l', 'p', { name: null, images: [null, { fileName: 7 }, 'https://x/foto.png', { fileName: 'a.jpg' }] });
+  assert.equal(produto.name, '');
+  assert.deepEqual(produto.images.map((imagem) => imagem.fileName), ['foto.png', 'a.jpg']);
+  assert.equal(produto.images[0].folderPath, 'produtosMobile');
+  // Precos como o app gerenciador (PromotionValidityMixin): promocao valendo, o promocional e o riscado.
+  const agora = Date.parse('2026-11-19T15:00:00Z');
+  const emPromocao = { currentPrice: 10, previewPrice: 12, promotionalPrice: 8, promotionStartAt: new Date('2026-11-18T00:00:00Z'), promotionEndAt: new Date('2026-11-20T00:00:00Z') };
+  assert.deepEqual(precosDoProduto(emPromocao, agora), { itemPrice: 8, previewPrice: 10 });
+  assert.deepEqual(precosDoProduto({ ...emPromocao, promotionEndAt: new Date('2026-11-19T00:00:00Z') }, agora), { itemPrice: 10, previewPrice: 12 });
+  assert.deepEqual(precosDoProduto({ currentPrice: 5 }, agora), { itemPrice: 5, previewPrice: 5 });
+  assert.deepEqual(precosDoProduto({ currentPrice: 10, promotionalPrice: 11 }, agora), { itemPrice: 10, previewPrice: 10 }, 'promocional acima do atual nao vale');
+  assert.throws(() => documentoRest({ r: { __referencia: 'x' } }), /projeto/);
+});
+
+test('B57-07, item 9: a loja le a propria Inicio publicada, a tabela das variacoes e os icones', async () => {
+  const pedidos = [];
+  const appDoClienteDaLoja = { ler: async (loja) => { pedidos.push(['app', loja]); return { lojaId: loja, featureFlags: { retirada: true }, aparenciaHome: { topo: 1, meio: 2, fim: 3, rodape: 2, preposicaoBusca: 'no' }, ajustesDaHome: { topoModelo: null, topoAjustes: null } }; } };
+  const aparenciaDaHome = { variacoes: async () => ({ numeros: { topo: 3 } }) };
+  const conjuntosDeIcones = { iconesDaLoja: async (loja) => { pedidos.push(['icones', loja]); return { c1: 'https://i' }; } };
+  const accessRepository = { findAccountByClaims: async () => ({ hasEstablishment: true, establishmentId: 'loja-1', establishmentDocument: {}, permissions: { isAdmin: false, groupId: 'g', keys: [] } }) };
+  const { requirePermission, accountForRequest } = createPermissionGuard({ accessRepository });
+  const app = express();
+  app.use(express.json());
+  app.use((request, _response, next) => { request.auth = { uid: 'u1' }; next(); });
+  app.use('/api/loja/app-do-cliente', createAppDoClienteDaLojaRoutes({ appDoClienteDaLoja, aparenciaDaHome, conjuntosDeIcones, requirePermission, accountForRequest }));
+  app.use(errorHandler);
+  const servidor = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+  try {
+    const resposta = await fetch(`http://127.0.0.1:${servidor.address().port}/api/loja/app-do-cliente/inicio`, { headers: { Authorization: 'Bearer t' } });
+    assert.equal(resposta.status, 200);
+    const { data } = await resposta.json();
+    assert.deepEqual(data.app.aparenciaHome, { topo: 1, meio: 2, fim: 3, rodape: 2, preposicaoBusca: 'no' });
+    assert.equal(data.app.featureFlags, undefined);
+    assert.deepEqual(data.variacoes, { numeros: { topo: 3 } });
+    assert.deepEqual(data.iconesDasCategorias, { c1: 'https://i' });
+    assert.deepEqual(pedidos, [['app', 'loja-1'], ['icones', 'loja-1']]);
+  } finally {
+    await new Promise((resolve) => { servidor.close(resolve); });
+  }
+});

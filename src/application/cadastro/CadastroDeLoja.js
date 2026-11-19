@@ -1,6 +1,6 @@
 import { FieldValue, GeoPoint } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
-import { formatarCnpj, validarCnpj, validarPedidoDeCadastro } from '../../domain/cadastro/validacoes.js';
+import { formatarCnpj, validarCnpj, validarEmail, validarPedidoDeCadastro } from '../../domain/cadastro/validacoes.js';
 import { logger } from '../../infra/logger/logger.js';
 
 // Cadastro de loja feito pelo servidor. O app gerenciador manda o pedido e o Core cria, numa
@@ -142,6 +142,17 @@ export class CadastroDeLoja {
     await this.assertCnpjLivre(digitos);
     const conferencia = await this.conferirCnpj(digitos);
     return { cnpj: digitos, ...conferencia };
+  }
+
+  // Cola B57-01, item B3: o passo 1 do app confere o e-mail antes do CNPJ, da senha e do
+  // endereco. Mesma regra e mesma recusa da criacao (assertEmailLivre, 409
+  // cadastro_email_em_uso, so com codigo, mensagem e campo), com os mesmos limites da criacao
+  // (por IP e por e-mail), para a conferencia nao servir de lista de contas.
+  async conferirEmail(emailInformado, { ip = null } = {}) {
+    const email = validarEmail(emailInformado);
+    await this.limites?.registrar([{ tipo: 'ip', valor: ip }, { tipo: 'email', valor: email }]);
+    await this.assertEmailLivre(email);
+    return { emailLivre: true };
   }
 
   async criar(entrada, { ip = null } = {}) {

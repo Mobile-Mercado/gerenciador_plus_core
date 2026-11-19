@@ -660,3 +660,104 @@ test('o teto de sete dias por passada e respeitado', async () => {
     '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29',
   ]);
 });
+
+// Cola B57-01 (18/11), item C3: a busca grava o uid do Authentication (clienteId) e o pedido
+// grava o id do documento em Users (clientId). Na conta antiga os dois sao diferentes, e a
+// conversao dava 0,0% com pedido feito depois da busca.
+test('C3: conta antiga, busca pelo uid e pedido pelo id do documento em Users, conta como convertida', () => {
+  const indice = indiceDeUsuarios([docUsuario('cliente-antigo', 'uid-antigo')]);
+
+  const resumo = resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ clienteId: 'uid-antigo', em: em(10) })],
+    pedidos: [pedido({ clientId: 'cliente-antigo', createdAt: em(11) })],
+    indiceDeUsuarios: indice,
+  });
+
+  assert.equal(resumo.convertidas, 1);
+  assert.equal(resumo.semPedido, 0);
+  assert.equal(resumo.porCliente[0].convertidas, 1);
+  assert.equal(resumo.porCliente[0].clienteId, 'uid-antigo', 'o cru nao muda');
+  assert.equal(resumo.porCliente[0].clienteDocId, 'cliente-antigo');
+});
+
+test('C3: a mesma regra de antes vale pelo documento: janela de 2 horas, pedido depois da busca, pedido de teste fora', () => {
+  const indice = indiceDeUsuarios([docUsuario('cliente-antigo', 'uid-antigo')]);
+  const resumir = (extra) => resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ clienteId: 'uid-antigo', em: em(10) })],
+    pedidos: [pedido({ clientId: 'cliente-antigo', ...extra })],
+    indiceDeUsuarios: indice,
+  });
+
+  assert.equal(resumir({ createdAt: em(13) }).convertidas, 0, '3 horas depois');
+  assert.equal(resumir({ createdAt: em(9) }).convertidas, 0, 'antes da busca');
+  assert.equal(resumir({ createdAt: em(11), isTest: true }).convertidas, 0, 'pedido de teste');
+  assert.equal(resumir({ createdAt: em(11), clientId: 'cliente-outro' }).convertidas, 0, 'outro cliente');
+});
+
+test('C3: uid com dois documentos nao casa pelo documento; so pelo proprio uid, como antes', () => {
+  const indice = indiceDeUsuarios([
+    docUsuario('cliente-a', 'uid-duplo'),
+    docUsuario('cliente-b', 'uid-duplo'),
+  ]);
+  const resumir = (clientId) => resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ clienteId: 'uid-duplo', em: em(10) })],
+    pedidos: [pedido({ clientId, createdAt: em(11) })],
+    indiceDeUsuarios: indice,
+  });
+
+  assert.equal(resumir('cliente-a').convertidas, 0);
+  assert.equal(resumir('uid-duplo').convertidas, 1);
+});
+
+test('C3: a versao do resumo sobe para 3, para os dias gravados antes serem refeitos', () => {
+  assert.equal(RESUMO_VERSION, 3);
+});
+
+test('C3: com os dias mais novos ja na versao atual, a passada refaz os mais velhos', async () => {
+  const dias = [];
+  for (let dia = 10; dia <= 29; dia += 1) {
+    dias.push({ dia: `2026-09-${dia}`, buscas: 1, semResultado: 0, termosDistintos: 1, clientes: 1, documento: true });
+  }
+  const { storeRef, registro } = firestoreFalso({ logs: [busca()], resumo: { dias } });
+  dias.forEach(({ dia }) => {
+    registro.dias[dia] = { dia, version: dia >= '2026-09-23' ? RESUMO_VERSION : 2, buscas: 0 };
+  });
+
+  const resultado = await rodarResumoDeBuscas({ storeRef, agora: AGORA, atualizadoEm: 'quando' });
+
+  assert.equal(resultado.diasRefeitos, 7);
+  assert.deepEqual(resultado.diasRefeitosEm, [
+    '2026-09-16', '2026-09-17', '2026-09-18', '2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22',
+  ]);
+  assert.equal(registro.dias['2026-09-15'].version, 2, 'fica para a proxima passada');
+});
+
+test('C3: o dia refeito usa a marca da loja no desempate do uid, como o dia corrente', async () => {
+  const anterior = {
+    dias: [{ dia: '2026-09-29', buscas: 1, semResultado: 0, termosDistintos: 1, clientes: 1, documento: true }],
+  };
+  const emVinteNove = { toDate: () => new Date(Date.UTC(2026, 8, 29, 15, 0, 0)) };
+  const { storeRef, registro } = firestoreFalso({
+    logs: [busca({ clienteId: 'uid-duas-marcas', em: emVinteNove })],
+    resumo: anterior,
+  });
+  registro.dias['2026-09-29'] = { dia: '2026-09-29', version: 2, buscas: 1 };
+  const comMarca = (id, uid, whitelabelId) => {
+    const dados = { userAuthId: uid, whitelabelId };
+    return { id, get: (campo) => dados[campo] };
+  };
+  const indice = indiceDeUsuarios([
+    comMarca('cliente-marca-a', 'uid-duas-marcas', 'marca-a'),
+    comMarca('cliente-marca-b', 'uid-duas-marcas', 'marca-b'),
+  ]);
+
+  await rodarResumoDeBuscas({
+    storeRef, agora: AGORA, atualizadoEm: 'quando', indiceDeUsuarios: indice, marcaDaLoja: 'marca-a', limpar: false,
+  });
+
+  assert.equal(registro.dias['2026-09-29'].version, RESUMO_VERSION);
+  assert.equal(registro.dias['2026-09-29'].porCliente[0].clienteDocId, 'cliente-marca-a');
+});

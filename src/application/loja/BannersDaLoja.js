@@ -21,18 +21,27 @@ const LIGADO = Object.freeze({ status: true, started: true, aguardandoInicio: fa
 // posVertical 1080x500; o painel recorta nesse tamanho antes de enviar.
 export const TAMANHO_DO_BANNER = Object.freeze({ largura: 1080, altura: 500 });
 
-function valorFirestore(valor) {
+// `projeto`: o id do projeto, so para as referencias (cola B57-07: "Leva para" grava products e
+// category com reference e companyRef como DocumentReference, como o app gerenciador).
+function valorFirestore(valor, projeto) {
   if (valor === null || valor === undefined) return { nullValue: null };
   if (valor instanceof Date) return { timestampValue: valor.toISOString() };
   if (typeof valor === 'boolean') return { booleanValue: valor };
   if (typeof valor === 'string') return { stringValue: valor };
-  if (Array.isArray(valor)) return { arrayValue: valor.length ? { values: valor.map(valorFirestore) } : {} };
+  if (Array.isArray(valor)) return { arrayValue: valor.length ? { values: valor.map((item) => valorFirestore(item, projeto)) } : {} };
   if (typeof valor === 'object' && valor.__double !== undefined) return { doubleValue: Number(valor.__double) };
-  if (typeof valor === 'object') return { mapValue: { fields: Object.fromEntries(Object.entries(valor).map(([chave, item]) => [chave, valorFirestore(item)])) } };
+  if (typeof valor === 'object' && valor.__inteiro !== undefined) return { integerValue: String(Math.trunc(Number(valor.__inteiro))) };
+  if (typeof valor === 'object' && valor.__referencia !== undefined) {
+    if (!projeto) throw new Error('referencia sem o id do projeto');
+    return { referenceValue: `projects/${projeto}/databases/(default)/documents/${valor.__referencia}` };
+  }
+  if (typeof valor === 'object') return { mapValue: { fields: Object.fromEntries(Object.entries(valor).map(([chave, item]) => [chave, valorFirestore(item, projeto)])) } };
   throw new Error(`tipo sem conversao: ${typeof valor}`);
 }
 
 export const decimal = (numero) => ({ __double: numero });
+export const inteiro = (numero) => ({ __inteiro: numero });
+export const referencia = (caminho) => ({ __referencia: caminho });
 
 // status e started so na criacao (novo: true); a edicao deixa os dois como estao. `ligacao` (status,
 // started e aguardandoInicio) troca os dois quando o agendamento pede (7.1 e 7.2).
@@ -49,8 +58,8 @@ export function camposDoBanner({ id, path, storageRef, largura, altura, inicio, 
   };
 }
 
-export function documentoRest(campos) {
-  return { fields: Object.fromEntries(Object.entries(campos).map(([chave, valor]) => [chave, valorFirestore(valor)])) };
+export function documentoRest(campos, projeto = null) {
+  return { fields: Object.fromEntries(Object.entries(campos).map(([chave, valor]) => [chave, valorFirestore(valor, projeto)])) };
 }
 
 // Le a largura e a altura reais da foto (ja recortada pelo painel). Sem tamanho, recusa: nunca {0,0}.

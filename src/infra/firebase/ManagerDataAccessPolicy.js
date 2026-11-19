@@ -41,6 +41,8 @@ const COUPON_COLLECTIONS = new Set(['Cupons', 'Campaigns']);
 const CAMPOS_DA_LOJA_SO_ADMIN = [
   'isActive', 'status', 'motivoRecusa', 'aprovadoPor', 'aprovadoEm', 'recusadoPor', 'recusadoEm', 'enviadoEm',
   'origemCadastro', 'cnpjConferido', 'offerColor', 'scheduling.contracted',
+  // Cor do selo "-N%" (cola B57-01, item C6): so pelo Admin, como o offerColor.
+  'discountBadgeColor',
   // Contrato da versao 55 (cola RP-13): interruptores do app e blocos da Home, so pelo Admin
   // (PATCH /api/admin/estabelecimentos/:lojaId/app-do-cliente).
   'featureFlags', 'aparenciaHome',

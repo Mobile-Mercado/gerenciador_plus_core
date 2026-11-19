@@ -10,7 +10,12 @@ import { quandoIso } from './PedidosDeLoja.js';
 // uma entra no Gerenciador Plus, "Corrigir acesso", edicao com previa, ligar no app Mobile
 // Supermercados (isActive, sempre manual), excluir so loja vazia, aparencia e agendamento.
 const COR = /^#[0-9A-Fa-f]{6}$/;
-export const OFFER_COLOR_PADRAO = '#FFF4D1';
+// Fundo de Ofertas do app desde 14/11 (cola B57-01b, item C6): #F5F5F7, o FUNDO_DE_OFERTAS_PADRAO da
+// web. Antes, #FFF4D1.
+export const OFFER_COLOR_PADRAO = '#F5F5F7';
+// Cor do selo "-N%" do card de produto do app (cola B57-01, item C6). Sem o campo, #1F9D4E, o
+// "texto verde" do mockup "Selo de desconto" aprovado pelo Thay em 18/11 (cola B57-01b, item C6).
+export const DISCOUNT_BADGE_COLOR_PADRAO = '#1F9D4E';
 const CAMPOS_EDITAVEIS = ['name', 'address', 'phone', 'cnpj'];
 const CAMPOS_ENDERECO = ['street', 'number', 'complement', 'neighborhood', 'city', 'uf', 'zipCode'];
 
@@ -412,7 +417,7 @@ export class LojaNoAdmin {
     return { ...previa, excluida: true, documento };
   }
 
-  // ===== Aparencia (so campos que o app ja le, mais offerColor) =====
+  // ===== Aparencia (so campos que o app ja le, mais offerColor e discountBadgeColor) =====
 
   async aparencia(lojaId) {
     const data = (await this.loja(lojaId)).data() || {};
@@ -422,6 +427,8 @@ export class LojaNoAdmin {
       secondaryColor: data.secondaryColor || null,
       offerColor: data.offerColor || null,
       offerColorPadrao: OFFER_COLOR_PADRAO,
+      discountBadgeColor: data.discountBadgeColor || null,
+      discountBadgeColorPadrao: DISCOUNT_BADGE_COLOR_PADRAO,
       slogan: data.slogan || null,
       chatProfileImageUrl: data.chatProfileImageUrl || null,
       coverImageUrl: data.coverImageUrl || null,
@@ -433,7 +440,7 @@ export class LojaNoAdmin {
   async salvarAparencia(lojaId, entrada = {}) {
     const loja = await this.loja(lojaId);
     const atualizacao = {};
-    ['primaryColor', 'secondaryColor', 'offerColor'].forEach((campo) => {
+    ['primaryColor', 'secondaryColor', 'offerColor', 'discountBadgeColor'].forEach((campo) => {
       if (entrada[campo] === undefined) return;
       if (entrada[campo] === null || entrada[campo] === '') {
         atualizacao[campo] = FieldValue.delete();

@@ -65,7 +65,7 @@ test('padroes: loja sem nada gravado le os padroes do mockup aprovado', async ()
     fraseReenvio: 'Não recebeu o código?', botaoReenvio: 'Reenviar código', outraFormaLigada: true,
     fraseOutraForma: 'Não consegue receber SMS?', botaoOutraForma: 'Acessar de outra forma',
   });
-  assert.deepEqual(lida.folhaNome, { titulo: 'Como prefere ser chamado?', campo: 'Qual seu nome', botao: 'Salvar', ilustracaoUrl: null });
+  assert.deepEqual(lida.folhaNome, { titulo: 'Como podemos te chamar?', campo: 'Qual seu nome', botao: 'Salvar', ilustracaoUrl: null });
   assert.deepEqual(lida.folhaEndereco, { titulo: 'Onde entregar as suas compras?', texto: '', botao: 'Adicionar endereço', pularLigado: true, pular: 'Agora não' });
   assert.deepEqual(lida.aberturaPadrao, { nome: null, animacaoUrl: null });
 });

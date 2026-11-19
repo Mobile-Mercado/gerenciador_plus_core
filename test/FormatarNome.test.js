@@ -22,9 +22,13 @@ test('conectivos em minusculo, menos na primeira palavra', () => {
   assert.equal(formatarNome('DE MAO EM MAO'), 'De Mao em Mao');
 });
 
-test('unidade em minusculo', () => {
+test('unidade em minusculo, menos o litro (B57-01, A12)', () => {
   assert.equal(formatarNome('agua 500 ML'), 'Agua 500 ml');
-  assert.equal(formatarNome('refri 2L'), 'Refri 2l');
+  assert.equal(formatarNome('refri 2L'), 'Refri 2L');
+  assert.equal(formatarNome('refri 2l'), 'Refri 2L');
+  assert.equal(formatarNome('suco 1,5 l'), 'Suco 1,5 L');
+  assert.equal(formatarNome('ARROZ 5KG'), 'Arroz 5kg');
+  assert.equal(formatarNome('biscoito 200G'), 'Biscoito 200g');
   assert.equal(formatarNome('ovos UN'), 'Ovos un');
 });
 
