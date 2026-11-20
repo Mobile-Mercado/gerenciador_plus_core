@@ -315,7 +315,7 @@ test('dia sem nenhuma busca grava resumo zerado, sem termos', async () => {
   assert.deepEqual(registro.dias[DIA].porCliente, []);
   assert.equal(registro.gravados.resumo.dias.length, 1);
   assert.deepEqual(registro.gravados.resumo.dias[0], {
-    dia: DIA, buscas: 0, semResultado: 0, termosDistintos: 0, clientes: 0, convertidas: 0, semPedido: 0, documento: true,
+    dia: DIA, buscas: 0, semResultado: 0, termosDistintos: 0, clientes: 0, convertidas: 0, semPedido: 0, comprou: 0, semCompra: 0, documento: true,
   });
 });
 
@@ -536,7 +536,7 @@ test('o resumo nao guarda nada alem de termo, contagem, datas e id de cliente', 
   assert.ok(!gravado.includes('app'), 'origem fica fora');
   assert.deepEqual(
     Object.keys(registro.dias[DIA]).sort(),
-    ['atualizadoEm', 'buscas', 'clientes', 'convertidas', 'dia', 'porCliente', 'semCliente', 'semPedido', 'semResultado', 'termos', 'termosDistintos', 'version'],
+    ['atualizadoEm', 'buscas', 'clientes', 'comprou', 'convertidas', 'dia', 'porCliente', 'semCliente', 'semCompra', 'semPedido', 'semResultado', 'termos', 'termosDistintos', 'version'],
   );
 });
 
@@ -760,4 +760,110 @@ test('C3: o dia refeito usa a marca da loja no desempate do uid, como o dia corr
 
   assert.equal(registro.dias['2026-09-29'].version, RESUMO_VERSION);
   assert.equal(registro.dias['2026-09-29'].porCliente[0].clienteDocId, 'cliente-marca-a');
+});
+
+// ===== "Comprou" (cola do Thay B57-03p, item 2) =====
+// A busca grava os codigos dos produtos disponiveis do resultado (produtosDisponiveis); o pedido
+// grava o produto de cada item em productRef. Comprou: mesmo cliente, ate 2 horas depois, com
+// pelo menos um produto do resultado.
+
+function item(codigo) {
+  return { productRef: `estabelecimentos/loja-1/Products/${codigo}`, quantity: 1, price: 5 };
+}
+
+test('B57-03p: pedido com produto do resultado em ate 2 horas conta como comprou', () => {
+  const resumo = resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ em: em(10), produtosDisponiveis: ['p1', 'p2'], produtosSemEstoque: [] })],
+    pedidos: [pedido({ createdAt: em(11, 59), productsCart: [item('p9'), item('p2')] })],
+  });
+
+  assert.equal(resumo.comprou, 1);
+  assert.equal(resumo.semCompra, 0);
+});
+
+test('B57-03p: pedido sem produto do resultado nao conta como comprou, mas continua convertida', () => {
+  const resumo = resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ em: em(10), produtosDisponiveis: ['p1'], produtosSemEstoque: ['p2'] })],
+    pedidos: [pedido({ createdAt: em(10, 30), productsCart: [item('p2'), item('p3')] })],
+  });
+
+  assert.equal(resumo.comprou, 0);
+  assert.equal(resumo.semCompra, 1);
+  assert.equal(resumo.convertidas, 1);
+});
+
+test('B57-03p: pedido depois de 2 horas, antes da busca, de outro cliente ou de teste nao conta como comprou', () => {
+  const comPedido = (extra) => resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ em: em(10), produtosDisponiveis: ['p1'] })],
+    pedidos: [pedido({ productsCart: [item('p1')], ...extra })],
+  });
+
+  for (const extra of [
+    { createdAt: em(12, 1) },
+    { createdAt: em(9, 59) },
+    { clientId: 'cliente-2' },
+    { isTest: true },
+    { isTestAccount: true },
+  ]) {
+    const resumo = comPedido(extra);
+    assert.equal(resumo.comprou, 0, JSON.stringify(extra));
+    assert.equal(resumo.semCompra, 1, JSON.stringify(extra));
+  }
+});
+
+test('B57-03p: busca gravada sem os codigos (antes da publicacao) e busca sem cliente ficam fora do comprou', () => {
+  const resumo = resumirBuscas({
+    dia: DIA,
+    buscas: [
+      busca({ em: em(10) }),
+      busca({ em: em(10), clienteId: '', produtosDisponiveis: ['p1'] }),
+      busca({ em: em(10), produtosDisponiveis: [] }),
+    ],
+    pedidos: [pedido({ createdAt: em(10, 30), productsCart: [item('p1')] })],
+  });
+
+  assert.equal(resumo.comprou, 0);
+  assert.equal(resumo.semCompra, 1);
+  assert.equal(resumo.convertidas, 2);
+});
+
+test('B57-03p: comprou acha o pedido pelo documento do uid em Users e aceita items no lugar de productsCart', () => {
+  const indice = indiceDeUsuarios([docUsuario('cliente-antigo', 'uid-antigo')]);
+  const resumo = resumirBuscas({
+    dia: DIA,
+    buscas: [busca({ clienteId: 'uid-antigo', em: em(10), produtosDisponiveis: ['p1'] })],
+    pedidos: [pedido({ clientId: 'cliente-antigo', createdAt: em(10, 30), items: [{ productReference: { id: 'p1' } }] })],
+    indiceDeUsuarios: indice,
+  });
+
+  assert.equal(resumo.comprou, 1);
+  assert.equal(resumo.semCompra, 0);
+});
+
+test('B57-03p: a linha do topo leva comprou e semCompra', async () => {
+  const { storeRef, registro } = firestoreFalso({
+    logs: [
+      busca({ em: em(10), produtosDisponiveis: ['p1'] }),
+      busca({ clienteId: 'cliente-2', em: em(12), produtosDisponiveis: ['p1'] }),
+      busca({ em: em(13) }),
+    ],
+  });
+
+  const resultado = await rodarResumoDeBuscas({
+    storeRef,
+    agora: AGORA,
+    atualizadoEm: 'quando',
+    carregarPedidos: async () => [pedido({ createdAt: em(11, 59), productsCart: [item('p1')] })],
+  });
+
+  const linha = registro.gravados.resumo.dias.at(-1);
+  assert.equal(linha.comprou, 1);
+  assert.equal(linha.semCompra, 1);
+  assert.equal(registro.dias[DIA].comprou, 1);
+  assert.equal(registro.dias[DIA].semCompra, 1);
+  assert.equal(resultado.comprou, 1);
+  assert.equal(resultado.semCompra, 1);
 });
