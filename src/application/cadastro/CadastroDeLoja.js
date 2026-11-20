@@ -1,6 +1,6 @@
 import { FieldValue, GeoPoint } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
-import { formatarCnpj, validarCnpj, validarEmail, validarPedidoDeCadastro } from '../../domain/cadastro/validacoes.js';
+import { formatarCnpj, validarCelular, validarCnpj, validarEmail, validarPedidoDeCadastro } from '../../domain/cadastro/validacoes.js';
 import { logger } from '../../infra/logger/logger.js';
 
 // Cadastro de loja feito pelo servidor. O app gerenciador manda o pedido e o Core cria, numa
@@ -22,6 +22,9 @@ export const STATUS_DO_CADASTRO = Object.freeze([STATUS.AGUARDANDO_EMAIL, STATUS
 export const WHITELABEL_GERENCIADOR = 'br.com.mobile.gerenciador';
 export const ORIGEM_APP_GERENCIADOR = 'app_gerenciador';
 export const COLECAO_PEDIDOS = 'pedidosDeLoja';
+// Cola B57-03, A1: celular conferido por SMS no cadastro, por instalacao do app, ate o pedido
+// ser criado ("Criar conta"), que entao leva celularConfirmado.
+export const COLECAO_CELULARES_CONFIRMADOS = 'celularesConfirmados';
 
 // O app mostra a tela E5: "Este e-mail já tem cadastro. Entrar".
 function emailJaUsado() {
@@ -148,6 +151,35 @@ export class CadastroDeLoja {
   // endereco. Mesma regra e mesma recusa da criacao (assertEmailLivre, 409
   // cadastro_email_em_uso, so com codigo, mensagem e campo), com os mesmos limites da criacao
   // (por IP e por e-mail), para a conferencia nao servir de lista de contas.
+  // Cola B57-03, A1: o app confere o codigo do SMS pelo login por numero do Firebase e manda o
+  // token desse login, que ja saiu (e foi apagado, se o numero nao tinha conta). O Core so confere
+  // que o token e de um login por numero com o mesmo celular e guarda a confirmacao para o pedido.
+  // Nao cria, nao muda e nao apaga conta nenhuma.
+  async confirmarCelular({ instalacaoId, celular, idToken }) {
+    const digitos = validarCelular(celular);
+    let token;
+    try {
+      token = await this.auth.verifyIdToken(idToken);
+    } catch {
+      throw new AppError('Confirmação do celular inválida.', { statusCode: 401, code: 'celular_token_invalido' });
+    }
+    if (token?.firebase?.sign_in_provider !== 'phone' || token.phone_number !== `+55${digitos}`) {
+      throw new AppError('O código não é deste celular.', { statusCode: 400, code: 'celular_nao_confere' });
+    }
+    await this.firestore.collection(COLECAO_CELULARES_CONFIRMADOS).doc(instalacaoId).set({
+      celular: digitos,
+      confirmadoEm: this.serverTimestamp(),
+    });
+    return { celularConfirmado: true };
+  }
+
+  async celularConfirmadoDa(instalacaoId, celular) {
+    if (!instalacaoId) return null;
+    const lido = await this.firestore.collection(COLECAO_CELULARES_CONFIRMADOS).doc(instalacaoId).get();
+    const dados = lido.exists ? lido.data() || {} : {};
+    return dados.celular === celular ? dados.confirmadoEm || null : null;
+  }
+
   async conferirEmail(emailInformado, { ip = null } = {}) {
     const email = validarEmail(emailInformado);
     await this.limites?.registrar([{ tipo: 'ip', valor: ip }, { tipo: 'email', valor: email }]);
@@ -166,6 +198,7 @@ export class CadastroDeLoja {
     await this.assertCnpjLivre(pedido.cnpj);
     const receita = await this.conferirCnpj(pedido.cnpj);
     const { cnpjConferido, razaoSocial } = receita;
+    const celularConfirmadoEm = await this.celularConfirmadoDa(pedido.instalacaoId, pedido.responsavel.celular);
 
     let conta;
     try {
@@ -250,6 +283,9 @@ export class CadastroDeLoja {
         erp: pedido.erp,
         instalacaoId: pedido.instalacaoId,
         phone: pedido.responsavel.celular,
+        // Cola B57-03, A1: o celular conferido por SMS no cadastro.
+        celularConfirmado: celularConfirmadoEm !== null,
+        celularConfirmadoEm,
         email: pedido.responsavel.email,
         responsibleName: pedido.responsavel.nome,
         status: STATUS.AGUARDANDO_EMAIL,
@@ -346,6 +382,8 @@ export class CadastroDeLoja {
       lojaId: aprovado ? dados.lojaId || null : null,
       nomeDaLoja: dados.name || null,
       emailConfirmado: Boolean(usuario?.emailVerified),
+      // Cola B57-03, A2: os horarios dos passos de "Pedido em analise" vem do servidor.
+      criadoEm: paraIso(dados.createdAt),
       enviadoEm: paraIso(dados.enviadoEm),
       aprovadoEm: paraIso(dados.aprovadoEm),
     };

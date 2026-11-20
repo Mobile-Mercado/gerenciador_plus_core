@@ -45,7 +45,7 @@ test('padroes: loja sem nada gravado le os padroes do mockup aprovado', async ()
     imagemUrl: null, escurecer: 0, rodapeLigado: false, rodape: '', rodapeCor: '#7A8099',
   });
   assert.deepEqual(lida.abertura, {
-    tipo: 'imagem', animacaoUrl: null, cor: null, rodapeLigado: true, rodape: 'Powered by: Móbile', rodapeCor: '#FFFFFF', tempoMinimo: 1.5,
+    tipo: 'imagem', animacaoUrl: null, cor: null, rodapeLigado: true, rodape: 'Powered by: Móbile', rodapeCor: '#FFFFFF', tempoMinimo: 0,
     imagemUrl: 'https://splash/antiga.webp', animacaoPropria: false,
   });
   assert.deepEqual(lida.boasVindas, {
@@ -76,7 +76,7 @@ test('leitura: valor gravado fora da faixa ou do tipo vale o padrao; cor sai em 
   assert.equal(lido.cor, '#ABCDEF');
   assert.equal(lido.titulo, 'Informe o código que você\nrecebeu por SMS:');
   assert.equal(lido.outraFormaLigada, true);
-  assert.equal(blocoDaLoja('abertura', { abertura: { tempoMinimo: 1.25 } }).tempoMinimo, 1.5, 'passo de 0,5');
+  assert.equal(blocoDaLoja('abertura', { abertura: { tempoMinimo: 1.25 } }).tempoMinimo, 0, 'passo de 0,5: fora do passo vale o padrao (0 desde a B57-03h)');
   assert.equal(blocoDaLoja('abertura', { abertura: { tempoMinimo: 0 } }).tempoMinimo, 0);
   assert.equal(blocoDaLoja('boasVindas', { boasVindas: { texto: '' } }).texto, '', 'texto vazio fica vazio (some no app)');
   // Toda faixa numerica tem o padrao dentro dela.
@@ -301,7 +301,7 @@ test('rota do lojista: nao grava nenhum bloco da jornada nem envia os arquivos d
 
 test('padroesDoBloco: os blocos do contrato e so eles', () => {
   assert.deepEqual(Object.keys(BLOCOS_DA_JORNADA), ['primeiraTela', 'abertura', 'boasVindas', 'login', 'codigoSms', 'folhaNome', 'folhaEndereco']);
-  assert.equal(padroesDoBloco('abertura').tempoMinimo, 1.5);
+  assert.equal(padroesDoBloco('abertura').tempoMinimo, 0, 'padrao 0 desde a B57-03h');
 });
 
 test('B56-27: o envio da imagem da Abertura (splashImageUrl) e recusado, pela rota e no caso de uso; o resto continua', async () => {

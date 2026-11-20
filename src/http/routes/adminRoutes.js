@@ -100,6 +100,7 @@ const appNasLojasSchema = z.object({ feito: z.boolean() });
 
 const tipoDe = (plural) => (tipoSchema.parse(plural) === 'categorias' ? 'categoria' : 'subcategoria');
 const atorDe = (request) => ({ uid: request.auth?.uid || null, email: request.auth?.email || null });
+const atorDoAlerta = (request) => ({ ...atorDe(request), nome: request.auth?.name || null });
 
 const sugestoesClientesSchema = z.object({
   lojaId: z.string().min(1).max(120).optional(),
@@ -111,9 +112,31 @@ export function createAdminRoutes({
   manageCatalogoPadrao, sugestoesDosClientes, pedidosDeLoja, lojaNoAdmin, franquias, administradores, dadosDoAdmin,
   manageImplantationPipelines, jornadaDeEntrada = null, entregaDaLoja = null, appDoClienteDaLoja = null,
   formasDePagamento = null, instalacoesDosApps = null, conjuntosDeIcones = null, aparenciaDaLoja = null,
-  aparenciaDaHome = null, bannersNoAdmin = null,
+  aparenciaDaHome = null, bannersNoAdmin = null, alertasDoAdmin = null,
 }) {
   const router = Router();
+
+  // ===== Alertas (cola B57-03, D1 e D2, e B57-03c, item 8) =====
+  // A aba le os alertas e as conferencias; ao abrir, roda as conferencias automaticas que passaram
+  // de 10 minutos (sem agenda publicada). "Marcar como resolvido" e "Conferi agora" gravam quem e
+  // quando, so nas colecoes da aba.
+  if (alertasDoAdmin) {
+    router.get('/alertas', asyncHandler(async (request, response) => {
+      const lista = z.enum(['abertos', 'resolvidos', 'todos']).catch('abertos').parse(request.query.lista);
+      await alertasDoAdmin.conferir().catch(() => null);
+      const [alertas, conferencias] = await Promise.all([alertasDoAdmin.listar(lista), alertasDoAdmin.listaDeConferencias()]);
+      response.json({ data: { ...alertas, conferencias } });
+    }));
+    router.get('/alertas/abertos', asyncHandler(async (_request, response) => {
+      response.json({ data: { abertos: await alertasDoAdmin.quantidadeDeAbertos() } });
+    }));
+    router.post('/alertas/:id/resolver', asyncHandler(async (request, response) => {
+      response.json({ data: await alertasDoAdmin.resolver(request.params.id, atorDoAlerta(request)) });
+    }));
+    router.post('/alertas/conferencias/:chave/conferi', asyncHandler(async (request, response) => {
+      response.json({ data: await alertasDoAdmin.conferiAgora(request.params.chave, atorDoAlerta(request)) });
+    }));
+  }
 
   // ===== Instalacoes dos apps (tela Instalacoes, 16/10/2026) =====
   // Leitura: os Stats/instalacoesApp das lojas com app, uma leitura por loja, quando a tela abre.

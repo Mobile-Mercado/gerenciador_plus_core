@@ -381,6 +381,12 @@ async function escreverResumoDeLogin({
 
 async function carregarRegistrosDoDia({ db, dia }) {
   const { inicio, fim } = limitesDoDia(dia);
+  return carregarRegistrosEntre({ db, inicio, fim });
+}
+
+// Registros de um intervalo qualquer: o dia do resumo e a ultima hora da conferencia do item 3
+// do checklist (aba Alertas do Admin, cola B57-03c, item 8). So le.
+async function carregarRegistrosEntre({ db, inicio, fim }) {
   const snapshot = await db.collection(COLECAO)
     .where('em', '>=', inicio)
     .where('em', '<', fim)
@@ -491,6 +497,7 @@ module.exports = {
   RegistroInvalido,
   cabemNoLimite,
   carregarRegistrosDoDia,
+  carregarRegistrosEntre,
   chaveDoLimite,
   codigoDeErro,
   diaDe,

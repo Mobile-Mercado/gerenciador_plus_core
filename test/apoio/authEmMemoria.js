@@ -42,6 +42,14 @@ export class AuthEmMemoria {
     conta.customClaims = structuredClone(claims || {});
   }
 
+  // Tokens de login falsos (cola B57-03, A1): token -> conteudo decodificado.
+  tokens = new Map();
+
+  async verifyIdToken(token) {
+    if (!this.tokens.has(token)) throw this.erro('auth/argument-error');
+    return structuredClone(this.tokens.get(token));
+  }
+
   confirmarEmail(uid) {
     this.contas.get(uid).emailVerified = true;
   }

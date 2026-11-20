@@ -53,6 +53,8 @@ function linhaDoPedido(documento) {
     instalacaoId: data.instalacaoId || null,
     razaoSocial: data.razaoSocial || null,
     responsavel: { nome: data.responsibleName || null, celular: data.phone || null, email: data.email || null },
+    // Cola B57-03, A1: celular conferido por SMS no cadastro.
+    celularConfirmado: data.celularConfirmado === true,
     status: data.status,
     criadoEm: quandoIso(data.createdAt),
     enviadoEm: quandoIso(data.enviadoEm),

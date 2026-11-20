@@ -43,7 +43,8 @@ export const BLOCOS_DA_JORNADA = Object.freeze({
     rodapeLigado: ligado(true),
     rodape: texto('Powered by: Móbile'),
     rodapeCor: cor('#FFFFFF'),
-    tempoMinimo: numero(0, 6, 0.5, 1.5),
+    // Padrao 0 (cola B57-03h, item 1; antes, 1,5 s): sem espera, salvo a loja que escolheu.
+    tempoMinimo: numero(0, 6, 0.5, 0),
   }),
   boasVindas: Object.freeze({
     cor: cor(null),
