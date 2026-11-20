@@ -264,6 +264,7 @@ module.exports = {
   classificarPedido,
   grupoDaCategoria,
   grupoDoProduto,
+  idDoProduto,
   precisaClassificar,
   valorDoItem,
 };

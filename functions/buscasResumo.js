@@ -13,6 +13,7 @@
 // pedido: a constante vem de la, nao e criada de novo aqui.
 const { PROBABLE_ORDER_WINDOW_MS } = require('./agenteConversas');
 const { isTestOrder, orderClientId } = require('./hourlySalesAggregation');
+const { idDoProduto } = require('./resumoDoMes');
 
 // Versao 3 (cola B57-01, item C3): a conversao casa o uid da busca com o id do documento em
 // Users, o que o pedido grava. Dia gravado na versao 2 e refeito enquanto o SearchLogs dele existir.
@@ -120,6 +121,43 @@ function momentosDaBusca(pedidosPorCliente, clienteId, clienteDocId) {
   return [...doUid, ...(pedidosPorCliente.get(clienteDocId) || [])];
 }
 
+// "Comprou" (cola do Thay B57-03p, item 2): os pedidos de cada cliente com os codigos dos produtos
+// (id do documento em Products, o mesmo que a busca grava). Mesma regua da conversao: pedido de
+// teste e de conta de teste fora.
+function comprasPorCliente(pedidos = [], testAccountIds = new Set()) {
+  const porCliente = new Map();
+  pedidos.forEach((pedido) => {
+    const clienteId = orderClientId(pedido);
+    if (!clienteId) return;
+    if (isTestOrder(pedido, { testAccount: testAccountIds.has(clienteId) })) return;
+    const criado = paraData(pedido?.createdAt);
+    if (!criado) return;
+    const itens = Array.isArray(pedido.productsCart)
+      ? pedido.productsCart
+      : (Array.isArray(pedido.items) ? pedido.items : []);
+    const produtos = new Set(itens.map((item) => idDoProduto(item || {})).filter(Boolean));
+    if (!porCliente.has(clienteId)) porCliente.set(clienteId, []);
+    porCliente.get(clienteId).push({ criado: criado.getTime(), produtos });
+  });
+  return porCliente;
+}
+
+function comprasDaBusca(comprasPorClienteId, clienteId, clienteDocId) {
+  const doUid = comprasPorClienteId.get(clienteId) || [];
+  if (!clienteDocId || clienteDocId === clienteId) return doUid;
+  return [...doUid, ...(comprasPorClienteId.get(clienteDocId) || [])];
+}
+
+// Comprou: pedido do mesmo cliente, criado depois da busca e em ate 2 horas, com pelo menos um
+// produto que apareceu disponivel no resultado daquela busca (produtosDisponiveis do registro).
+function comprouDaBusca(compras = [], quando, codigos = []) {
+  if (!quando || !codigos.length) return false;
+  const buscaEm = quando.getTime();
+  return compras.some(({ criado, produtos }) => criado >= buscaEm
+    && criado - buscaEm <= PROBABLE_ORDER_WINDOW_MS
+    && codigos.some((codigo) => produtos.has(String(codigo))));
+}
+
 function virouPedido(momentos = [], quando) {
   if (!quando) return false;
   const buscaEm = quando.getTime();
@@ -133,12 +171,17 @@ function resumirBuscas({
   marcaDaLoja = null,
 }) {
   const pedidosPorCliente = momentosDePedidoPorCliente(pedidos, testAccountIds);
+  const compras = comprasPorCliente(pedidos, testAccountIds);
   const termos = new Map();
   const clientes = new Map();
   let semResultado = 0;
   let convertidas = 0;
   let semPedido = 0;
   let semCliente = 0;
+  // "Comprou": so as buscas com cliente gravadas com produtosDisponiveis, isto e, depois da
+  // publicacao da busca nova (cola do Thay B57-03p, item 2). As de antes ficam fora das duas contas.
+  let comprou = 0;
+  let semCompra = 0;
   // Id do documento em Users de cada uid, calculado uma vez por uid.
   const documentos = new Map();
   const documentoDoCliente = (clienteId) => {
@@ -174,6 +217,12 @@ function resumirBuscas({
     if (convertida) convertidas += 1;
     else semPedido += 1;
 
+    if (Array.isArray(busca?.produtosDisponiveis)) {
+      const codigos = busca.produtosDisponiveis.map(String).filter(Boolean);
+      if (comprouDaBusca(comprasDaBusca(compras, clienteId, documentoDoCliente(clienteId)), quando, codigos)) comprou += 1;
+      else semCompra += 1;
+    }
+
     if (!clientes.has(clienteId)) {
       clientes.set(clienteId, {
         clienteId, buscas: 0, convertidas: 0, termos: new Map(),
@@ -201,6 +250,8 @@ function resumirBuscas({
     convertidas,
     semPedido,
     semCliente,
+    comprou,
+    semCompra,
     termosDistintos: termos.size,
     clientes: clientes.size,
     termos: [...termos.values()].sort(maisVezes),
@@ -271,6 +322,10 @@ async function escreverResumoDeBuscas({
     // os documentos de dia. Numero absoluto, como os outros; a porcentagem e da tela.
     convertidas: resumo.convertidas,
     semPedido: resumo.semPedido,
+    // "Comprou" (B57-03p): base e comprou + semCompra; zero nos dois e dia sem busca gravada
+    // com os codigos dos produtos.
+    comprou: resumo.comprou,
+    semCompra: resumo.semCompra,
     documento: true,
   };
   // A janela do topo e de data, nao de quantidade: dia mais velho que ela perde a linha.
@@ -561,6 +616,8 @@ async function rodarResumoDeBuscas({
     convertidas: resumo.convertidas,
     semPedido: resumo.semPedido,
     semCliente: resumo.semCliente,
+    comprou: resumo.comprou,
+    semCompra: resumo.semCompra,
     termosDistintos: resumo.termosDistintos,
     clientes: resumo.clientes,
     catalogoLido,
@@ -582,6 +639,8 @@ module.exports = {
   RESUMO_VERSION,
   carregarBuscasDoDia,
   carregarNomesDoCatalogo,
+  comprasPorCliente,
+  comprouDaBusca,
   diaAnterior,
   diaDe,
   diaMenos,
