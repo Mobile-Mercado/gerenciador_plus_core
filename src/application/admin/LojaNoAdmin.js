@@ -497,4 +497,14 @@ export class LojaNoAdmin {
   async resumo(lojaId) {
     return this.resumoDaLoja(await this.loja(lojaId));
   }
+
+  // Loja aberta no Admin (cola 05 do Thay, 21/11, item 2.1): o resumo mais o nome do dono, so leitura,
+  // de Users/{id}.name da conta dona (a do userReference, quando o caminho do dono do Core chega nesta
+  // loja; o mesmo dono de contas()). Sem dono ou sem nome gravado: null. Nenhuma rota grava o nome.
+  async resumoComDono(lojaId) {
+    const loja = await this.loja(lojaId);
+    const referencia = await this.referenciaDoDono(loja);
+    const nome = referencia.estado === 'certo' ? referencia.usuario?.data()?.name : null;
+    return { ...this.resumoDaLoja(loja), nomeDoDono: typeof nome === 'string' && nome.trim() ? nome.trim() : null };
+  }
 }
