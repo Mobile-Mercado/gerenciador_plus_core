@@ -188,7 +188,8 @@ test('B57-07, item 6: "Leva para" grava products com referencias e numeros do ap
     const produtos = await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'produtos', ids: ['pr1', 'pr2'] } } });
     assert.equal(produtos.status, 200);
     const gravado = rota.rest.gravados.at(-1);
-    assert.deepEqual(gravado.opcoes.mascara, ['products', 'category']);
+    assert.deepEqual(gravado.opcoes.mascara, ['products', 'category', 'destino'], 'B57-10, B2: o destino sai do documento');
+    assert.equal(gravado.documento.fields.destino, undefined);
     const [primeiro, segundo] = gravado.documento.fields.products.arrayValue.values.map((valor) => valor.mapValue.fields);
     assert.equal(primeiro.reference.referenceValue, 'projects/proj/databases/(default)/documents/estabelecimentos/loja-1/Products/pr1');
     assert.equal(primeiro.companyRef.referenceValue, 'projects/proj/databases/(default)/documents/estabelecimentos/loja-1');
@@ -381,4 +382,36 @@ test('B57-10, B1: produto a venda e ativo, fora da lixeira, com preco e com esto
   assert.equal(produtoAVenda({ isActive: true, currentPrice: 0 }), false);
   assert.equal(produtoAVenda({ isActive: false, currentPrice: 1 }), false);
   assert.equal(produtoAVenda({ isActive: true, isTrashed: true, currentPrice: 1 }), false);
+});
+
+// Cola B57-10, item B2: "Ofertas" como destino; o app do cliente le destino: 'ofertas' (com products
+// vazio e category nula). Os outros destinos apagam o campo.
+test('B57-10, B2: "Leva para" Ofertas grava destino ofertas, products vazio e category nula; os outros apagam o destino', async () => {
+  const documentos = {
+    'estabelecimentos/loja-1': {},
+    'estabelecimentos/loja-1/Banners/p1': banner('principal', { products: [{ id: 'a' }] }),
+    'estabelecimentos/loja-1/Banners/o1': banner('vertical', { destino: 'ofertas', products: [], category: null }),
+    'estabelecimentos/loja-1/Products/pr1': { name: 'Picanha', currentPrice: 59.9 },
+  };
+  const rota = await subir({ documentos });
+  try {
+    const ofertas = await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'ofertas' } } });
+    assert.equal(ofertas.status, 200);
+    const gravado = rota.rest.gravados.at(-1);
+    assert.deepEqual(gravado.opcoes.mascara, ['products', 'category', 'destino']);
+    assert.deepEqual(gravado.documento.fields, { products: { arrayValue: {} }, category: { nullValue: null }, destino: { stringValue: 'ofertas' } });
+
+    await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'produtos', ids: ['pr1'] } } });
+    const produtos = rota.rest.gravados.at(-1);
+    assert.deepEqual(produtos.opcoes.mascara, ['products', 'category', 'destino']);
+    assert.equal(produtos.documento.fields.destino, undefined, 'na mascara e fora do corpo: o campo sai');
+
+    const lista = await rota.chamar('/por-tipo');
+    assert.deepEqual(lista.corpo.data.tipos.vertical.banners.find((item) => item.id === 'o1').levaPara, { tipo: 'ofertas' });
+    assert.equal((await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'ofertas', id: 'x' } } })).status, 400, 'Ofertas sem outros campos');
+  } finally {
+    await rota.fechar();
+  }
+  assert.deepEqual(destinoDoBanner({ destino: 'ofertas', products: [], category: null }), { tipo: 'ofertas' });
+  assert.deepEqual(destinoDoBanner({ destino: null, products: [] }), { tipo: 'nada' });
 });

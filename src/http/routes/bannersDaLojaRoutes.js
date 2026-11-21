@@ -19,6 +19,8 @@ export const TIPOS_DA_TELA_LOJA = Object.freeze(['principal', 'vertical', 'popup
 const novoPorTipoSchema = z.object({ tipo: z.enum(TIPOS_DA_TELA_LOJA), inicio: z.string().min(1).max(40), fim: z.string().min(1).max(40) });
 const levaParaSchema = z.discriminatedUnion('tipo', [
   z.object({ tipo: z.literal('nada') }).strict(),
+  // Cola B57-10, item B2: "Ofertas" (grava destino: 'ofertas').
+  z.object({ tipo: z.literal('ofertas') }).strict(),
   z.object({ tipo: z.literal('produtos'), ids: z.array(z.string().min(1).max(120).regex(/^[^/]+$/)).min(1).max(100) }).strict(),
   z.object({ tipo: z.literal('categoria'), id: z.string().min(1).max(120).regex(/^[^/]+$/) }).strict(),
 ]);

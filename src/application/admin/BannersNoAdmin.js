@@ -37,8 +37,12 @@ const data = (valor) => {
 // "Leva para" (cola B57-07, item 6): nada, os produtos (products) ou a categoria (category) do banner,
 // como o app gerenciador grava (BannerProductAdapter e BannerCategoryAdapter do mobile_core) e o app do
 // cliente le (main_variant_1_page.dart:229-236).
+// Cola B57-10, item B2: "Ofertas" grava destino: 'ofertas' (com products vazio e category nula); os
+// outros destinos apagam o campo destino. O app do cliente le esse campo, com esse nome.
 export const MAXIMO_DE_PRODUTOS_DO_BANNER = 100;
+export const DESTINO_OFERTAS = 'ofertas';
 export function destinoDoBanner(banner) {
+  if (banner.destino === DESTINO_OFERTAS) return { tipo: 'ofertas' };
   const produtos = Array.isArray(banner.products) ? banner.products : [];
   if (produtos.length) return { tipo: 'produtos', quantos: produtos.length, ids: produtos.map((produto) => String(produto?.id || '')).filter(Boolean) };
   if (banner.category && typeof banner.category === 'object') {
@@ -347,10 +351,13 @@ export class BannersNoAdmin {
         throw recusa('Categoria não encontrada nesta loja.', 'banner_categoria_nao_encontrada', 404);
       }
       category = categoriaDoBanner(lojaId, lida.id, lida.data() || {});
-    } else if (levaPara.tipo !== 'nada') {
+    } else if (levaPara.tipo !== 'nada' && levaPara.tipo !== 'ofertas') {
       throw recusa('Escolha para onde o banner leva.', 'banner_destino_invalido');
     }
-    await this.rest.gravar(this.caminho(lojaId, bannerId), documentoRest({ products, category }, this.rest.projectId), { mascara: ['products', 'category'] });
+    // Cola B57-10, item B2: destino na mascara sempre; so "Ofertas" manda o campo, e nos outros ele sai
+    // do documento (campo na mascara e fora do corpo e apagado pela API REST do Firestore).
+    const campos = levaPara.tipo === 'ofertas' ? { products, category, destino: DESTINO_OFERTAS } : { products, category };
+    await this.rest.gravar(this.caminho(lojaId, bannerId), documentoRest(campos, this.rest.projectId), { mascara: ['products', 'category', 'destino'] });
     return { banner: await this.ler(lojaId, bannerId), antes: { levaPara: destinoDoBanner(dados) } };
   }
 
