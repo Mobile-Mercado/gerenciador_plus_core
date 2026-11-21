@@ -271,7 +271,7 @@ export function createAdminRoutes({
 
   // ===== Loja aberta no Admin =====
   router.get('/estabelecimentos/:lojaId/resumo', asyncHandler(async (request, response) => {
-    response.json({ data: await lojaNoAdmin.resumo(request.params.lojaId) });
+    response.json({ data: await lojaNoAdmin.resumoComDono(request.params.lojaId) });
   }));
 
   router.get('/estabelecimentos/:lojaId/contas', asyncHandler(async (request, response) => {
