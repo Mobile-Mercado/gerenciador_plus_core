@@ -111,6 +111,18 @@ export function categoriaDoBanner(lojaId, id, categoria) {
   };
 }
 
+// Cola B57-10, item B1: o "Leva para" so oferece destino com conteudo. Produto a venda como o app do
+// cliente mostra (e como isForSale de functions/productImageFileCheck.js): ativo, fora da lixeira, preco
+// maior que zero e estoque sem campo ou maior que zero.
+export function produtoAVenda(produto = {}) {
+  const estoque = produto.quantityInStock;
+  return produto.isActive === true && produto.isTrashed !== true
+    && typeof produto.currentPrice === 'number' && produto.currentPrice > 0
+    && (estoque === null || estoque === undefined || (typeof estoque === 'number' && estoque > 0));
+}
+// array-contains-any aceita ate 30 valores por consulta.
+export const PRATELEIRAS_POR_CONSULTA = 30;
+
 // Conta para o limite: ligado (ou aguardando o inicio) e ainda nao encerrado.
 export function ocupaVaga(banner, agora) {
   const fim = data(banner.endAt);
@@ -330,12 +342,57 @@ export class BannersNoAdmin {
       if (!/^[^/]{1,120}$/.test(id)) throw recusa('Categoria não encontrada nesta loja.', 'banner_categoria_nao_encontrada', 404);
       const lida = await loja.collection('ProductCategories').doc(id).get();
       if (!lida.exists) throw recusa('Categoria não encontrada nesta loja.', 'banner_categoria_nao_encontrada', 404);
+      // Cola B57-10, item B1: categoria que o app nao mostra, ou sem produto a venda, nao vira destino.
+      if (!(await this.categoriasComConteudo(lojaId, { soEstas: [lida.id] })).includes(lida.id)) {
+        throw recusa('Categoria não encontrada nesta loja.', 'banner_categoria_nao_encontrada', 404);
+      }
       category = categoriaDoBanner(lojaId, lida.id, lida.data() || {});
     } else if (levaPara.tipo !== 'nada') {
       throw recusa('Escolha para onde o banner leva.', 'banner_destino_invalido');
     }
     await this.rest.gravar(this.caminho(lojaId, bannerId), documentoRest({ products, category }, this.rest.projectId), { mascara: ['products', 'category'] });
     return { banner: await this.ler(lojaId, bannerId), antes: { levaPara: destinoDoBanner(dados) } };
+  }
+
+  // Cola B57-10, item B1: as categorias que o app do cliente mostra (getProductCategories do
+  // mobile_firebase_api: categoria ativa com produto ativo, fora da lixeira, numa prateleira
+  // `${categoria}_${subcategoria}` de subcategoria ativa dela) e com pelo menos um produto a venda,
+  // para a categoria tambem abrir com produto. A consulta dos produtos e a do indice de Products
+  // (shelvesIds CONTAINS, isActive, isTrashed), de 30 em 30 prateleiras, so com os campos da conta;
+  // a categoria ja achada sai das proximas consultas. `soEstas`: so essas categorias.
+  async categoriasComConteudo(lojaId, { soEstas = null } = {}) {
+    const loja = this.firestore.collection('estabelecimentos').doc(String(lojaId || ''));
+    const [categorias, subcategorias] = await Promise.all([
+      loja.collection('ProductCategories').where('isActive', '==', true).get(),
+      loja.collection('ProductSubcategories').where('isActive', '==', true).get(),
+    ]);
+    const ativas = new Set(categorias.docs.map((documento) => documento.id).filter((id) => !soEstas || soEstas.includes(id)));
+    const categoriaDaPrateleira = new Map();
+    subcategorias.docs.forEach((documento) => {
+      const categoria = String(documento.data()?.categoryId || '');
+      if (ativas.has(categoria)) categoriaDaPrateleira.set(`${categoria}_${documento.id}`, categoria);
+    });
+    const comConteudo = new Set();
+    let pendentes = [...categoriaDaPrateleira.keys()];
+    while (pendentes.length) {
+      const lote = pendentes.slice(0, PRATELEIRAS_POR_CONSULTA);
+      const produtos = await loja.collection('Products')
+        .where('shelvesIds', 'array-contains-any', lote)
+        .where('isActive', '==', true)
+        .where('isTrashed', '==', false)
+        .select('isActive', 'isTrashed', 'currentPrice', 'quantityInStock', 'shelvesIds')
+        .get();
+      produtos.docs.forEach((documento) => {
+        const produto = documento.data() || {};
+        if (!produtoAVenda(produto)) return;
+        (Array.isArray(produto.shelvesIds) ? produto.shelvesIds : []).forEach((prateleira) => {
+          const categoria = categoriaDaPrateleira.get(String(prateleira ?? ''));
+          if (categoria) comConteudo.add(categoria);
+        });
+      });
+      pendentes = pendentes.slice(PRATELEIRAS_POR_CONSULTA).filter((prateleira) => !comConteudo.has(categoriaDaPrateleira.get(prateleira)));
+    }
+    return [...comConteudo].sort();
   }
 
   // Cola B57-07b, item 13 (parte C): os encerrados da loja, do que terminou por ultimo para o mais antigo.

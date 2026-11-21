@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import express from 'express';
-import { BannersNoAdmin, destinoDoBanner, precosDoProduto, produtoDoBanner } from '../src/application/admin/BannersNoAdmin.js';
+import { BannersNoAdmin, destinoDoBanner, precosDoProduto, produtoAVenda, produtoDoBanner } from '../src/application/admin/BannersNoAdmin.js';
 import { documentoRest } from '../src/application/loja/BannersDaLoja.js';
 import { createBannersDaLojaRoutes } from '../src/http/routes/bannersDaLojaRoutes.js';
 import { createAppDoClienteDaLojaRoutes } from '../src/http/routes/appDoClienteDaLojaRoutes.js';
@@ -25,15 +25,28 @@ function bancoEmMemoria(documentos) {
     },
     collection: (nome) => colecao(`${caminho}/${nome}`),
   });
-  const colecao = (caminho) => ({
+  // Consultas com where (==, array-contains-any) e select, anotadas em `consultas` (cola B57-10, B1).
+  const consultas = [];
+  const confere = (dados, [campo, operador, valor]) => {
+    if (operador === '==') return dados?.[campo] === valor;
+    if (operador === 'array-contains-any') return Array.isArray(dados?.[campo]) && dados[campo].some((item) => valor.includes(item));
+    throw new Error(`operador sem fake: ${operador}`);
+  };
+  const colecao = (caminho, filtros = [], campos = null) => ({
     doc: (id) => doc(`${caminho}/${id}`),
-    get: async () => ({
-      docs: Object.entries(documentos)
-        .filter(([chave]) => chave.startsWith(`${caminho}/`) && !chave.slice(caminho.length + 1).includes('/'))
-        .map(([chave, dados]) => ({ id: chave.split('/').pop(), data: () => dados })),
-    }),
+    where: (campo, operador, valor) => colecao(caminho, [...filtros, [campo, operador, valor]], campos),
+    select: (...nomes) => colecao(caminho, filtros, nomes),
+    get: async () => {
+      if (filtros.length || campos) consultas.push({ caminho, filtros, campos });
+      return {
+        docs: Object.entries(documentos)
+          .filter(([chave]) => chave.startsWith(`${caminho}/`) && !chave.slice(caminho.length + 1).includes('/'))
+          .filter(([, dados]) => filtros.every((filtro) => confere(dados, filtro)))
+          .map(([chave, dados]) => ({ id: chave.split('/').pop(), data: () => (campos ? Object.fromEntries(campos.filter((nome) => nome in dados).map((nome) => [nome, dados[nome]])) : dados) })),
+      };
+    },
   });
-  return { lidos, firestore: { collection: (nome) => colecao(nome), doc } };
+  return { lidos, consultas, firestore: { collection: (nome) => colecao(nome), doc } };
 }
 
 // O documento criado passa a existir para a leitura de volta (BannersNoAdmin.ler).
@@ -51,7 +64,7 @@ function restEmMemoria(documentos) {
 }
 
 async function subir({ documentos, chaves = ['settings.edit'], loja = 'loja-1' }) {
-  const { firestore, lidos } = bancoEmMemoria(documentos);
+  const { firestore, lidos, consultas } = bancoEmMemoria(documentos);
   const rest = restEmMemoria(documentos);
   const bannersPorTipo = new BannersNoAdmin({
     firestore, bucket: { name: 'b', file: () => ({ save: async () => {}, delete: async () => {} }) }, restFirestore: rest,
@@ -75,7 +88,7 @@ async function subir({ documentos, chaves = ['settings.edit'], loja = 'loja-1' }
     const resposta = await fetch(`${base}${caminho}`, { method, headers, body });
     return { status: resposta.status, corpo: await resposta.json() };
   };
-  return { rest, lidos, chamar, fechar: () => new Promise((resolve) => { servidor.close(resolve); }) };
+  return { rest, lidos, consultas, chamar, fechar: () => new Promise((resolve) => { servidor.close(resolve); }) };
 }
 
 const banner = (tipo, extra = {}) => ({ type: tipo, status: true, started: true, startAt: new Date('2026-11-18T03:00:00Z'), endAt: FIM, image: { path: 'https://x', size: { width: 1080, height: 500 } }, ...extra });
@@ -166,7 +179,9 @@ test('B57-07, item 6: "Leva para" grava products com referencias e numeros do ap
       'estabelecimentos/loja-1/Banners/p1': banner('principal'),
       'estabelecimentos/loja-1/Products/pr1': { name: 'Picanha', barCode: '789', currentPrice: 59.9, previewPrice: 69.9, images: [{ fileName: 'f.jpg', fileUrl: 'https://f', quality: 80 }] },
       'estabelecimentos/loja-1/Products/pr2': { name: 'Banana', currentPrice: 5 },
-      'estabelecimentos/loja-1/ProductCategories/c1': { name: 'Limpeza', icon: 'https://i' },
+      'estabelecimentos/loja-1/ProductCategories/c1': { name: 'Limpeza', icon: 'https://i', isActive: true },
+      'estabelecimentos/loja-1/ProductSubcategories/s1': { categoryId: 'c1', isActive: true },
+      'estabelecimentos/loja-1/Products/pr3': { isActive: true, isTrashed: false, currentPrice: 9.9, shelvesIds: ['c1_s1'] },
     },
   });
   try {
@@ -274,4 +289,96 @@ test('B57-07, item 9: a loja le a propria Inicio publicada, a tabela das variaco
   } finally {
     await new Promise((resolve) => { servidor.close(resolve); });
   }
+});
+
+// Cola B57-10, item B1: o "Leva para" so oferece categoria que o app mostra e que abre com produto a venda.
+function lojaComCategorias() {
+  const documentos = {
+    'estabelecimentos/loja-1': {},
+    'estabelecimentos/loja-1/Banners/p1': banner('principal'),
+    // c1: produto a venda (sem campo de estoque) numa subcategoria ativa.
+    'estabelecimentos/loja-1/ProductCategories/c1': { name: 'Limpeza', isActive: true },
+    'estabelecimentos/loja-1/ProductSubcategories/s1': { categoryId: 'c1', isActive: true },
+    'estabelecimentos/loja-1/Products/a1': { isActive: true, isTrashed: false, currentPrice: 9.9, shelvesIds: ['c1_s1'] },
+    // c2: so produto sem preco, sem estoque ou na lixeira.
+    'estabelecimentos/loja-1/ProductCategories/c2': { name: 'Bebidas', isActive: true },
+    'estabelecimentos/loja-1/ProductSubcategories/s2': { categoryId: 'c2', isActive: true },
+    'estabelecimentos/loja-1/Products/b1': { isActive: true, isTrashed: false, currentPrice: 0, shelvesIds: ['c2_s2'] },
+    'estabelecimentos/loja-1/Products/b2': { isActive: true, isTrashed: false, currentPrice: 5, quantityInStock: 0, shelvesIds: ['c2_s2'] },
+    'estabelecimentos/loja-1/Products/b3': { isActive: true, isTrashed: true, currentPrice: 5, shelvesIds: ['c2_s2'] },
+    // c3: produto a venda, mas a subcategoria esta desligada.
+    'estabelecimentos/loja-1/ProductCategories/c3': { name: 'Padaria', isActive: true },
+    'estabelecimentos/loja-1/ProductSubcategories/s3': { categoryId: 'c3', isActive: false },
+    'estabelecimentos/loja-1/Products/c3p': { isActive: true, isTrashed: false, currentPrice: 5, shelvesIds: ['c3_s3'] },
+    // c4: categoria desligada.
+    'estabelecimentos/loja-1/ProductCategories/c4': { name: 'Frios', isActive: false },
+    'estabelecimentos/loja-1/ProductSubcategories/s4': { categoryId: 'c4', isActive: true },
+    'estabelecimentos/loja-1/Products/d1': { isActive: true, isTrashed: false, currentPrice: 5, shelvesIds: ['c4_s4'] },
+    // c5: so produto desligado.
+    'estabelecimentos/loja-1/ProductCategories/c5': { name: 'Hortifruti', isActive: true },
+    'estabelecimentos/loja-1/ProductSubcategories/s5': { categoryId: 'c5', isActive: true },
+    'estabelecimentos/loja-1/Products/e1': { isActive: false, isTrashed: false, currentPrice: 5, shelvesIds: ['c5_s5'] },
+    // c6: produto a venda com estoque.
+    'estabelecimentos/loja-1/ProductCategories/c6': { name: 'Mercearia', isActive: true },
+    'estabelecimentos/loja-1/ProductSubcategories/s6': { categoryId: 'c6', isActive: true },
+    'estabelecimentos/loja-1/Products/f1': { isActive: true, isTrashed: false, currentPrice: 3, quantityInStock: 4, shelvesIds: ['x_y', 'c6_s6'] },
+    // c7: 35 subcategorias; o unico produto a venda esta na ultima (segunda consulta, de 30 em 30).
+    'estabelecimentos/loja-1/ProductCategories/c7': { name: 'Pet', isActive: true },
+    'estabelecimentos/loja-1/Products/g1': { isActive: true, isTrashed: false, currentPrice: 7, shelvesIds: ['c7_t34'] },
+  };
+  for (let indice = 0; indice < 35; indice += 1) documentos[`estabelecimentos/loja-1/ProductSubcategories/t${indice}`] = { categoryId: 'c7', isActive: true };
+  return documentos;
+}
+
+test('B57-10, B1: os destinos com conteudo sao as categorias do app com produto a venda, de 30 em 30 prateleiras', async () => {
+  const rota = await subir({ documentos: lojaComCategorias() });
+  try {
+    const { status, corpo } = await rota.chamar('/por-tipo/destinos');
+    assert.equal(status, 200);
+    assert.deepEqual(corpo.data, { categorias: ['c1', 'c6', 'c7'] });
+    const deProdutos = rota.consultas.filter((consulta) => consulta.caminho === 'estabelecimentos/loja-1/Products');
+    assert.ok(deProdutos.length >= 2, 'mais de 30 prateleiras: mais de uma consulta');
+    deProdutos.forEach((consulta) => {
+      const [[campo, operador, lote], ...resto] = consulta.filtros;
+      assert.equal(campo, 'shelvesIds');
+      assert.equal(operador, 'array-contains-any');
+      assert.ok(lote.length >= 1 && lote.length <= 30);
+      assert.deepEqual(resto, [['isActive', '==', true], ['isTrashed', '==', false]], 'a forma do indice de Products');
+      assert.deepEqual(consulta.campos, ['isActive', 'isTrashed', 'currentPrice', 'quantityInStock', 'shelvesIds']);
+    });
+    assert.ok(deProdutos.every((consulta) => !consulta.filtros[0][2].some((prateleira) => prateleira.startsWith('c3_') || prateleira.startsWith('c4_'))), 'subcategoria ou categoria desligada nao e consultada');
+    assert.deepEqual(rota.consultas.filter((consulta) => consulta.caminho !== 'estabelecimentos/loja-1/Products').map((consulta) => [consulta.caminho, consulta.filtros]), [
+      ['estabelecimentos/loja-1/ProductCategories', [['isActive', '==', true]]],
+      ['estabelecimentos/loja-1/ProductSubcategories', [['isActive', '==', true]]],
+    ]);
+  } finally {
+    await rota.fechar();
+  }
+});
+
+test('B57-10, B1: o "Leva para" recusa a categoria sem conteudo, com a recusa de categoria nao encontrada', async () => {
+  const rota = await subir({ documentos: lojaComCategorias() });
+  try {
+    for (const id of ['c2', 'c3', 'c4', 'c5']) {
+      const resposta = await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'categoria', id } } });
+      assert.equal(resposta.status, 404, id);
+      assert.equal(resposta.corpo.error.code, 'banner_categoria_nao_encontrada', id);
+    }
+    assert.equal(rota.rest.gravados.length, 0);
+    const comConteudo = await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'categoria', id: 'c7' } } });
+    assert.equal(comConteudo.status, 200);
+    assert.equal(rota.rest.gravados.length, 1);
+  } finally {
+    await rota.fechar();
+  }
+});
+
+test('B57-10, B1: produto a venda e ativo, fora da lixeira, com preco e com estoque (ou sem o campo)', () => {
+  assert.equal(produtoAVenda({ isActive: true, currentPrice: 1 }), true);
+  assert.equal(produtoAVenda({ isActive: true, currentPrice: 1, quantityInStock: null }), true);
+  assert.equal(produtoAVenda({ isActive: true, currentPrice: 1, quantityInStock: 2 }), true);
+  assert.equal(produtoAVenda({ isActive: true, currentPrice: 1, quantityInStock: 0 }), false);
+  assert.equal(produtoAVenda({ isActive: true, currentPrice: 0 }), false);
+  assert.equal(produtoAVenda({ isActive: false, currentPrice: 1 }), false);
+  assert.equal(produtoAVenda({ isActive: true, isTrashed: true, currentPrice: 1 }), false);
 });

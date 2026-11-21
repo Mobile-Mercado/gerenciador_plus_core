@@ -36,6 +36,13 @@ export function createBannersDaLojaRoutes({ bannersDaLoja, bannersPorTipo = null
       response.json({ data: { ...lista, tipos } });
     }));
 
+    // Cola B57-10, item B1: os destinos com conteudo para o "Leva para" (as categorias que o app mostra
+    // e que tem produto a venda).
+    router.get('/por-tipo/destinos', asyncHandler(async (request, response) => {
+      const { establishmentId } = await accountForRequest(request);
+      response.json({ data: { categorias: await bannersPorTipo.categoriasComConteudo(establishmentId) } });
+    }));
+
     // Cola B57-07b, item 13 (parte C): os encerrados de Principal, Vertical e Popup, e o "Usar de novo".
     router.get('/por-tipo/encerrados', asyncHandler(async (request, response) => {
       const { establishmentId } = await accountForRequest(request);
