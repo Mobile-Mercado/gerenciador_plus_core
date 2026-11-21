@@ -58,11 +58,12 @@ export function createBannersDaLojaRoutes({ bannersDaLoja, bannersPorTipo = null
       response.json({ data: (await bannersPorTipo.usarDeNovo(establishmentId, bannerId)).banner });
     }));
 
-    // "Criar novo": o tipo no limite cria o banner desligado.
+    // "Criar novo": o tipo no limite cria o banner desligado. Cola B57-10, item B3: o banner nasce sem
+    // "Leva para", entao nasce desligado (so liga com destino).
     router.post('/por-tipo', requirePermission('settings.edit'), corpoDeImagem, asyncHandler(async (request, response) => {
       const { tipo, inicio, fim } = novoPorTipoSchema.parse(request.query);
       const { establishmentId } = await accountForRequest(request);
-      const banner = await bannersPorTipo.criar(establishmentId, tipo, request.body, request.headers['content-type'], { inicio, fim }, { noLimite: 'desligar' });
+      const banner = await bannersPorTipo.criar(establishmentId, tipo, request.body, request.headers['content-type'], { inicio, fim }, { noLimite: 'desligar', exigirDestino: true });
       response.status(201).json({ data: banner });
     }));
 
@@ -74,14 +75,18 @@ export function createBannersDaLojaRoutes({ bannersDaLoja, bannersPorTipo = null
       response.json({ data: resultado.banner });
     }));
 
-    // Faixa de edicao: "Quando", "Leva para", "Contador" e "Ligado" (ligar alem do limite: 409).
+    // Faixa de edicao: "Quando", "Leva para", "Contador" e "Ligado" (ligar alem do limite: 409). Cola
+    // B57-10, item B3: ligar sem "Leva para" e recusado (409, banner_sem_destino); um destino enviado
+    // junto com o "Ligado" grava antes, para o ligar ja ver o destino.
     router.patch('/por-tipo/:bannerId', requirePermission('settings.edit'), asyncHandler(async (request, response) => {
       const { bannerId } = idSchema.parse(request.params);
       const { levaPara, ...campos } = alterarNaLojaSchema.parse(request.body || {});
       const { establishmentId } = await accountForRequest(request);
       let banner = null;
-      if (Object.keys(campos).length) banner = (await bannersPorTipo.alterar(establishmentId, bannerId, campos)).banner;
-      if (levaPara) banner = (await bannersPorTipo.mudarDestino(establishmentId, bannerId, levaPara)).banner;
+      const destinoAntes = levaPara && levaPara.tipo !== 'nada';
+      if (destinoAntes) banner = (await bannersPorTipo.mudarDestino(establishmentId, bannerId, levaPara)).banner;
+      if (Object.keys(campos).length) banner = (await bannersPorTipo.alterar(establishmentId, bannerId, campos, { exigirDestino: true })).banner;
+      if (levaPara && !destinoAntes) banner = (await bannersPorTipo.mudarDestino(establishmentId, bannerId, levaPara)).banner;
       if (!banner) banner = await bannersPorTipo.ler(establishmentId, bannerId);
       response.json({ data: banner });
     }));

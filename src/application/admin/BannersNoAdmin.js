@@ -236,7 +236,8 @@ export class BannersNoAdmin {
   // B5.a e B5.b: banner novo de um tipo, dentro do limite do tipo. Cola B57-07 (tela Loja): com
   // `noLimite: 'desligar'`, o tipo no limite nao recusa; o banner nasce desligado ("Criar novo" fica
   // sempre a vista e o limite so bloqueia o "Ligado").
-  async criar(lojaId, tipo, conteudo, tipoArquivo, { inicio, fim }, { noLimite = 'recusar' } = {}) {
+  // Cola B57-10, item B3: com `exigirDestino` (so a tela Loja), o banner sem "Leva para" nasce desligado.
+  async criar(lojaId, tipo, conteudo, tipoArquivo, { inicio, fim }, { noLimite = 'recusar', exigirDestino = false } = {}) {
     const loja = await this.loja(lojaId);
     const regra = this.tipoValido(tipo);
     const datas = this.periodo({ inicio, fim });
@@ -252,6 +253,7 @@ export class BannersNoAdmin {
     const id = this.novoId();
     let ligacao = datas.inicio.getTime() > agora ? AGUARDANDO : null;
     if (noLimiteDoTipo) ligacao = DESLIGADO;
+    if (exigirDestino) ligacao = DESLIGADO; // o banner novo nasce sem destino (products vazio, category nula)
     const campos = {
       ...camposDoBanner({ id, ...gravado, largura: imagem.largura, altura: imagem.altura, ...datas, tipo, products: [], novo: true, ligacao }),
       category: null,
@@ -280,7 +282,8 @@ export class BannersNoAdmin {
   }
 
   // Datas, ligar/desligar e contador, so os enviados. Ligar com inicio no futuro fica aguardando.
-  async alterar(lojaId, bannerId, { inicio, fim, ligado, contador } = {}) {
+  // Cola B57-10, item B3: com `exigirDestino` (so a tela Loja), o banner sem "Leva para" nao liga.
+  async alterar(lojaId, bannerId, { inicio, fim, ligado, contador } = {}, { exigirDestino = false } = {}) {
     const atual = await this.banner(lojaId, bannerId);
     const dados = atual.data() || {};
     const tipo = dados.type || 'principal';
@@ -309,6 +312,7 @@ export class BannersNoAdmin {
             throw recusa(`Este tipo já tem ${outros} de ${TIPOS_DE_BANNER[tipo].limite} banners ligados.`, 'banner_limite', 409);
           }
         }
+        if (!estavaLigado && exigirDestino && destinoDoBanner(dados).tipo === 'nada') throw recusa('Escolha para onde o banner leva.', 'banner_sem_destino', 409);
         Object.assign(campos, inicioFinal && inicioFinal.getTime() > agora ? AGUARDANDO : LIGADO);
       } else {
         Object.assign(campos, DESLIGADO);

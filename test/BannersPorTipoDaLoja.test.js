@@ -58,6 +58,8 @@ function restEmMemoria(documentos) {
     gravar: async (caminho, documento, opcoes) => {
       gravados.push({ caminho, documento, opcoes });
       if (opcoes.criar) documentos[caminho] = { type: documento.fields.type?.stringValue, status: documento.fields.status?.booleanValue, endAt: FIM };
+      // Cola B57-10, B3: o destino gravado passa a valer para a leitura seguinte (destino e Ligado juntos).
+      if (opcoes.mascara?.includes('destino') && documentos[caminho]) documentos[caminho] = { ...documentos[caminho], destino: documento.fields.destino?.stringValue ?? null };
     },
     ler: async () => null,
   };
@@ -414,4 +416,64 @@ test('B57-10, B2: "Leva para" Ofertas grava destino ofertas, products vazio e ca
   }
   assert.deepEqual(destinoDoBanner({ destino: 'ofertas', products: [], category: null }), { tipo: 'ofertas' });
   assert.deepEqual(destinoDoBanner({ destino: null, products: [] }), { tipo: 'nada' });
+});
+
+// Cola B57-10, item B3: na tela Loja, banner so liga com "Leva para"; o Admin continua como antes.
+test('B57-10, B3: na tela Loja, o banner novo nasce desligado e o banner sem destino nao liga (409, banner_sem_destino)', async () => {
+  const rota = await subir({
+    documentos: {
+      'estabelecimentos/loja-1': {},
+      'estabelecimentos/loja-1/Banners/v1': banner('vertical', { status: false, started: false }),
+      'estabelecimentos/loja-1/Banners/v2': banner('vertical', { status: false, started: false, destino: 'ofertas', products: [], category: null }),
+      'estabelecimentos/loja-1/Banners/v3': banner('vertical', { status: false, started: false }),
+    },
+  });
+  try {
+    const criado = await rota.chamar(`/por-tipo?tipo=vertical&inicio=${encodeURIComponent('2026-11-19T15:00:00Z')}&fim=${encodeURIComponent(FIM.toISOString())}`, {
+      method: 'POST', corpo: new Uint8Array([1, 2, 3]), tipo: 'image/png',
+    });
+    assert.equal(criado.status, 201);
+    const campos = rota.rest.gravados[0].documento.fields;
+    assert.equal(campos.status.booleanValue, false, 'abaixo do limite, mas sem destino: desligado');
+    assert.equal(campos.started.booleanValue, false);
+    assert.equal(campos.aguardandoInicio.booleanValue, false);
+    const futuro = await rota.chamar(`/por-tipo?tipo=vertical&inicio=${encodeURIComponent('2026-11-21T15:00:00Z')}&fim=${encodeURIComponent(FIM.toISOString())}`, {
+      method: 'POST', corpo: new Uint8Array([1, 2, 3]), tipo: 'image/png',
+    });
+    assert.equal(futuro.status, 201);
+    assert.equal(rota.rest.gravados[1].documento.fields.aguardandoInicio.booleanValue, false, 'nem aguardando o inicio');
+
+    const gravadosAntes = rota.rest.gravados.length;
+    const semDestino = await rota.chamar('/por-tipo/v1', { method: 'PATCH', corpo: { ligado: true } });
+    assert.equal(semDestino.status, 409);
+    assert.equal(semDestino.corpo.error.code, 'banner_sem_destino');
+    assert.equal(semDestino.corpo.error.message, 'Escolha para onde o banner leva.');
+    assert.equal(rota.rest.gravados.length, gravadosAntes, 'nada gravado');
+
+    const comDestino = await rota.chamar('/por-tipo/v2', { method: 'PATCH', corpo: { ligado: true } });
+    assert.equal(comDestino.status, 200);
+    assert.equal(rota.rest.gravados.at(-1).documento.fields.status.booleanValue, true);
+
+    // Destino e "Ligado" juntos: o destino grava antes do ligar.
+    const juntos = await rota.chamar('/por-tipo/v3', { method: 'PATCH', corpo: { ligado: true, levaPara: { tipo: 'ofertas' } } });
+    assert.equal(juntos.status, 200);
+    assert.deepEqual(rota.rest.gravados.slice(-2).map((gravado) => gravado.opcoes.mascara[0]), ['products', 'status']);
+  } finally {
+    await rota.fechar();
+  }
+});
+
+test('B57-10, B3: o Admin (sem a opcao da tela Loja) continua criando ligado e ligando banner sem destino', async () => {
+  const documentos = { 'estabelecimentos/loja-1': {}, 'estabelecimentos/loja-1/Banners/v1': banner('vertical', { status: false, started: false }) };
+  const { firestore } = bancoEmMemoria(documentos);
+  const rest = restEmMemoria(documentos);
+  const admin = new BannersNoAdmin({
+    firestore, bucket: { name: 'b', file: () => ({ save: async () => {}, delete: async () => {} }) }, restFirestore: rest,
+    medir: async () => ({ largura: 400, altura: 700 }), agora: () => AGORA, novoId: () => 'novo1',
+  });
+  await admin.criar('loja-1', 'vertical', new Uint8Array([1]), 'image/png', { inicio: '2026-11-19T15:00:00Z', fim: FIM.toISOString() });
+  assert.equal(rest.gravados[0].documento.fields.status.booleanValue, true);
+  const { banner: ligado } = await admin.alterar('loja-1', 'v1', { ligado: true });
+  assert.equal(rest.gravados.at(-1).documento.fields.status.booleanValue, true);
+  assert.equal(ligado.id, 'v1');
 });
