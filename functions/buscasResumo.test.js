@@ -826,8 +826,31 @@ test('B57-03p: busca gravada sem os codigos (antes da publicacao) e busca sem cl
   });
 
   assert.equal(resumo.comprou, 0);
-  assert.equal(resumo.semCompra, 1);
+  // B57-03r, item 1: a busca gravada com produtosDisponiveis vazio tambem fica fora.
+  assert.equal(resumo.semCompra, 0);
   assert.equal(resumo.convertidas, 2);
+});
+
+test('B57-03r: a base do comprou e so a busca com pelo menos um produto disponivel', () => {
+  const resumo = resumirBuscas({
+    dia: DIA,
+    buscas: [
+      // So produto sem estoque: fora das duas contas.
+      busca({ em: em(10), produtosDisponiveis: [], produtosSemEstoque: ['p7'] }),
+      // Sem resultado: fora.
+      busca({ em: em(10), resultados: 0, produtosDisponiveis: [], produtosSemEstoque: [] }),
+      // Codigo vazio nao conta como produto.
+      busca({ em: em(10), produtosDisponiveis: [''] }),
+      // Com produto disponivel e sem pedido dele: semCompra ("Buscas que nao viraram pedido").
+      busca({ em: em(10), produtosDisponiveis: ['p1'] }),
+      // Com produto disponivel e pedido dele: comprou.
+      busca({ em: em(10), produtosDisponiveis: ['p7', 'p2'] }),
+    ],
+    pedidos: [pedido({ createdAt: em(10, 30), productsCart: [item('p7')] })],
+  });
+
+  assert.equal(resumo.comprou, 1);
+  assert.equal(resumo.semCompra, 1);
 });
 
 test('B57-03p: comprou acha o pedido pelo documento do uid em Users e aceita items no lugar de productsCart', () => {
