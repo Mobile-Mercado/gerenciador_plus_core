@@ -75,3 +75,51 @@ test('recusa importar em loja que nao e a de quem chama', async () => {
   );
   assert.equal(firestore.escritas.length, 0);
 });
+
+// Cola 65, item 3.5: a importacao do CSV pelo Core grava cada produto criado ou alterado no Log das
+// acoes da equipe (estabelecimentos/{loja}/AcoesEquipe), com origem 'implantacao' e quem importou.
+// Falha com o codigo de antes: a importacao nao gravava em AcoesEquipe.
+test('3.5: importacao registra no Log o produto criado e so os campos que mudaram no que ja existe', async () => {
+  const firestore = banco();
+  firestore.docs.set('estabelecimentos/loja-a/Products/existente', {
+    ...firestore.dados('estabelecimentos/loja-a/Products/existente'),
+    name: 'Agua 500ml', description: '', currentPrice: 1.5, agranelValue: 1.5, hasBarCode: true,
+  });
+  firestore.docs.set('estabelecimentos/loja-a/Products/igual', {
+    barCode: '789006', name: 'Sal 1kg', description: '', currentPrice: 3, agranelValue: 3, hasBarCode: true,
+  });
+  await caso(firestore).execute({
+    establishmentId: 'loja-a',
+    actorEstablishmentId: 'loja-a',
+    csvText: `${CSV}\nSal 1kg;3,00;789006;;`,
+    metadata: { firebaseUid: 'uid-dono', firebaseEmail: 'dono@loja.com' },
+  });
+  const linhas = [...firestore.docs.entries()]
+    .filter(([caminho]) => caminho.startsWith('estabelecimentos/loja-a/AcoesEquipe/'))
+    .map(([, dados]) => dados);
+  const criadas = linhas.filter((linha) => linha.acao === 'produto.criar');
+  assert.equal(criadas.length, 4);
+  criadas.forEach((linha) => {
+    assert.equal(linha.origem, 'implantacao');
+    assert.equal(linha.tela, 'implantacao');
+    assert.equal(linha.quem, 'dono@loja.com');
+    assert.equal(linha.alvo.tipo, 'produto');
+    assert.ok(linha.em instanceof Date);
+  });
+  assert.deepEqual(criadas.map((linha) => linha.depois.name).sort(), ['Arroz 5kg', 'Cigarro X', 'Coca 2L', 'Suco Uva']);
+  const editadas = linhas.filter((linha) => linha.acao === 'produto.editar');
+  // O produto igual ao CSV nao ganha linha; o existente ganha so preco.
+  assert.equal(editadas.length, 1);
+  assert.deepEqual(editadas[0].alvo, { tipo: 'produto', id: 'existente', rotulo: 'Agua 500ml' });
+  assert.deepEqual(editadas[0].antes, { currentPrice: 1.5, agranelValue: 1.5 });
+  assert.deepEqual(editadas[0].depois, { currentPrice: 2, agranelValue: 2 });
+});
+
+test('3.5: sem e-mail, quem e o uid de quem importou', async () => {
+  const firestore = banco();
+  await caso(firestore).execute({
+    establishmentId: 'loja-a', actorEstablishmentId: 'loja-a', csvText: CSV, metadata: { firebaseUid: 'uid-dono' },
+  });
+  const linha = [...firestore.docs.entries()].find(([caminho]) => caminho.startsWith('estabelecimentos/loja-a/AcoesEquipe/'))[1];
+  assert.equal(linha.quem, 'uid-dono');
+});

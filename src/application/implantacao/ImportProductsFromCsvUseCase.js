@@ -116,7 +116,46 @@ function parseCsv(csvText) {
   });
 }
 
-async function loadExistingProductBarcodes(productsRef) {
+// Campos que a importacao grava no produto que ja existe; o "antes" do Log sai daqui.
+const CAMPOS_DA_ATUALIZACAO = Object.freeze(['name', 'description', 'currentPrice', 'agranelValue', 'barCode', 'hasBarCode', 'images']);
+
+// Cola 65, item 3.5: toda mudanca de produto feita pelo Core entra no Log das acoes da equipe
+// (estabelecimentos/{loja}/AcoesEquipe), no formato do web (registrarAcao.js): uma linha por
+// produto, com origem 'implantacao' (a mesma que o web ja usa na esteira da implantacao).
+const ORIGEM_DO_LOG = 'implantacao';
+
+function valorIgual(antes, depois) {
+  try {
+    return JSON.stringify(antes ?? null) === JSON.stringify(depois ?? null);
+  } catch {
+    return false;
+  }
+}
+
+// So os campos que mudam, nos dois lados (como camposQueMudaram do web).
+export function mudancaDoProduto(anterior = {}, gravado = {}) {
+  const campos = CAMPOS_DA_ATUALIZACAO.filter((campo) => campo in gravado && !valorIgual(anterior[campo], gravado[campo]));
+  return {
+    campos,
+    antes: Object.fromEntries(campos.map((campo) => [campo, anterior[campo] ?? null])),
+    depois: Object.fromEntries(campos.map((campo) => [campo, gravado[campo] ?? null])),
+  };
+}
+
+function linhaDoLog({ quem, acao, produtoId, rotulo, antes, depois }) {
+  return {
+    em: FieldValue.serverTimestamp(),
+    quem,
+    tela: 'implantacao',
+    acao,
+    alvo: { tipo: 'produto', id: produtoId, rotulo: rotulo || produtoId },
+    antes: antes && Object.keys(antes).length ? antes : null,
+    depois: depois && Object.keys(depois).length ? depois : null,
+    origem: ORIGEM_DO_LOG,
+  };
+}
+
+async function loadExistingProductBarcodes(productsRef, existingData = new Map()) {
   const map = new Map();
   let cursor = null;
   for (;;) {
@@ -128,7 +167,10 @@ async function loadExistingProductBarcodes(productsRef) {
     if (snapshot.empty) break;
     snapshot.forEach((productDoc) => {
       const data = productDoc.data();
-      if (data.barCode) map.set(String(data.barCode).trim(), productDoc.id);
+      if (data.barCode) {
+        map.set(String(data.barCode).trim(), productDoc.id);
+        existingData.set(productDoc.id, Object.fromEntries(CAMPOS_DA_ATUALIZACAO.map((campo) => [campo, data[campo]])));
+      }
     });
     cursor = snapshot.docs[snapshot.docs.length - 1];
     if (snapshot.size < EXISTING_PRODUCTS_PAGE_SIZE) break;
@@ -185,8 +227,10 @@ export class ImportProductsFromCsvUseCase {
   }
 
   // `actorEstablishmentId` e a loja de quem chama (sessao). A loja do corpo precisa ser ela.
+  // `metadata.firebaseEmail` / `metadata.firebaseUid`: quem importou, para o Log (como o web: e-mail
+  // ou uid).
   async execute({
-    establishmentId, actorEstablishmentId, csvText, onProgress = () => {},
+    establishmentId, actorEstablishmentId, csvText, metadata = {}, onProgress = () => {},
   }) {
     if (!establishmentId || establishmentId !== actorEstablishmentId) {
       throw new AppError('A importacao so grava na loja da sua conta.', {
@@ -206,9 +250,13 @@ export class ImportProductsFromCsvUseCase {
     const subcategoriesRef = this.firestore.collection('estabelecimentos').doc(establishmentId).collection('ProductSubcategories');
     const establishmentRef = this.firestore.collection('estabelecimentos').doc(establishmentId);
 
+    const acoesRef = establishmentRef.collection('AcoesEquipe');
+    const quem = metadata?.firebaseEmail || metadata?.firebaseUid || '';
+    const existingData = new Map();
+
     const travadas = this.travas ? await this.travas.travadasNaLoja(establishmentId) : new Set();
     const [existingBarcodes, tree] = await Promise.all([
-      loadExistingProductBarcodes(productsRef),
+      loadExistingProductBarcodes(productsRef, existingData),
       loadCategoriesAndSubcategories(categoriesRef, subcategoriesRef, travadas),
     ]);
 
@@ -320,11 +368,26 @@ export class ImportProductsFromCsvUseCase {
         });
         opsInBatch += 1;
 
+        batch.set(acoesRef.doc(), linhaDoLog({
+          quem, acao: 'produto.criar', produtoId: productId, rotulo: name, antes: null, depois: { name },
+        }));
+        opsInBatch += 1;
+
         existingBarcodes.set(ean, productId);
+        existingData.set(productId, Object.fromEntries(CAMPOS_DA_ATUALIZACAO.map((campo) => [campo, sharedFields[campo]])));
         created += 1;
       } else {
         batch.set(productRef, sharedFields, { merge: true });
         opsInBatch += 1;
+        const anterior = existingData.get(productId) || {};
+        const mudanca = mudancaDoProduto(anterior, sharedFields);
+        if (mudanca.campos.length) {
+          batch.set(acoesRef.doc(), linhaDoLog({
+            quem, acao: 'produto.editar', produtoId: productId, rotulo: name || anterior.name, antes: mudanca.antes, depois: mudanca.depois,
+          }));
+          opsInBatch += 1;
+        }
+        existingData.set(productId, { ...anterior, ...Object.fromEntries(mudanca.campos.map((campo) => [campo, sharedFields[campo]])) });
         updated += 1;
       }
 

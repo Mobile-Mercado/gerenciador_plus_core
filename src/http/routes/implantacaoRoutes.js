@@ -92,6 +92,8 @@ export function createImplantacaoRoutes({
         metadata: {
           fileName: input.fileName,
           firebaseUid: request.auth?.uid,
+          // Quem importou, para o Log das acoes da equipe (cola 65, item 3.5).
+          firebaseEmail: request.auth?.email || null,
         },
         onProgress: (progress) => writeEvent({ type: 'progress', ...progress }),
       });

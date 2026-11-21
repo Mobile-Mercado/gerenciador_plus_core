@@ -691,8 +691,10 @@ function caminhosTocados(data, ehUpdate) {
 }
 
 // Subcolecoes da loja que so as rotas proprias do Core leem e gravam (validacao e permissao
-// delas): o celular dos entregadores (entregadoresPrivado, 17/10/2026). O BFF nunca passa.
-const SUBCOLECOES_SO_DO_CORE = new Set(['entregadoresPrivado']);
+// delas): o celular dos entregadores (entregadoresPrivado, 17/10/2026) e o computador registrado do
+// integrador (IntegradorDaLoja, cola 65, item 4.11: so o Admin da plataforma libera a troca). O BFF
+// nunca passa.
+const SUBCOLECOES_SO_DO_CORE = new Set(['entregadoresPrivado', 'IntegradorDaLoja']);
 
 function isSoDoCore(path) {
   const parts = pathParts(path);

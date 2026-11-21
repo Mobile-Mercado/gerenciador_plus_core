@@ -102,6 +102,8 @@ const tipoDe = (plural) => (tipoSchema.parse(plural) === 'categorias' ? 'categor
 const atorDe = (request) => ({ uid: request.auth?.uid || null, email: request.auth?.email || null });
 const atorDoAlerta = (request) => ({ ...atorDe(request), nome: request.auth?.name || null });
 
+const lojaDoIntegradorSchema = z.object({ establishmentId: z.string().trim().min(1).max(120).regex(/^[^/]+$/) });
+
 const sugestoesClientesSchema = z.object({
   lojaId: z.string().min(1).max(120).optional(),
   busca: z.string().max(200).optional(),
@@ -112,9 +114,27 @@ export function createAdminRoutes({
   manageCatalogoPadrao, sugestoesDosClientes, pedidosDeLoja, lojaNoAdmin, franquias, administradores, dadosDoAdmin,
   manageImplantationPipelines, jornadaDeEntrada = null, entregaDaLoja = null, appDoClienteDaLoja = null,
   formasDePagamento = null, instalacoesDosApps = null, conjuntosDeIcones = null, aparenciaDaLoja = null,
-  aparenciaDaHome = null, bannersNoAdmin = null, alertasDoAdmin = null,
+  aparenciaDaHome = null, bannersNoAdmin = null, alertasDoAdmin = null, integradorDaLoja = null,
 }) {
   const router = Router();
+
+  // ===== Integrador da loja (cola 65, item 4.11; contrato D:erramentas-integradorcontrato-4.11-4.6.md) =====
+  // "Trocar o computador do integrador": libera o proximo computador que abrir o integrador da loja
+  // (grava trocaLiberadaEm e trocaLiberadaPor em estabelecimentos/{loja}/IntegradorDaLoja/atual).
+  // A loja vai para o registro de auditoria da loja (adminAudit le response.locals.lojasAlvo).
+  if (integradorDaLoja) {
+    // Cola 70, item 1: card "Computador do integrador" na loja aberta (so leitura).
+    router.get('/lojas/:establishmentId/integrador', asyncHandler(async (request, response) => {
+      const { establishmentId } = lojaDoIntegradorSchema.parse(request.params);
+      response.json({ data: await integradorDaLoja.computador({ establishmentId }) });
+    }));
+    router.post('/lojas/:establishmentId/integrador/trocar-computador', asyncHandler(async (request, response) => {
+      const { establishmentId } = lojaDoIntegradorSchema.parse(request.params);
+      response.locals.lojasAlvo = [establishmentId];
+      response.locals.auditoria = { acao: 'integrador_trocar_computador' };
+      response.json({ data: await integradorDaLoja.trocarComputador({ establishmentId, adminUid: request.auth?.uid }) });
+    }));
+  }
 
   // ===== Alertas (cola B57-03, D1 e D2, e B57-03c, item 8) =====
   // A aba le os alertas e as conferencias; ao abrir, roda as conferencias automaticas que passaram

@@ -141,9 +141,11 @@ class Query {
         if (operador === '==') return ehReferencia(valor) ? ehReferencia(atual) && atual.path === valor.path : atual === valor;
         if (operador === 'array-contains') return Array.isArray(atual) && atual.includes(valor);
         // Intervalo de datas, como o Firestore: documento sem o campo fica de fora.
-        if (operador === '>=' || operador === '<') {
+        if (operador === '>' && typeof valor === 'string') return typeof atual === 'string' && atual > valor;
+        if (operador === '>=' || operador === '<' || operador === '>') {
           const numero = (item) => (item instanceof Date ? item.getTime() : item);
           if (atual === undefined || atual === null) return false;
+          if (operador === '>') return numero(atual) > numero(valor);
           return operador === '>=' ? numero(atual) >= numero(valor) : numero(atual) < numero(valor);
         }
         throw new Error(`operador nao suportado: ${operador}`);
@@ -151,7 +153,12 @@ class Query {
       .map(([caminho, dados]) => new Snapshot(this.banco.doc(caminho), copiar(dados)));
     if (this.ordem) {
       // Como o Firestore: documento sem o campo fica de fora; empate, pelo caminho.
-      const valor = (snapshot) => { const v = lerCampo(snapshot.dados, this.ordem.campo); return v instanceof Date ? v.getTime() : v; };
+      // '__name__' ordena pelo caminho do documento, como o Firestore (cola 65, item 3.5).
+      const valor = (snapshot) => {
+        if (this.ordem.campo === '__name__') return snapshot.ref.path;
+        const v = lerCampo(snapshot.dados, this.ordem.campo);
+        return v instanceof Date ? v.getTime() : v;
+      };
       const sinal = this.ordem.direcao === 'desc' ? -1 : 1;
       lista = lista.filter((snapshot) => valor(snapshot) !== undefined && valor(snapshot) !== null)
         .sort((a, b) => (valor(a) < valor(b) ? -sinal : valor(a) > valor(b) ? sinal : a.ref.path.localeCompare(b.ref.path)));

@@ -49,6 +49,12 @@ import {
   getFirebaseAppCheck, getFirebaseAuth, getFirestoreDb, getStorageBucket,
 } from './infra/firebase/firebaseAdmin.js';
 import { registrarAcaoDoAdmin } from './infra/firebase/registroDoAdmin.js';
+import { FirestoreHistoricoDoProdutoRepository } from './infra/firebase/FirestoreHistoricoDoProdutoRepository.js';
+import { HistoricoDoProduto } from './application/produtos/HistoricoDoProduto.js';
+import { ProdutosForaDoApp } from './application/produtos/ProdutosForaDoApp.js';
+import { FirestoreProdutosForaDoAppRepository } from './infra/firebase/FirestoreProdutosForaDoAppRepository.js';
+import { FirestoreIntegradorDaLojaRepository } from './infra/firebase/FirestoreIntegradorDaLojaRepository.js';
+import { IntegradorDaLoja } from './application/admin/IntegradorDaLoja.js';
 import { BrasilApiCnpj } from './infra/cnpj/BrasilApiCnpj.js';
 import { FieldValue } from 'firebase-admin/firestore';
 import { InstalacoesDosApps } from './application/admin/InstalacoesDosApps.js';
@@ -173,6 +179,12 @@ const app = createApp({
   // Tela Instalacoes do Admin: leitura dos Stats/instalacoesApp e o "Atualizar agora".
   // Cola B57-03c, item 5: mais vendidos da loja nos ultimos 30 dias, para o app usuario.
   maisVendidosDaLoja: new MaisVendidosDaLoja({ firestore }),
+  // Cola 65, item 3.5: historico do produto, lido do Log das acoes da equipe (AcoesEquipe).
+  // Cola 65, item 4.11: "Trocar o computador do integrador" pelo Admin da plataforma.
+  integradorDaLoja: new IntegradorDaLoja({ repositorio: new FirestoreIntegradorDaLojaRepository({ firestore }) }),
+  historicoDoProduto: new HistoricoDoProduto({ repositorio: new FirestoreHistoricoDoProdutoRepository({ firestore, auth: firebaseAuth }) }),
+  // Cola 65, item 5.1: painel "Produtos fora do app" da tela Produtos do Gerenciador Web.
+  produtosForaDoApp: new ProdutosForaDoApp({ repositorio: new FirestoreProdutosForaDoAppRepository({ firestore }) }),
   // Cola B57-03c, item 8: aba Alertas do Admin, com as conferencias dos itens 3, 6 e 14.
   alertasDoAdmin: new AlertasDoAdmin({ firestore, conferencias: conferenciasDoChecklist({ firestore }) }),
   instalacoesDosApps: new InstalacoesDosApps({

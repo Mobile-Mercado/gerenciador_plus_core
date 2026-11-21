@@ -82,6 +82,7 @@ const {
   avisoDePedidoCancelado,
 } = require('./avisos');
 const { avisarPedidoDeCupomUmaVez } = require('./avisoDeCupom');
+const { ORIGEM: ORIGEM_DA_PROMOCAO_VENCIDA, removerPromocoesVencidasDaLoja } = require('./promocaoVencida');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -1448,6 +1449,59 @@ exports.semGiroNightly = onSchedule(
       return result;
     } catch (error) {
       console.error('[semGiroNightly] Falha na passada', { error });
+      return null;
+    }
+  },
+);
+
+// Cola 65, item 3.8: tira do produto a promocao vencida que nao veio do ERP (promocaoVencida.js),
+// em todas as lojas, logo depois da meia-noite de Sao Paulo: a promocao que acabou as 23:59:59 sai
+// antes do espelho do catalogo (02:00). Cada remocao entra em estabelecimentos/{loja}/AcoesEquipe
+// com origem 'removerPromocaoVencidaNightly'.
+exports.removerPromocaoVencidaNightly = onSchedule(
+  {
+    schedule: '5 0 * * *',
+    timeZone: 'America/Sao_Paulo',
+    region: 'us-central1',
+    memory: '512MiB',
+    timeoutSeconds: 1800,
+    retryCount: 0,
+  },
+  async () => {
+    try {
+      const startedAt = Date.now();
+      const agora = new Date();
+      const lojas = await db.collection('estabelecimentos').select().get();
+      const report = [];
+      let removidas = 0;
+      for (const loja of lojas.docs) {
+        if (Date.now() - startedAt > IMAGE_CHECK_TIME_BUDGET_MS) {
+          report.push({ establishmentId: loja.id, status: 'adiada' });
+          continue;
+        }
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const resultado = await removerPromocoesVencidasDaLoja({
+            db,
+            FieldValue: admin.firestore.FieldValue,
+            Timestamp: admin.firestore.Timestamp,
+            lojaId: loja.id,
+            agora,
+          });
+          removidas += resultado.removidas;
+          if (resultado.vencidas || resultado.falhas) report.push({ establishmentId: loja.id, ...resultado });
+        } catch (error) {
+          console.error(`[${ORIGEM_DA_PROMOCAO_VENCIDA}] Falha na loja`, { establishmentId: loja.id, error });
+          report.push({ establishmentId: loja.id, status: 'falhou' });
+        }
+      }
+      const result = {
+        lojas: lojas.size, removidas, detalhes: report, segundos: Math.round((Date.now() - startedAt) / 1000),
+      };
+      console.log(`[${ORIGEM_DA_PROMOCAO_VENCIDA}] Passada concluida`, result);
+      return result;
+    } catch (error) {
+      console.error(`[${ORIGEM_DA_PROMOCAO_VENCIDA}] Falha na passada`, { error });
       return null;
     }
   },

@@ -21,6 +21,7 @@ import { createHealthRoutes } from './http/routes/healthRoutes.js';
 import { createImagensDaLojaRoutes } from './http/routes/imagensDaLojaRoutes.js';
 import { createImplantacaoRoutes } from './http/routes/implantacaoRoutes.js';
 import { createNotificationRoutes } from './http/routes/notificationRoutes.js';
+import { createProdutosRoutes } from './http/routes/produtosRoutes.js';
 import { createSessionRoutes } from './http/routes/sessionRoutes.js';
 import { createStatsRoutes } from './http/routes/statsRoutes.js';
 import { createAppCheckMiddleware } from './http/middlewares/appCheck.js';
@@ -75,6 +76,9 @@ export function createApp({
   instalacoesDosApps,
   maisVendidosDaLoja = null,
   alertasDoAdmin = null,
+  historicoDoProduto = null,
+  produtosForaDoApp = null,
+  integradorDaLoja = null,
 }) {
   const app = express();
   // Barreira de escrita por chave de permissao, com cache por token.
@@ -181,6 +185,15 @@ export function createApp({
     createFirebaseAuthMiddleware({ required: true }),
     createCouponRoutes({ manageCoupons, requirePermission, accountForRequest }),
   );
+  // Historico do produto da propria loja, lido do Log das acoes da equipe (cola 65, item 3.5).
+  if (historicoDoProduto) {
+    app.use(
+      '/api/produtos',
+      createFirebaseAuthMiddleware({ required: true }),
+      lojaAlvoDoAdmin,
+      createProdutosRoutes({ historicoDoProduto, produtosForaDoApp, accountForRequest }),
+    );
+  }
   // Catalogo da loja a partir da lista padrao (Ativar, travadas, nome de exibicao).
   app.use(
     '/api/catalogo',
@@ -262,6 +275,7 @@ export function createApp({
       aparenciaDaHome,
       bannersNoAdmin,
       alertasDoAdmin,
+      integradorDaLoja,
     }),
   );
 
