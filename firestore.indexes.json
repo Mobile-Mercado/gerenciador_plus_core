@@ -83,6 +83,50 @@
       "queryScope": "COLLECTION",
       "fields": [
         {
+          "fieldPath": "tipo",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "active",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "establishmentIds",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "endAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "Coupons",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "destinatario.userAuthId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "active",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "establishmentIds",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "endAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "Coupons",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
           "fieldPath": "code",
           "order": "ASCENDING"
         },
