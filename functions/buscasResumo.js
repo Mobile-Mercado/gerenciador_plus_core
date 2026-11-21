@@ -178,8 +178,9 @@ function resumirBuscas({
   let convertidas = 0;
   let semPedido = 0;
   let semCliente = 0;
-  // "Comprou": so as buscas com cliente gravadas com produtosDisponiveis, isto e, depois da
-  // publicacao da busca nova (cola do Thay B57-03p, item 2). As de antes ficam fora das duas contas.
+  // "Comprou": so as buscas com cliente gravadas com pelo menos um codigo em produtosDisponiveis,
+  // isto e, depois da publicacao da busca nova (cola do Thay B57-03p, item 2, e B57-03r, item 1).
+  // As de antes e as sem produto disponivel ficam fora das duas contas.
   let comprou = 0;
   let semCompra = 0;
   // Id do documento em Users de cada uid, calculado uma vez por uid.
@@ -217,8 +218,13 @@ function resumirBuscas({
     if (convertida) convertidas += 1;
     else semPedido += 1;
 
-    if (Array.isArray(busca?.produtosDisponiveis)) {
-      const codigos = busca.produtosDisponiveis.map(String).filter(Boolean);
+    // Base do "Comprou" (resposta do Thay de 20/11, cola B57-03r, item 1): so a busca com pelo
+    // menos um produto disponivel. Busca so com produto sem estoque, ou sem resultado, fica fora
+    // das duas contas. semCompra e tambem o "Buscas que nao viraram pedido" da tela (item 2).
+    const codigos = Array.isArray(busca?.produtosDisponiveis)
+      ? busca.produtosDisponiveis.map(String).filter(Boolean)
+      : [];
+    if (codigos.length) {
       if (comprouDaBusca(comprasDaBusca(compras, clienteId, documentoDoCliente(clienteId)), quando, codigos)) comprou += 1;
       else semCompra += 1;
     }
