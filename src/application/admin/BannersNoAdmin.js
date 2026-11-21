@@ -331,9 +331,13 @@ export class BannersNoAdmin {
   // Cola B57-07, item 6: "Leva para". `levaPara`: { tipo: 'nada' }, { tipo: 'produtos', ids } (so
   // produtos desta loja, lidos do banco) ou { tipo: 'categoria', id } (categoria desta loja). Grava
   // products e category juntos: um apaga o outro, como no app gerenciador.
-  async mudarDestino(lojaId, bannerId, levaPara = {}) {
+  // Cola B57-11, item A6: com `exigirDestino` (so a tela Loja), tirar o destino ({ tipo: 'nada' }) e
+  // recusado como o ligar sem destino (409, banner_sem_destino), e o produto que nao esta a venda
+  // (produtoAVenda) e recusado com a recusa de produto nao encontrado.
+  async mudarDestino(lojaId, bannerId, levaPara = {}, { exigirDestino = false } = {}) {
     const atual = await this.banner(lojaId, bannerId);
     const dados = atual.data() || {};
+    if (exigirDestino && levaPara.tipo === 'nada') throw recusa('Escolha para onde o banner leva.', 'banner_sem_destino', 409);
     const loja = this.firestore.collection('estabelecimentos').doc(lojaId);
     let products = [];
     let category = null;
@@ -342,7 +346,7 @@ export class BannersNoAdmin {
       if (!ids.length) throw recusa('Escolha pelo menos um produto.', 'banner_sem_produtos');
       if (ids.length > MAXIMO_DE_PRODUTOS_DO_BANNER) throw recusa(`Escolha até ${MAXIMO_DE_PRODUTOS_DO_BANNER} produtos.`, 'banner_produtos_demais');
       const lidos = await Promise.all(ids.map((id) => loja.collection('Products').doc(id).get()));
-      const faltando = lidos.filter((produto) => !produto.exists).map((produto) => produto.id);
+      const faltando = lidos.filter((produto) => !produto.exists || (exigirDestino && !produtoAVenda(produto.data() || {}))).map((produto) => produto.id);
       if (faltando.length) throw recusa('Produto não encontrado nesta loja.', 'banner_produto_nao_encontrado', 404, { ids: faltando });
       products = lidos.map((produto) => produtoDoBanner(lojaId, produto.id, produto.data() || {}, this.agora()));
     } else if (levaPara.tipo === 'categoria') {

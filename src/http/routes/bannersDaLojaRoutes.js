@@ -77,16 +77,16 @@ export function createBannersDaLojaRoutes({ bannersDaLoja, bannersPorTipo = null
 
     // Faixa de edicao: "Quando", "Leva para", "Contador" e "Ligado" (ligar alem do limite: 409). Cola
     // B57-10, item B3: ligar sem "Leva para" e recusado (409, banner_sem_destino); um destino enviado
-    // junto com o "Ligado" grava antes, para o ligar ja ver o destino.
+    // junto com o "Ligado" grava antes, para o ligar ja ver o destino. Cola B57-11, item A6: tirar o
+    // destino ({ tipo: 'nada' }) e recusado (409, banner_sem_destino) antes de gravar qualquer campo, e
+    // o produto que nao esta a venda e recusado como produto nao encontrado (404).
     router.patch('/por-tipo/:bannerId', requirePermission('settings.edit'), asyncHandler(async (request, response) => {
       const { bannerId } = idSchema.parse(request.params);
       const { levaPara, ...campos } = alterarNaLojaSchema.parse(request.body || {});
       const { establishmentId } = await accountForRequest(request);
       let banner = null;
-      const destinoAntes = levaPara && levaPara.tipo !== 'nada';
-      if (destinoAntes) banner = (await bannersPorTipo.mudarDestino(establishmentId, bannerId, levaPara)).banner;
+      if (levaPara) banner = (await bannersPorTipo.mudarDestino(establishmentId, bannerId, levaPara, { exigirDestino: true })).banner;
       if (Object.keys(campos).length) banner = (await bannersPorTipo.alterar(establishmentId, bannerId, campos, { exigirDestino: true })).banner;
-      if (levaPara && !destinoAntes) banner = (await bannersPorTipo.mudarDestino(establishmentId, bannerId, levaPara)).banner;
       if (!banner) banner = await bannersPorTipo.ler(establishmentId, bannerId);
       response.json({ data: banner });
     }));

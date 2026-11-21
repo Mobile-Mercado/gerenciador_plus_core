@@ -179,8 +179,8 @@ test('B57-07, item 6: "Leva para" grava products com referencias e numeros do ap
     documentos: {
       'estabelecimentos/loja-1': {},
       'estabelecimentos/loja-1/Banners/p1': banner('principal'),
-      'estabelecimentos/loja-1/Products/pr1': { name: 'Picanha', barCode: '789', currentPrice: 59.9, previewPrice: 69.9, images: [{ fileName: 'f.jpg', fileUrl: 'https://f', quality: 80 }] },
-      'estabelecimentos/loja-1/Products/pr2': { name: 'Banana', currentPrice: 5 },
+      'estabelecimentos/loja-1/Products/pr1': { isActive: true, name: 'Picanha', barCode: '789', currentPrice: 59.9, previewPrice: 69.9, images: [{ fileName: 'f.jpg', fileUrl: 'https://f', quality: 80 }] },
+      'estabelecimentos/loja-1/Products/pr2': { isActive: true, name: 'Banana', currentPrice: 5 },
       'estabelecimentos/loja-1/ProductCategories/c1': { name: 'Limpeza', icon: 'https://i', isActive: true },
       'estabelecimentos/loja-1/ProductSubcategories/s1': { categoryId: 'c1', isActive: true },
       'estabelecimentos/loja-1/Products/pr3': { isActive: true, isTrashed: false, currentPrice: 9.9, shelvesIds: ['c1_s1'] },
@@ -210,9 +210,11 @@ test('B57-07, item 6: "Leva para" grava products com referencias e numeros do ap
     assert.equal(categoria.category.mapValue.fields.reference.referenceValue, 'projects/proj/databases/(default)/documents/estabelecimentos/loja-1/ProductCategories/c1');
     assert.deepEqual(categoria.category.mapValue.fields.name, { stringValue: 'Limpeza' });
 
-    await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'nada' } } });
-    const nada = rota.rest.gravados.at(-1).documento.fields;
-    assert.deepEqual(nada, { products: { arrayValue: {} }, category: { nullValue: null } });
+    // Cola B57-11, item A6: pela tela Loja, "Nada" e recusado (o "Nada" do Admin fica no teste do A6).
+    const gravadosAntes = rota.rest.gravados.length;
+    const nada = await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'nada' } } });
+    assert.equal(nada.status, 409);
+    assert.equal(rota.rest.gravados.length, gravadosAntes);
 
     const outroProduto = await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'produtos', ids: ['de-outra-loja'] } } });
     assert.equal(outroProduto.status, 404);
@@ -393,7 +395,7 @@ test('B57-10, B2: "Leva para" Ofertas grava destino ofertas, products vazio e ca
     'estabelecimentos/loja-1': {},
     'estabelecimentos/loja-1/Banners/p1': banner('principal', { products: [{ id: 'a' }] }),
     'estabelecimentos/loja-1/Banners/o1': banner('vertical', { destino: 'ofertas', products: [], category: null }),
-    'estabelecimentos/loja-1/Products/pr1': { name: 'Picanha', currentPrice: 59.9 },
+    'estabelecimentos/loja-1/Products/pr1': { isActive: true, name: 'Picanha', currentPrice: 59.9 },
   };
   const rota = await subir({ documentos });
   try {
@@ -476,4 +478,69 @@ test('B57-10, B3: o Admin (sem a opcao da tela Loja) continua criando ligado e l
   const { banner: ligado } = await admin.alterar('loja-1', 'v1', { ligado: true });
   assert.equal(rest.gravados.at(-1).documento.fields.status.booleanValue, true);
   assert.equal(ligado.id, 'v1');
+});
+
+// Cola B57-11, item A6: pela tela Loja, a API nao tira o destino ("Nada") e nao aceita produto que nao
+// esta a venda; o Admin (sem a opcao da tela Loja) continua como antes.
+function adminEmMemoria(documentos) {
+  const { firestore } = bancoEmMemoria(documentos);
+  const rest = restEmMemoria(documentos);
+  const admin = new BannersNoAdmin({
+    firestore, bucket: { name: 'b', file: () => ({ save: async () => {}, delete: async () => {} }) }, restFirestore: rest,
+    medir: async () => ({ largura: 400, altura: 700 }), agora: () => AGORA, novoId: () => 'novo1',
+  });
+  return { admin, rest };
+}
+
+test('B57-11, A6: na tela Loja, "Leva para" Nada e recusado (409, banner_sem_destino) sem gravar nada; o Admin continua tirando o destino', async () => {
+  const documentos = () => ({
+    'estabelecimentos/loja-1': {},
+    'estabelecimentos/loja-1/Banners/p1': banner('principal', { destino: 'ofertas', products: [], category: null }),
+  });
+  const rota = await subir({ documentos: documentos() });
+  try {
+    for (const corpo of [{ levaPara: { tipo: 'nada' } }, { ligado: false, levaPara: { tipo: 'nada' } }]) {
+      const resposta = await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo });
+      assert.equal(resposta.status, 409, JSON.stringify(corpo));
+      assert.equal(resposta.corpo.error.code, 'banner_sem_destino');
+      assert.equal(resposta.corpo.error.message, 'Escolha para onde o banner leva.');
+    }
+    assert.equal(rota.rest.gravados.length, 0, 'nem o destino nem o Ligado gravam');
+  } finally {
+    await rota.fechar();
+  }
+  const { admin, rest } = adminEmMemoria(documentos());
+  await admin.mudarDestino('loja-1', 'p1', { tipo: 'nada' });
+  assert.deepEqual(rest.gravados.at(-1).documento.fields, { products: { arrayValue: {} }, category: { nullValue: null } });
+});
+
+test('B57-11, A6: na tela Loja, produto que nao esta a venda e recusado como produto nao encontrado; o Admin continua aceitando', async () => {
+  const documentos = () => ({
+    'estabelecimentos/loja-1': {},
+    'estabelecimentos/loja-1/Banners/p1': banner('principal'),
+    'estabelecimentos/loja-1/Products/ok': { isActive: true, isTrashed: false, currentPrice: 5, quantityInStock: 3 },
+    'estabelecimentos/loja-1/Products/desligado': { isActive: false, currentPrice: 5 },
+    'estabelecimentos/loja-1/Products/lixeira': { isActive: true, isTrashed: true, currentPrice: 5 },
+    'estabelecimentos/loja-1/Products/sem-preco': { isActive: true, currentPrice: 0 },
+    'estabelecimentos/loja-1/Products/sem-estoque': { isActive: true, currentPrice: 5, quantityInStock: 0 },
+  });
+  const rota = await subir({ documentos: documentos() });
+  try {
+    for (const id of ['desligado', 'lixeira', 'sem-preco', 'sem-estoque']) {
+      const resposta = await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'produtos', ids: ['ok', id] } } });
+      assert.equal(resposta.status, 404, id);
+      assert.equal(resposta.corpo.error.code, 'banner_produto_nao_encontrado', id);
+      assert.equal(resposta.corpo.error.message, 'Produto não encontrado nesta loja.', id);
+      assert.deepEqual(resposta.corpo.error.details, { ids: [id] }, id);
+    }
+    assert.equal(rota.rest.gravados.length, 0);
+    const aVenda = await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'produtos', ids: ['ok'] } } });
+    assert.equal(aVenda.status, 200);
+    assert.equal(rota.rest.gravados.length, 1);
+  } finally {
+    await rota.fechar();
+  }
+  const { admin, rest } = adminEmMemoria(documentos());
+  await admin.mudarDestino('loja-1', 'p1', { tipo: 'produtos', ids: ['ok', 'desligado', 'sem-estoque'] });
+  assert.equal(rest.gravados.at(-1).documento.fields.products.arrayValue.values.length, 3);
 });
