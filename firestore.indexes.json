@@ -391,6 +391,38 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "AcoesEquipe",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "alvo.tipo",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "alvo.id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "em",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "Products",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "offReasons",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "isTrashed",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": [
