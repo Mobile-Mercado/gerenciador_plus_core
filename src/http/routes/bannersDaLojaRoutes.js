@@ -19,7 +19,11 @@ export const TIPOS_DA_TELA_LOJA = Object.freeze(['principal', 'vertical', 'popup
 const novoPorTipoSchema = z.object({ tipo: z.enum(TIPOS_DA_TELA_LOJA), inicio: z.string().min(1).max(40), fim: z.string().min(1).max(40) });
 const levaParaSchema = z.discriminatedUnion('tipo', [
   z.object({ tipo: z.literal('nada') }).strict(),
-  z.object({ tipo: z.literal('produtos'), ids: z.array(z.string().min(1).max(120).regex(/^[^/]+$/)).min(1).max(100) }).strict(),
+  // Cola B57-10, item B2: "Ofertas" (grava destino: 'ofertas').
+  z.object({ tipo: z.literal('ofertas') }).strict(),
+  // Cola B57-11c, item 6: ids vazio e o "Pronto" sem nenhum produto a venda; mudarDestino so aceita
+  // quando nenhum dos gravados esta a venda.
+  z.object({ tipo: z.literal('produtos'), ids: z.array(z.string().min(1).max(120).regex(/^[^/]+$/)).max(100) }).strict(),
   z.object({ tipo: z.literal('categoria'), id: z.string().min(1).max(120).regex(/^[^/]+$/) }).strict(),
 ]);
 const alterarNaLojaSchema = alterarBannerSchema.extend({ levaPara: levaParaSchema.optional() }).strict();
@@ -36,6 +40,13 @@ export function createBannersDaLojaRoutes({ bannersDaLoja, bannersPorTipo = null
       response.json({ data: { ...lista, tipos } });
     }));
 
+    // Cola B57-10, item B1: os destinos com conteudo para o "Leva para" (as categorias que o app mostra
+    // e que tem produto a venda).
+    router.get('/por-tipo/destinos', asyncHandler(async (request, response) => {
+      const { establishmentId } = await accountForRequest(request);
+      response.json({ data: { categorias: await bannersPorTipo.categoriasComConteudo(establishmentId) } });
+    }));
+
     // Cola B57-07b, item 13 (parte C): os encerrados de Principal, Vertical e Popup, e o "Usar de novo".
     router.get('/por-tipo/encerrados', asyncHandler(async (request, response) => {
       const { establishmentId } = await accountForRequest(request);
@@ -49,11 +60,12 @@ export function createBannersDaLojaRoutes({ bannersDaLoja, bannersPorTipo = null
       response.json({ data: (await bannersPorTipo.usarDeNovo(establishmentId, bannerId)).banner });
     }));
 
-    // "Criar novo": o tipo no limite cria o banner desligado.
+    // "Criar novo": o tipo no limite cria o banner desligado. Cola B57-10, item B3: o banner nasce sem
+    // "Leva para", entao nasce desligado (so liga com destino).
     router.post('/por-tipo', requirePermission('settings.edit'), corpoDeImagem, asyncHandler(async (request, response) => {
       const { tipo, inicio, fim } = novoPorTipoSchema.parse(request.query);
       const { establishmentId } = await accountForRequest(request);
-      const banner = await bannersPorTipo.criar(establishmentId, tipo, request.body, request.headers['content-type'], { inicio, fim }, { noLimite: 'desligar' });
+      const banner = await bannersPorTipo.criar(establishmentId, tipo, request.body, request.headers['content-type'], { inicio, fim }, { noLimite: 'desligar', exigirDestino: true });
       response.status(201).json({ data: banner });
     }));
 
@@ -65,14 +77,18 @@ export function createBannersDaLojaRoutes({ bannersDaLoja, bannersPorTipo = null
       response.json({ data: resultado.banner });
     }));
 
-    // Faixa de edicao: "Quando", "Leva para", "Contador" e "Ligado" (ligar alem do limite: 409).
+    // Faixa de edicao: "Quando", "Leva para", "Contador" e "Ligado" (ligar alem do limite: 409). Cola
+    // B57-10, item B3: ligar sem "Leva para" e recusado (409, banner_sem_destino); um destino enviado
+    // junto com o "Ligado" grava antes, para o ligar ja ver o destino. Cola B57-11, item A6: tirar o
+    // destino ({ tipo: 'nada' }) e recusado (409, banner_sem_destino) antes de gravar qualquer campo, e
+    // o produto que nao esta a venda e recusado como produto nao encontrado (404).
     router.patch('/por-tipo/:bannerId', requirePermission('settings.edit'), asyncHandler(async (request, response) => {
       const { bannerId } = idSchema.parse(request.params);
       const { levaPara, ...campos } = alterarNaLojaSchema.parse(request.body || {});
       const { establishmentId } = await accountForRequest(request);
       let banner = null;
-      if (Object.keys(campos).length) banner = (await bannersPorTipo.alterar(establishmentId, bannerId, campos)).banner;
-      if (levaPara) banner = (await bannersPorTipo.mudarDestino(establishmentId, bannerId, levaPara)).banner;
+      if (levaPara) banner = (await bannersPorTipo.mudarDestino(establishmentId, bannerId, levaPara, { exigirDestino: true })).banner;
+      if (Object.keys(campos).length) banner = (await bannersPorTipo.alterar(establishmentId, bannerId, campos, { exigirDestino: true })).banner;
       if (!banner) banner = await bannersPorTipo.ler(establishmentId, bannerId);
       response.json({ data: banner });
     }));

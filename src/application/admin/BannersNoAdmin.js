@@ -37,8 +37,12 @@ const data = (valor) => {
 // "Leva para" (cola B57-07, item 6): nada, os produtos (products) ou a categoria (category) do banner,
 // como o app gerenciador grava (BannerProductAdapter e BannerCategoryAdapter do mobile_core) e o app do
 // cliente le (main_variant_1_page.dart:229-236).
+// Cola B57-10, item B2: "Ofertas" grava destino: 'ofertas' (com products vazio e category nula); os
+// outros destinos apagam o campo destino. O app do cliente le esse campo, com esse nome.
 export const MAXIMO_DE_PRODUTOS_DO_BANNER = 100;
+export const DESTINO_OFERTAS = 'ofertas';
 export function destinoDoBanner(banner) {
+  if (banner.destino === DESTINO_OFERTAS) return { tipo: 'ofertas' };
   const produtos = Array.isArray(banner.products) ? banner.products : [];
   if (produtos.length) return { tipo: 'produtos', quantos: produtos.length, ids: produtos.map((produto) => String(produto?.id || '')).filter(Boolean) };
   if (banner.category && typeof banner.category === 'object') {
@@ -110,6 +114,18 @@ export function categoriaDoBanner(lojaId, id, categoria) {
     icon: texto(categoria.icon),
   };
 }
+
+// Cola B57-10, item B1: o "Leva para" so oferece destino com conteudo. Produto a venda como o app do
+// cliente mostra (e como isForSale de functions/productImageFileCheck.js): ativo, fora da lixeira, preco
+// maior que zero e estoque sem campo ou maior que zero.
+export function produtoAVenda(produto = {}) {
+  const estoque = produto.quantityInStock;
+  return produto.isActive === true && produto.isTrashed !== true
+    && typeof produto.currentPrice === 'number' && produto.currentPrice > 0
+    && (estoque === null || estoque === undefined || (typeof estoque === 'number' && estoque > 0));
+}
+// array-contains-any aceita ate 30 valores por consulta.
+export const PRATELEIRAS_POR_CONSULTA = 30;
 
 // Conta para o limite: ligado (ou aguardando o inicio) e ainda nao encerrado.
 export function ocupaVaga(banner, agora) {
@@ -220,7 +236,8 @@ export class BannersNoAdmin {
   // B5.a e B5.b: banner novo de um tipo, dentro do limite do tipo. Cola B57-07 (tela Loja): com
   // `noLimite: 'desligar'`, o tipo no limite nao recusa; o banner nasce desligado ("Criar novo" fica
   // sempre a vista e o limite so bloqueia o "Ligado").
-  async criar(lojaId, tipo, conteudo, tipoArquivo, { inicio, fim }, { noLimite = 'recusar' } = {}) {
+  // Cola B57-10, item B3: com `exigirDestino` (so a tela Loja), o banner sem "Leva para" nasce desligado.
+  async criar(lojaId, tipo, conteudo, tipoArquivo, { inicio, fim }, { noLimite = 'recusar', exigirDestino = false } = {}) {
     const loja = await this.loja(lojaId);
     const regra = this.tipoValido(tipo);
     const datas = this.periodo({ inicio, fim });
@@ -236,6 +253,7 @@ export class BannersNoAdmin {
     const id = this.novoId();
     let ligacao = datas.inicio.getTime() > agora ? AGUARDANDO : null;
     if (noLimiteDoTipo) ligacao = DESLIGADO;
+    if (exigirDestino) ligacao = DESLIGADO; // o banner novo nasce sem destino (products vazio, category nula)
     const campos = {
       ...camposDoBanner({ id, ...gravado, largura: imagem.largura, altura: imagem.altura, ...datas, tipo, products: [], novo: true, ligacao }),
       category: null,
@@ -264,7 +282,8 @@ export class BannersNoAdmin {
   }
 
   // Datas, ligar/desligar e contador, so os enviados. Ligar com inicio no futuro fica aguardando.
-  async alterar(lojaId, bannerId, { inicio, fim, ligado, contador } = {}) {
+  // Cola B57-10, item B3: com `exigirDestino` (so a tela Loja), o banner sem "Leva para" nao liga.
+  async alterar(lojaId, bannerId, { inicio, fim, ligado, contador } = {}, { exigirDestino = false } = {}) {
     const atual = await this.banner(lojaId, bannerId);
     const dados = atual.data() || {};
     const tipo = dados.type || 'principal';
@@ -293,6 +312,7 @@ export class BannersNoAdmin {
             throw recusa(`Este tipo já tem ${outros} de ${TIPOS_DE_BANNER[tipo].limite} banners ligados.`, 'banner_limite', 409);
           }
         }
+        if (!estavaLigado && exigirDestino && destinoDoBanner(dados).tipo === 'nada') throw recusa('Escolha para onde o banner leva.', 'banner_sem_destino', 409);
         Object.assign(campos, inicioFinal && inicioFinal.getTime() > agora ? AGUARDANDO : LIGADO);
       } else {
         Object.assign(campos, DESLIGADO);
@@ -311,18 +331,30 @@ export class BannersNoAdmin {
   // Cola B57-07, item 6: "Leva para". `levaPara`: { tipo: 'nada' }, { tipo: 'produtos', ids } (so
   // produtos desta loja, lidos do banco) ou { tipo: 'categoria', id } (categoria desta loja). Grava
   // products e category juntos: um apaga o outro, como no app gerenciador.
-  async mudarDestino(lojaId, bannerId, levaPara = {}) {
+  // Cola B57-11, item A6: com `exigirDestino` (so a tela Loja), tirar o destino ({ tipo: 'nada' }) e
+  // recusado como o ligar sem destino (409, banner_sem_destino), e o produto que nao esta a venda
+  // (produtoAVenda) e recusado com a recusa de produto nao encontrado.
+  async mudarDestino(lojaId, bannerId, levaPara = {}, { exigirDestino = false } = {}) {
     const atual = await this.banner(lojaId, bannerId);
     const dados = atual.data() || {};
+    if (exigirDestino && levaPara.tipo === 'nada') throw recusa('Escolha para onde o banner leva.', 'banner_sem_destino', 409);
     const loja = this.firestore.collection('estabelecimentos').doc(lojaId);
     let products = [];
     let category = null;
+    let ligacao = null;
     if (levaPara.tipo === 'produtos') {
       const ids = [...new Set((levaPara.ids || []).map(String).filter((id) => /^[^/]{1,120}$/.test(id)))];
-      if (!ids.length) throw recusa('Escolha pelo menos um produto.', 'banner_sem_produtos');
+      // Cola B57-11c, item 6: pela tela Loja, a lista vazia descarta os gravados quando nenhum deles
+      // esta a venda (conferido aqui, no banco). Com algum a venda, continua recusada.
+      if (!ids.length && !(exigirDestino && await this.soTemForaDeVenda(loja, dados))) {
+        throw recusa('Escolha pelo menos um produto.', 'banner_sem_produtos');
+      }
+      // Cola B57-11d, item 1: o banner ligado (ou aguardando o inicio) que fica sem produto e desligado
+      // junto, na mesma gravacao da lista.
+      if (!ids.length && (dados.status === true || dados.aguardandoInicio === true)) ligacao = DESLIGADO;
       if (ids.length > MAXIMO_DE_PRODUTOS_DO_BANNER) throw recusa(`Escolha até ${MAXIMO_DE_PRODUTOS_DO_BANNER} produtos.`, 'banner_produtos_demais');
       const lidos = await Promise.all(ids.map((id) => loja.collection('Products').doc(id).get()));
-      const faltando = lidos.filter((produto) => !produto.exists).map((produto) => produto.id);
+      const faltando = lidos.filter((produto) => !produto.exists || (exigirDestino && !produtoAVenda(produto.data() || {}))).map((produto) => produto.id);
       if (faltando.length) throw recusa('Produto não encontrado nesta loja.', 'banner_produto_nao_encontrado', 404, { ids: faltando });
       products = lidos.map((produto) => produtoDoBanner(lojaId, produto.id, produto.data() || {}, this.agora()));
     } else if (levaPara.tipo === 'categoria') {
@@ -330,12 +362,71 @@ export class BannersNoAdmin {
       if (!/^[^/]{1,120}$/.test(id)) throw recusa('Categoria não encontrada nesta loja.', 'banner_categoria_nao_encontrada', 404);
       const lida = await loja.collection('ProductCategories').doc(id).get();
       if (!lida.exists) throw recusa('Categoria não encontrada nesta loja.', 'banner_categoria_nao_encontrada', 404);
+      // Cola B57-10, item B1: categoria que o app nao mostra, ou sem produto a venda, nao vira destino.
+      if (!(await this.categoriasComConteudo(lojaId, { soEstas: [lida.id] })).includes(lida.id)) {
+        throw recusa('Categoria não encontrada nesta loja.', 'banner_categoria_nao_encontrada', 404);
+      }
       category = categoriaDoBanner(lojaId, lida.id, lida.data() || {});
-    } else if (levaPara.tipo !== 'nada') {
+    } else if (levaPara.tipo !== 'nada' && levaPara.tipo !== 'ofertas') {
       throw recusa('Escolha para onde o banner leva.', 'banner_destino_invalido');
     }
-    await this.rest.gravar(this.caminho(lojaId, bannerId), documentoRest({ products, category }, this.rest.projectId), { mascara: ['products', 'category'] });
-    return { banner: await this.ler(lojaId, bannerId), antes: { levaPara: destinoDoBanner(dados) } };
+    // Cola B57-10, item B2: destino na mascara sempre; so "Ofertas" manda o campo, e nos outros ele sai
+    // do documento (campo na mascara e fora do corpo e apagado pela API REST do Firestore).
+    const campos = { products, category, ...(levaPara.tipo === 'ofertas' ? { destino: DESTINO_OFERTAS } : {}), ...ligacao };
+    const mascara = ['products', 'category', 'destino', ...Object.keys(ligacao || {})];
+    await this.rest.gravar(this.caminho(lojaId, bannerId), documentoRest(campos, this.rest.projectId), { mascara });
+    return { banner: await this.ler(lojaId, bannerId), antes: { levaPara: destinoDoBanner(dados), ...(ligacao ? { ligado: true } : {}) } };
+  }
+
+  // Cola B57-11c, item 6: o banner tem produtos gravados e nenhum esta a venda (produtoAVenda; o que
+  // nao existe mais tambem nao esta). Produto gravado sem id nao da para conferir: nao descarta.
+  async soTemForaDeVenda(loja, dados) {
+    const destino = destinoDoBanner(dados);
+    if (destino.tipo !== 'produtos' || destino.ids.length !== destino.quantos) return false;
+    if (!destino.ids.every((id) => /^[^/]{1,120}$/.test(id))) return false;
+    const lidos = await Promise.all(destino.ids.map((id) => loja.collection('Products').doc(id).get()));
+    return lidos.every((produto) => !produto.exists || !produtoAVenda(produto.data() || {}));
+  }
+
+  // Cola B57-10, item B1: as categorias que o app do cliente mostra (getProductCategories do
+  // mobile_firebase_api: categoria ativa com produto ativo, fora da lixeira, numa prateleira
+  // `${categoria}_${subcategoria}` de subcategoria ativa dela) e com pelo menos um produto a venda,
+  // para a categoria tambem abrir com produto. A consulta dos produtos e a do indice de Products
+  // (shelvesIds CONTAINS, isActive, isTrashed), de 30 em 30 prateleiras, so com os campos da conta;
+  // a categoria ja achada sai das proximas consultas. `soEstas`: so essas categorias.
+  async categoriasComConteudo(lojaId, { soEstas = null } = {}) {
+    const loja = this.firestore.collection('estabelecimentos').doc(String(lojaId || ''));
+    const [categorias, subcategorias] = await Promise.all([
+      loja.collection('ProductCategories').where('isActive', '==', true).get(),
+      loja.collection('ProductSubcategories').where('isActive', '==', true).get(),
+    ]);
+    const ativas = new Set(categorias.docs.map((documento) => documento.id).filter((id) => !soEstas || soEstas.includes(id)));
+    const categoriaDaPrateleira = new Map();
+    subcategorias.docs.forEach((documento) => {
+      const categoria = String(documento.data()?.categoryId || '');
+      if (ativas.has(categoria)) categoriaDaPrateleira.set(`${categoria}_${documento.id}`, categoria);
+    });
+    const comConteudo = new Set();
+    let pendentes = [...categoriaDaPrateleira.keys()];
+    while (pendentes.length) {
+      const lote = pendentes.slice(0, PRATELEIRAS_POR_CONSULTA);
+      const produtos = await loja.collection('Products')
+        .where('shelvesIds', 'array-contains-any', lote)
+        .where('isActive', '==', true)
+        .where('isTrashed', '==', false)
+        .select('isActive', 'isTrashed', 'currentPrice', 'quantityInStock', 'shelvesIds')
+        .get();
+      produtos.docs.forEach((documento) => {
+        const produto = documento.data() || {};
+        if (!produtoAVenda(produto)) return;
+        (Array.isArray(produto.shelvesIds) ? produto.shelvesIds : []).forEach((prateleira) => {
+          const categoria = categoriaDaPrateleira.get(String(prateleira ?? ''));
+          if (categoria) comConteudo.add(categoria);
+        });
+      });
+      pendentes = pendentes.slice(PRATELEIRAS_POR_CONSULTA).filter((prateleira) => !comConteudo.has(categoriaDaPrateleira.get(prateleira)));
+    }
+    return [...comConteudo].sort();
   }
 
   // Cola B57-07b, item 13 (parte C): os encerrados da loja, do que terminou por ultimo para o mais antigo.
