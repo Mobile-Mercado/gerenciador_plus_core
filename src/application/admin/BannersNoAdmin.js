@@ -343,7 +343,11 @@ export class BannersNoAdmin {
     let category = null;
     if (levaPara.tipo === 'produtos') {
       const ids = [...new Set((levaPara.ids || []).map(String).filter((id) => /^[^/]{1,120}$/.test(id)))];
-      if (!ids.length) throw recusa('Escolha pelo menos um produto.', 'banner_sem_produtos');
+      // Cola B57-11c, item 6: pela tela Loja, a lista vazia descarta os gravados quando nenhum deles
+      // esta a venda (conferido aqui, no banco). Com algum a venda, continua recusada.
+      if (!ids.length && !(exigirDestino && await this.soTemForaDeVenda(loja, dados))) {
+        throw recusa('Escolha pelo menos um produto.', 'banner_sem_produtos');
+      }
       if (ids.length > MAXIMO_DE_PRODUTOS_DO_BANNER) throw recusa(`Escolha até ${MAXIMO_DE_PRODUTOS_DO_BANNER} produtos.`, 'banner_produtos_demais');
       const lidos = await Promise.all(ids.map((id) => loja.collection('Products').doc(id).get()));
       const faltando = lidos.filter((produto) => !produto.exists || (exigirDestino && !produtoAVenda(produto.data() || {}))).map((produto) => produto.id);
@@ -367,6 +371,16 @@ export class BannersNoAdmin {
     const campos = levaPara.tipo === 'ofertas' ? { products, category, destino: DESTINO_OFERTAS } : { products, category };
     await this.rest.gravar(this.caminho(lojaId, bannerId), documentoRest(campos, this.rest.projectId), { mascara: ['products', 'category', 'destino'] });
     return { banner: await this.ler(lojaId, bannerId), antes: { levaPara: destinoDoBanner(dados) } };
+  }
+
+  // Cola B57-11c, item 6: o banner tem produtos gravados e nenhum esta a venda (produtoAVenda; o que
+  // nao existe mais tambem nao esta). Produto gravado sem id nao da para conferir: nao descarta.
+  async soTemForaDeVenda(loja, dados) {
+    const destino = destinoDoBanner(dados);
+    if (destino.tipo !== 'produtos' || destino.ids.length !== destino.quantos) return false;
+    if (!destino.ids.every((id) => /^[^/]{1,120}$/.test(id))) return false;
+    const lidos = await Promise.all(destino.ids.map((id) => loja.collection('Products').doc(id).get()));
+    return lidos.every((produto) => !produto.exists || !produtoAVenda(produto.data() || {}));
   }
 
   // Cola B57-10, item B1: as categorias que o app do cliente mostra (getProductCategories do

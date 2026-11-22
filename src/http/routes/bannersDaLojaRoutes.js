@@ -21,7 +21,9 @@ const levaParaSchema = z.discriminatedUnion('tipo', [
   z.object({ tipo: z.literal('nada') }).strict(),
   // Cola B57-10, item B2: "Ofertas" (grava destino: 'ofertas').
   z.object({ tipo: z.literal('ofertas') }).strict(),
-  z.object({ tipo: z.literal('produtos'), ids: z.array(z.string().min(1).max(120).regex(/^[^/]+$/)).min(1).max(100) }).strict(),
+  // Cola B57-11c, item 6: ids vazio e o "Pronto" sem nenhum produto a venda; mudarDestino so aceita
+  // quando nenhum dos gravados esta a venda.
+  z.object({ tipo: z.literal('produtos'), ids: z.array(z.string().min(1).max(120).regex(/^[^/]+$/)).max(100) }).strict(),
   z.object({ tipo: z.literal('categoria'), id: z.string().min(1).max(120).regex(/^[^/]+$/) }).strict(),
 ]);
 const alterarNaLojaSchema = alterarBannerSchema.extend({ levaPara: levaParaSchema.optional() }).strict();

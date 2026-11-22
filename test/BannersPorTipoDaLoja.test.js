@@ -544,3 +544,47 @@ test('B57-11, A6: na tela Loja, produto que nao esta a venda e recusado como pro
   await admin.mudarDestino('loja-1', 'p1', { tipo: 'produtos', ids: ['ok', 'desligado', 'sem-estoque'] });
   assert.equal(rest.gravados.at(-1).documento.fields.products.arrayValue.values.length, 3);
 });
+
+// Cola B57-11c, item 6: o "Pronto" grava so os a venda e descarta os outros; sem nenhum a venda, a lista
+// fica vazia. A lista vazia nao e um jeito de tirar o destino: com algum gravado a venda, e recusada.
+test('B57-11c, 6: lista vazia descarta os gravados so quando nenhum deles esta a venda', async () => {
+  const documentos = (gravados, campos = {}) => ({
+    'estabelecimentos/loja-1': {},
+    'estabelecimentos/loja-1/Banners/p1': banner('principal', { products: gravados, category: null, ...campos }),
+    'estabelecimentos/loja-1/Products/ok': { isActive: true, currentPrice: 5 },
+    'estabelecimentos/loja-1/Products/desligado': { isActive: false, currentPrice: 5 },
+    'estabelecimentos/loja-1/Products/sem-campo': { currentPrice: 5 },
+  });
+  const corpo = { levaPara: { tipo: 'produtos', ids: [] } };
+
+  const descarta = await subir({ documentos: documentos([{ id: 'desligado' }, { id: 'sem-campo' }, { id: 'apagado' }]) });
+  try {
+    const resposta = await descarta.chamar('/por-tipo/p1', { method: 'PATCH', corpo });
+    assert.equal(resposta.status, 200);
+    assert.equal(descarta.rest.gravados.length, 1);
+    assert.deepEqual(descarta.rest.gravados[0].documento.fields, { products: { arrayValue: {} }, category: { nullValue: null } });
+  } finally {
+    await descarta.fechar();
+  }
+
+  const recusados = [
+    documentos([{ id: 'desligado' }, { id: 'ok' }]),
+    documentos([{ id: 'desligado' }, { name: 'sem id' }]),
+    documentos([], { category: { id: 'c1', name: 'Categoria' } }),
+    documentos([]),
+  ];
+  for (const [n, caso] of recusados.entries()) {
+    const rota = await subir({ documentos: caso });
+    try {
+      const resposta = await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo });
+      assert.equal(resposta.corpo.error.code, 'banner_sem_produtos', String(n));
+      assert.equal(rota.rest.gravados.length, 0, String(n));
+    } finally {
+      await rota.fechar();
+    }
+  }
+
+  const { admin, rest } = adminEmMemoria(documentos([{ id: 'desligado' }]));
+  await assert.rejects(admin.mudarDestino('loja-1', 'p1', { tipo: 'produtos', ids: [] }), /Escolha pelo menos um produto/);
+  assert.equal(rest.gravados.length, 0, 'o Admin continua recusando a lista vazia');
+});
