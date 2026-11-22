@@ -562,7 +562,9 @@ test('B57-11c, 6: lista vazia descarta os gravados so quando nenhum deles esta a
     const resposta = await descarta.chamar('/por-tipo/p1', { method: 'PATCH', corpo });
     assert.equal(resposta.status, 200);
     assert.equal(descarta.rest.gravados.length, 1);
-    assert.deepEqual(descarta.rest.gravados[0].documento.fields, { products: { arrayValue: {} }, category: { nullValue: null } });
+    // Cola B57-11d, item 1: o banner ligado desliga na mesma gravacao (o teste proprio esta abaixo).
+    const { products, category } = descarta.rest.gravados[0].documento.fields;
+    assert.deepEqual({ products, category }, { products: { arrayValue: {} }, category: { nullValue: null } });
   } finally {
     await descarta.fechar();
   }
@@ -587,4 +589,54 @@ test('B57-11c, 6: lista vazia descarta os gravados so quando nenhum deles esta a
   const { admin, rest } = adminEmMemoria(documentos([{ id: 'desligado' }]));
   await assert.rejects(admin.mudarDestino('loja-1', 'p1', { tipo: 'produtos', ids: [] }), /Escolha pelo menos um produto/);
   assert.equal(rest.gravados.length, 0, 'o Admin continua recusando a lista vazia');
+});
+
+// Cola B57-11d, item 1: o banner ligado que fica sem produto no "Pronto" desliga na mesma gravacao.
+test('B57-11d, 1: ligado ou aguardando o inicio, sem produto a venda, desliga no mesmo salvamento', async () => {
+  const casos = [
+    ['ligado', { status: true, started: true }, true],
+    ['aguardando o inicio', { status: false, started: false, aguardandoInicio: true }, true],
+    ['ja desligado', { status: false, started: false, aguardandoInicio: false }, false],
+  ];
+  for (const [nome, estado, desliga] of casos) {
+    const rota = await subir({
+      documentos: {
+        'estabelecimentos/loja-1': {},
+        'estabelecimentos/loja-1/Banners/p1': banner('principal', { ...estado, category: null, products: [{ id: 'saiu' }] }),
+        'estabelecimentos/loja-1/Products/saiu': { isActive: false, currentPrice: 5 },
+      },
+    });
+    try {
+      const resposta = await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'produtos', ids: [] } } });
+      assert.equal(resposta.status, 200, nome);
+      assert.equal(rota.rest.gravados.length, 1, `${nome}: um salvamento so`);
+      const { documento, opcoes } = rota.rest.gravados[0];
+      const daLista = ['products', 'category', 'destino'];
+      const daChave = ['status', 'started', 'aguardandoInicio'];
+      assert.deepEqual(opcoes.mascara, desliga ? [...daLista, ...daChave] : daLista, nome);
+      assert.deepEqual(documento.fields.products, { arrayValue: {} }, nome);
+      for (const campo of daChave) assert.deepEqual(documento.fields[campo], desliga ? { booleanValue: false } : undefined, `${nome}: ${campo}`);
+    } finally {
+      await rota.fechar();
+    }
+  }
+});
+
+test('B57-11d, 1: com produto a venda a lista grava sem mexer na chave de ligar', async () => {
+  const rota = await subir({
+    documentos: {
+      'estabelecimentos/loja-1': {},
+      'estabelecimentos/loja-1/Banners/p1': banner('principal', { category: null, products: [{ id: 'saiu' }, { id: 'ok' }] }),
+      'estabelecimentos/loja-1/Products/saiu': { isActive: false, currentPrice: 5 },
+      'estabelecimentos/loja-1/Products/ok': { isActive: true, currentPrice: 5 },
+    },
+  });
+  try {
+    const resposta = await rota.chamar('/por-tipo/p1', { method: 'PATCH', corpo: { levaPara: { tipo: 'produtos', ids: ['ok'] } } });
+    assert.equal(resposta.status, 200);
+    assert.deepEqual(rota.rest.gravados[0].opcoes.mascara, ['products', 'category', 'destino']);
+    assert.equal(rota.rest.gravados[0].documento.fields.status, undefined);
+  } finally {
+    await rota.fechar();
+  }
 });

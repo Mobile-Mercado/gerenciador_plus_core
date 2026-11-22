@@ -341,6 +341,7 @@ export class BannersNoAdmin {
     const loja = this.firestore.collection('estabelecimentos').doc(lojaId);
     let products = [];
     let category = null;
+    let ligacao = null;
     if (levaPara.tipo === 'produtos') {
       const ids = [...new Set((levaPara.ids || []).map(String).filter((id) => /^[^/]{1,120}$/.test(id)))];
       // Cola B57-11c, item 6: pela tela Loja, a lista vazia descarta os gravados quando nenhum deles
@@ -348,6 +349,9 @@ export class BannersNoAdmin {
       if (!ids.length && !(exigirDestino && await this.soTemForaDeVenda(loja, dados))) {
         throw recusa('Escolha pelo menos um produto.', 'banner_sem_produtos');
       }
+      // Cola B57-11d, item 1: o banner ligado (ou aguardando o inicio) que fica sem produto e desligado
+      // junto, na mesma gravacao da lista.
+      if (!ids.length && (dados.status === true || dados.aguardandoInicio === true)) ligacao = DESLIGADO;
       if (ids.length > MAXIMO_DE_PRODUTOS_DO_BANNER) throw recusa(`Escolha até ${MAXIMO_DE_PRODUTOS_DO_BANNER} produtos.`, 'banner_produtos_demais');
       const lidos = await Promise.all(ids.map((id) => loja.collection('Products').doc(id).get()));
       const faltando = lidos.filter((produto) => !produto.exists || (exigirDestino && !produtoAVenda(produto.data() || {}))).map((produto) => produto.id);
@@ -368,9 +372,10 @@ export class BannersNoAdmin {
     }
     // Cola B57-10, item B2: destino na mascara sempre; so "Ofertas" manda o campo, e nos outros ele sai
     // do documento (campo na mascara e fora do corpo e apagado pela API REST do Firestore).
-    const campos = levaPara.tipo === 'ofertas' ? { products, category, destino: DESTINO_OFERTAS } : { products, category };
-    await this.rest.gravar(this.caminho(lojaId, bannerId), documentoRest(campos, this.rest.projectId), { mascara: ['products', 'category', 'destino'] });
-    return { banner: await this.ler(lojaId, bannerId), antes: { levaPara: destinoDoBanner(dados) } };
+    const campos = { products, category, ...(levaPara.tipo === 'ofertas' ? { destino: DESTINO_OFERTAS } : {}), ...ligacao };
+    const mascara = ['products', 'category', 'destino', ...Object.keys(ligacao || {})];
+    await this.rest.gravar(this.caminho(lojaId, bannerId), documentoRest(campos, this.rest.projectId), { mascara });
+    return { banner: await this.ler(lojaId, bannerId), antes: { levaPara: destinoDoBanner(dados), ...(ligacao ? { ligado: true } : {}) } };
   }
 
   // Cola B57-11c, item 6: o banner tem produtos gravados e nenhum esta a venda (produtoAVenda; o que
