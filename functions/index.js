@@ -82,6 +82,7 @@ const {
   avisoDePedidoCancelado,
 } = require('./avisos');
 const { avisarPedidoDeCupomUmaVez } = require('./avisoDeCupom');
+const { avisarComputadorRecusadoUmaVez } = require('./integradorRecusado');
 const { ORIGEM: ORIGEM_DA_PROMOCAO_VENCIDA, removerPromocoesVencidasDaLoja } = require('./promocaoVencida');
 
 if (!admin.apps.length) {
@@ -755,6 +756,28 @@ exports.avisarPedidoDeCupom = onDocumentCreated(
       });
     } finally {
       await esperarContagens();
+    }
+  },
+);
+
+// Computador recusado no integrador (tentativaRecusada nova com a recusa ligada): um alerta na aba
+// Alertas do Admin por computador e por dia. Regras e textos em integradorRecusado.js (Cola 76,
+// item 3). Nunca o nome nem o hash do computador no log.
+exports.avisarComputadorRecusado = onDocumentWritten(
+  'estabelecimentos/{lojaId}/IntegradorDaLoja/atual',
+  async (event) => {
+    try {
+      await avisarComputadorRecusadoUmaVez({
+        db,
+        lojaId: event.params.lojaId,
+        antes: event.data?.before?.data(),
+        depois: event.data?.after?.data(),
+      });
+    } catch (error) {
+      console.error('[avisarComputadorRecusado] Falha ao abrir o alerta do computador recusado', {
+        lojaId: event.params.lojaId,
+        erro: error?.message,
+      });
     }
   },
 );
