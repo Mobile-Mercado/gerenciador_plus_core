@@ -55,6 +55,8 @@ import { ProdutosForaDoApp } from './application/produtos/ProdutosForaDoApp.js';
 import { FirestoreProdutosForaDoAppRepository } from './infra/firebase/FirestoreProdutosForaDoAppRepository.js';
 import { FirestoreIntegradorDaLojaRepository } from './infra/firebase/FirestoreIntegradorDaLojaRepository.js';
 import { IntegradorDaLoja } from './application/admin/IntegradorDaLoja.js';
+import { SessoesWeb } from './application/sessoes/SessoesWeb.js';
+import { FirestoreSessoesWebRepository } from './infra/firebase/FirestoreSessoesWebRepository.js';
 import { RetornoDav } from './application/retornoDav/RetornoDav.js';
 import { FirestoreRetornoDavRepository } from './infra/firebase/FirestoreRetornoDavRepository.js';
 import { BrasilApiCnpj } from './infra/cnpj/BrasilApiCnpj.js';
@@ -184,6 +186,9 @@ const app = createApp({
   // Cola 65, item 3.5: historico do produto, lido do Log das acoes da equipe (AcoesEquipe).
   // Cola 65, item 4.11: "Trocar o computador do integrador" pelo Admin da plataforma.
   integradorDaLoja: new IntegradorDaLoja({ repositorio: new FirestoreIntegradorDaLojaRepository({ firestore }) }),
+  // Item 5.10: Acessos conectados (sessao por navegador, X-Sessao e tela no Admin).
+  sessoesWeb: new SessoesWeb({ repositorio: new FirestoreSessoesWebRepository({ firestore }) }),
+  sessoesWebPublicadoEm: env.SESSOES_WEB_PUBLICADO_EM,
   // Itens 5.13 e 4.21: Retorno DAV nos Logs e Reenviar ao Linear.
   retornoDav: new RetornoDav({ repositorio: new FirestoreRetornoDavRepository({ firestore }) }),
   historicoDoProduto: new HistoricoDoProduto({ repositorio: new FirestoreHistoricoDoProdutoRepository({ firestore, auth: firebaseAuth }) }),

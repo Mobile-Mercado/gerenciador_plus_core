@@ -32,6 +32,8 @@ import { createPermissionGuard } from './http/middlewares/requirePermission.js';
 import { createPlatformAdminGuard } from './http/middlewares/requirePlatformAdmin.js';
 import { createContaDeLojaOuAdminGuard } from './http/middlewares/requireContaDeLojaOuAdmin.js';
 import { requestLogger } from './http/middlewares/requestLogger.js';
+import { createSessaoWebGuard } from './http/middlewares/sessaoWeb.js';
+import { createSessoesWebRoutes } from './http/routes/sessoesWebRoutes.js';
 import { createRetornoDavRoutes } from './http/routes/retornoDavRoutes.js';
 
 export function createApp({
@@ -80,6 +82,8 @@ export function createApp({
   historicoDoProduto = null,
   produtosForaDoApp = null,
   integradorDaLoja = null,
+  sessoesWeb = null,
+  sessoesWebPublicadoEm = null,
   retornoDav = null,
 }) {
   const app = express();
@@ -91,6 +95,10 @@ export function createApp({
   const requireContaDeLojaOuAdmin = createContaDeLojaOuAdminGuard({ accountForRequest, isPlatformAdminForRequest });
   // Admin da plataforma agindo na loja escolhida (cabecalho X-Loja-Alvo), conferido em toda chamada.
   const lojaAlvoDoAdmin = createLojaAlvoDoAdmin({ isPlatformAdminForRequest, firestore });
+  // Item 5.10 "Acessos conectados": X-Sessao conferido nas rotas da conta de loja (sessaoWeb.js).
+  const sessaoWeb = sessoesWeb
+    ? createSessaoWebGuard({ accountForRequest, sessoesWeb, publicadoEm: sessoesWebPublicadoEm })
+    : (_request, _response, next) => next();
   // Ficha de implantacao no Admin: mesma barreira e mesmo registro de /api/admin.
   const implantationAdminMiddleware = (request, response, next) => {
     requirePlatformAdmin(request, response, (error) => {
@@ -139,20 +147,32 @@ export function createApp({
       createAppUsuarioRoutes({ maisVendidosDaLoja }),
     );
   }
+  // Item 5.10 "Acessos conectados": registro, sinal de 30 s e nome do navegador. Sem a barreira do
+  // X-Sessao: o registro e o que da o X-Sessao, e o sinal confere a sessao ele mesmo.
+  if (sessoesWeb) {
+    app.use(
+      '/api/sessoes-web',
+      createFirebaseAuthMiddleware({ required: true }),
+      createSessoesWebRoutes({ sessoesWeb, accountForRequest }),
+    );
+  }
   app.use(
     '/api/session',
     createFirebaseAuthMiddleware({ required: true }),
+    sessaoWeb,
     createSessionRoutes({ getManagerSession }),
   );
   app.use(
     '/api/data',
     createFirebaseAuthMiddleware({ required: true }),
+    sessaoWeb,
     lojaAlvoDoAdmin,
     createDataRoutes({ manageManagerData, registrarAcaoDoAdmin }),
   );
   app.use(
     '/api/ai',
     createFirebaseAuthMiddleware({ required: env.REQUIRE_FIREBASE_AUTH }),
+    sessaoWeb,
     requireContaDeLojaOuAdmin,
     createAiRoutes({
       generateAiResponseUseCase, getDailyHomeOverviewUseCase, requirePermission, accountForRequest,
@@ -161,6 +181,7 @@ export function createApp({
   app.use(
     '/api/implantacao',
     createFirebaseAuthMiddleware({ required: env.REQUIRE_FIREBASE_AUTH }),
+    sessaoWeb,
     lojaAlvoDoAdmin,
     createImplantacaoRoutes({
       importProductsFromCsvUseCase,
@@ -175,16 +196,19 @@ export function createApp({
   app.use(
     '/api/notifications',
     createFirebaseAuthMiddleware({ required: true }),
+    sessaoWeb,
     createNotificationRoutes({ manageWebNotifications, requirePermission }),
   );
   app.use(
     '/api/stats',
     createFirebaseAuthMiddleware({ required: true }),
+    sessaoWeb,
     createStatsRoutes({ recalculateCategoryCountsUseCase, requirePermission }),
   );
   app.use(
     '/api/coupons',
     createFirebaseAuthMiddleware({ required: true }),
+    sessaoWeb,
     createCouponRoutes({ manageCoupons, requirePermission, accountForRequest }),
   );
   // Historico do produto da propria loja, lido do Log das acoes da equipe (cola 65, item 3.5).
@@ -192,6 +216,7 @@ export function createApp({
     app.use(
       '/api/produtos',
       createFirebaseAuthMiddleware({ required: true }),
+      sessaoWeb,
       lojaAlvoDoAdmin,
       createProdutosRoutes({ historicoDoProduto, produtosForaDoApp, accountForRequest }),
     );
@@ -201,6 +226,7 @@ export function createApp({
     app.use(
       '/api/retorno-dav',
       createFirebaseAuthMiddleware({ required: true }),
+      sessaoWeb,
       lojaAlvoDoAdmin,
       createRetornoDavRoutes({ retornoDav, requirePermission, accountForRequest, registrarAcaoDoAdmin }),
     );
@@ -209,42 +235,49 @@ export function createApp({
   app.use(
     '/api/catalogo',
     createFirebaseAuthMiddleware({ required: true }),
+    sessaoWeb,
     createCatalogoRoutes({ catalogoDaLoja, requirePermission, accountForRequest }),
   );
   // Banners da loja: imagem recortada pelo painel, documento gravado com image.size em decimal.
   app.use(
     '/api/loja/banners',
     createFirebaseAuthMiddleware({ required: true }),
+    sessaoWeb,
     createBannersDaLojaRoutes({ bannersDaLoja, bannersPorTipo: bannersNoAdmin, requirePermission, accountForRequest }),
   );
   // Entregadores com o celular, que so o Core le e grava (entregadoresPrivado).
   app.use(
     '/api/loja/entregadores',
     createFirebaseAuthMiddleware({ required: true }),
+    sessaoWeb,
     createEntregadoresDaLojaRoutes({ entregadoresDaLoja, requirePermission, accountForRequest }),
   );
   // Entrega da propria loja: a mesma tela e o mesmo contrato do Admin, sem mudar o contrato.
   app.use(
     '/api/loja/entrega',
     createFirebaseAuthMiddleware({ required: true }),
+    sessaoWeb,
     createEntregaDaLojaRoutes({ entregaDaLoja, requirePermission, accountForRequest }),
   );
   // Formas de pagamento da propria loja: credito e debito separados, onde cada uma e cobrada.
   app.use(
     '/api/loja/formas-de-pagamento',
     createFirebaseAuthMiddleware({ required: true }),
+    sessaoWeb,
     createFormasDePagamentoRoutes({ formasDePagamento, requirePermission, accountForRequest }),
   );
   // Chave da Safra pela propria loja, so com a credencial da Mobile (cola RP-62, contrato K3).
   app.use(
     '/api/loja/safrapay',
     createFirebaseAuthMiddleware({ required: true }),
+    sessaoWeb,
     createSafrapayDaLojaRoutes({ formasDePagamento, requirePermission, accountForRequest }),
   );
   // Funcoes do app do cliente pela propria loja: so "Meus cupons fiscais" (cola RP-58).
   app.use(
     '/api/loja/app-do-cliente',
     createFirebaseAuthMiddleware({ required: true }),
+    sessaoWeb,
     createAppDoClienteDaLojaRoutes({ appDoClienteDaLoja, aparenciaDaHome, conjuntosDeIcones, requirePermission, accountForRequest }),
   );
   // Fundo de Ofertas pela propria loja, so quando o Admin libera (cola B56-04, item 3.4).
@@ -252,6 +285,7 @@ export function createApp({
     app.use(
       '/api/loja/aparencia',
       createFirebaseAuthMiddleware({ required: true }),
+      sessaoWeb,
       createAparenciaDaLojaRoutes({ aparenciaDaLoja, requirePermission, accountForRequest }),
     );
   }
@@ -259,6 +293,7 @@ export function createApp({
   app.use(
     '/api/loja/imagens',
     createFirebaseAuthMiddleware({ required: true }),
+    sessaoWeb,
     createImagensDaLojaRoutes({ imagensDaLoja, requirePermission, accountForRequest }),
   );
   // Admin da plataforma: login, barreira de admin em toda chamada e registro de quem agiu.
@@ -287,6 +322,7 @@ export function createApp({
       bannersNoAdmin,
       alertasDoAdmin,
       integradorDaLoja,
+      sessoesWeb,
     }),
   );
 

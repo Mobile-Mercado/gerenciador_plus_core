@@ -84,6 +84,7 @@ const {
 const { avisarPedidoDeCupomUmaVez } = require('./avisoDeCupom');
 const { avisarComputadorRecusadoUmaVez } = require('./integradorRecusado');
 const { ORIGEM: ORIGEM_DA_PROMOCAO_VENCIDA, removerPromocoesVencidasDaLoja } = require('./promocaoVencida');
+const { ORIGEM: ORIGEM_DAS_SESSOES_WEB, limparSessoesSemUsoDaLoja } = require('./sessoesWeb');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -1530,6 +1531,41 @@ exports.removerPromocaoVencidaNightly = onSchedule(
   },
 );
 
+// Item 5.10 "Acessos conectados": todo dia as 04:20 de Sao Paulo, em todas as lojas, apaga a sessao
+// do Gerenciador Web com ultimoUso de mais de 7 dias (sessoesWeb.js). O navegador dela volta ao login.
+exports.limparSessoesWebSemUso = onSchedule(
+  {
+    schedule: '20 4 * * *',
+    timeZone: 'America/Sao_Paulo',
+    region: 'us-central1',
+    memory: '256MiB',
+    timeoutSeconds: 540,
+    retryCount: 0,
+  },
+  async () => {
+    try {
+      const agora = new Date();
+      const lojas = await db.collection('estabelecimentos').select().get();
+      let apagadas = 0;
+      let falhas = 0;
+      for (const loja of lojas.docs) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          apagadas += (await limparSessoesSemUsoDaLoja({ db, lojaId: loja.id, agora })).apagadas;
+        } catch (error) {
+          falhas += 1;
+          console.error(`[${ORIGEM_DAS_SESSOES_WEB}] Falha na loja`, { establishmentId: loja.id, error: error.message });
+        }
+      }
+      const result = { lojas: lojas.size, apagadas, falhas };
+      console.log(`[${ORIGEM_DAS_SESSOES_WEB}] Passada concluida`, result);
+      return result;
+    } catch (error) {
+      console.error(`[${ORIGEM_DAS_SESSOES_WEB}] Falha na passada`, { error: error.message });
+      return null;
+    }
+  },
+);
 // Visitas por mes (Stats/visitasPorMes) para o grafico "Visitas e pedidos" da tela Financas nos
 // periodos Ano e Desde o inicio. Semanal, segunda as 02:45 (decisao de 16/10/2026): recalcula do zero o mes
 // atual e o anterior (ate 62 dias do DailyStats por loja, pelo id) e grava por cima desses dois meses.

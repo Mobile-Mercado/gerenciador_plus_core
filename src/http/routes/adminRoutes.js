@@ -103,6 +103,11 @@ const atorDe = (request) => ({ uid: request.auth?.uid || null, email: request.au
 const atorDoAlerta = (request) => ({ ...atorDe(request), nome: request.auth?.name || null });
 
 const lojaDoIntegradorSchema = z.object({ establishmentId: z.string().trim().min(1).max(120).regex(/^[^/]+$/) });
+// Item 5.10 "Acessos conectados".
+const acessoParamsSchema = z.object({ establishmentId: lojaDoIntegradorSchema.shape.establishmentId, sessaoId: z.string().max(64) });
+const ipDoAcessoSchema = z.object({ ip: z.string().trim().min(1).max(64) });
+const nomeDoIpSchema = z.object({ ip: z.string().trim().min(1).max(64), nome: z.string().max(200).nullable() });
+const nomeDoAcessoSchema = z.object({ nome: z.string().max(200).nullable() });
 
 const sugestoesClientesSchema = z.object({
   lojaId: z.string().min(1).max(120).optional(),
@@ -114,7 +119,7 @@ export function createAdminRoutes({
   manageCatalogoPadrao, sugestoesDosClientes, pedidosDeLoja, lojaNoAdmin, franquias, administradores, dadosDoAdmin,
   manageImplantationPipelines, jornadaDeEntrada = null, entregaDaLoja = null, appDoClienteDaLoja = null,
   formasDePagamento = null, instalacoesDosApps = null, conjuntosDeIcones = null, aparenciaDaLoja = null,
-  aparenciaDaHome = null, bannersNoAdmin = null, alertasDoAdmin = null, integradorDaLoja = null,
+  aparenciaDaHome = null, bannersNoAdmin = null, alertasDoAdmin = null, integradorDaLoja = null, sessoesWeb = null,
 }) {
   const router = Router();
 
@@ -133,6 +138,49 @@ export function createAdminRoutes({
       response.locals.lojasAlvo = [establishmentId];
       response.locals.auditoria = { acao: 'integrador_trocar_computador' };
       response.json({ data: await integradorDaLoja.trocarComputador({ establishmentId, adminUid: request.auth?.uid }) });
+    }));
+  }
+
+  // ===== Acessos conectados (item 5.10; plano construcao-acessos-conectados.md) =====
+  // Estabelecimentos > loja > "Acessos conectados": lista por IP, "Sair" por navegador, "Sair de todos
+  // deste IP", "Sair de todos", nome do navegador e do IP. Toda acao que grava entra no adminAuditLogs
+  // e no AdminAuditLogs da loja (adminAudit le response.locals.lojasAlvo e auditoria), com quem e quando.
+  if (sessoesWeb) {
+    const registrar = (response, establishmentId, auditoria) => {
+      response.locals.lojasAlvo = [establishmentId];
+      response.locals.auditoria = auditoria;
+    };
+    router.get('/lojas/:establishmentId/acessos', asyncHandler(async (request, response) => {
+      const { establishmentId } = lojaDoIntegradorSchema.parse(request.params);
+      response.json({ data: await sessoesWeb.listar({ lojaId: establishmentId }) });
+    }));
+    router.post('/lojas/:establishmentId/acessos/sair-de-todos', asyncHandler(async (request, response) => {
+      const { establishmentId } = lojaDoIntegradorSchema.parse(request.params);
+      registrar(response, establishmentId, { acao: 'acessos_sair_de_todos' });
+      response.json({ data: await sessoesWeb.encerrarTodas({ lojaId: establishmentId, adminUid: request.auth?.uid || null }) });
+    }));
+    router.post('/lojas/:establishmentId/acessos/sair-do-ip', asyncHandler(async (request, response) => {
+      const { establishmentId } = lojaDoIntegradorSchema.parse(request.params);
+      const { ip } = ipDoAcessoSchema.parse(request.body ?? {});
+      registrar(response, establishmentId, { acao: 'acessos_sair_do_ip', ip });
+      response.json({ data: await sessoesWeb.encerrarDoIp({ lojaId: establishmentId, ip, adminUid: request.auth?.uid || null }) });
+    }));
+    router.put('/lojas/:establishmentId/acessos/ips', asyncHandler(async (request, response) => {
+      const { establishmentId } = lojaDoIntegradorSchema.parse(request.params);
+      const { ip, nome } = nomeDoIpSchema.parse(request.body ?? {});
+      registrar(response, establishmentId, { acao: 'acessos_nomear_ip', ip, nome });
+      response.json({ data: await sessoesWeb.nomearIp({ lojaId: establishmentId, ip, nome, adminUid: request.auth?.uid || null }) });
+    }));
+    router.post('/lojas/:establishmentId/acessos/:sessaoId/sair', asyncHandler(async (request, response) => {
+      const { establishmentId, sessaoId } = acessoParamsSchema.parse(request.params);
+      registrar(response, establishmentId, { acao: 'acessos_sair', sessaoId });
+      response.json({ data: await sessoesWeb.encerrar({ lojaId: establishmentId, sessaoId, adminUid: request.auth?.uid || null }) });
+    }));
+    router.patch('/lojas/:establishmentId/acessos/:sessaoId', asyncHandler(async (request, response) => {
+      const { establishmentId, sessaoId } = acessoParamsSchema.parse(request.params);
+      const { nome } = nomeDoAcessoSchema.parse(request.body ?? {});
+      registrar(response, establishmentId, { acao: 'acessos_renomear', sessaoId, nome });
+      response.json({ data: await sessoesWeb.renomear({ lojaId: establishmentId, sessaoId, nome }) });
     }));
   }
 

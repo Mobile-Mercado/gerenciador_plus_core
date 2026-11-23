@@ -161,7 +161,7 @@ test('3.5: origem normalizada (manual do web e web; app e app; as outras seguem)
 
 test('3.5: app.js monta /api/produtos com login e loja alvo do admin', () => {
   const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
-  assert.match(app, /'\/api\/produtos',\s+createFirebaseAuthMiddleware\(\{ required: true \}\),\s+lojaAlvoDoAdmin,\s+createProdutosRoutes/);
+  assert.match(app, /'\/api\/produtos',\s+createFirebaseAuthMiddleware\(\{ required: true \}\),\s+sessaoWeb,\s+lojaAlvoDoAdmin,\s+createProdutosRoutes/);
 });
 
 test('3.5 (decisao do Thay de 20/11): linha do ERP sai com quem "Linear", origem integrador e o motivo', async () => {
