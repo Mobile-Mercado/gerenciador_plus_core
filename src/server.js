@@ -55,6 +55,8 @@ import { ProdutosForaDoApp } from './application/produtos/ProdutosForaDoApp.js';
 import { FirestoreProdutosForaDoAppRepository } from './infra/firebase/FirestoreProdutosForaDoAppRepository.js';
 import { FirestoreIntegradorDaLojaRepository } from './infra/firebase/FirestoreIntegradorDaLojaRepository.js';
 import { IntegradorDaLoja } from './application/admin/IntegradorDaLoja.js';
+import { RetornoDav } from './application/retornoDav/RetornoDav.js';
+import { FirestoreRetornoDavRepository } from './infra/firebase/FirestoreRetornoDavRepository.js';
 import { BrasilApiCnpj } from './infra/cnpj/BrasilApiCnpj.js';
 import { FieldValue } from 'firebase-admin/firestore';
 import { InstalacoesDosApps } from './application/admin/InstalacoesDosApps.js';
@@ -182,6 +184,8 @@ const app = createApp({
   // Cola 65, item 3.5: historico do produto, lido do Log das acoes da equipe (AcoesEquipe).
   // Cola 65, item 4.11: "Trocar o computador do integrador" pelo Admin da plataforma.
   integradorDaLoja: new IntegradorDaLoja({ repositorio: new FirestoreIntegradorDaLojaRepository({ firestore }) }),
+  // Itens 5.13 e 4.21: Retorno DAV nos Logs e Reenviar ao Linear.
+  retornoDav: new RetornoDav({ repositorio: new FirestoreRetornoDavRepository({ firestore }) }),
   historicoDoProduto: new HistoricoDoProduto({ repositorio: new FirestoreHistoricoDoProdutoRepository({ firestore, auth: firebaseAuth }) }),
   // Cola 65, item 5.1: painel "Produtos fora do app" da tela Produtos do Gerenciador Web.
   produtosForaDoApp: new ProdutosForaDoApp({ repositorio: new FirestoreProdutosForaDoAppRepository({ firestore }) }),

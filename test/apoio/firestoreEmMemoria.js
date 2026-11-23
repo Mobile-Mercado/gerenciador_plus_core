@@ -288,8 +288,15 @@ export class FirestoreEmMemoria {
     return Promise.all(refs.map((ref) => ref.get()));
   }
 
-  // Transacao: le na hora e grava tudo junto no fim (falha no meio nao grava nada).
+  // Transacao: le na hora e grava tudo junto no fim (falha no meio nao grava nada). Uma de cada vez,
+  // como o Firestore garante quando duas disputam o mesmo documento (a segunda le o que a primeira gravou).
   async runTransaction(trabalho) {
+    const vez = (this.filaDeTransacoes || Promise.resolve()).then(() => this.executarTransacao(trabalho));
+    this.filaDeTransacoes = vez.catch(() => {});
+    return vez;
+  }
+
+  async executarTransacao(trabalho) {
     const lote = new Batch(this);
     const transacao = {
       get: (ref) => ref.get(),

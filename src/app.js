@@ -32,6 +32,7 @@ import { createPermissionGuard } from './http/middlewares/requirePermission.js';
 import { createPlatformAdminGuard } from './http/middlewares/requirePlatformAdmin.js';
 import { createContaDeLojaOuAdminGuard } from './http/middlewares/requireContaDeLojaOuAdmin.js';
 import { requestLogger } from './http/middlewares/requestLogger.js';
+import { createRetornoDavRoutes } from './http/routes/retornoDavRoutes.js';
 
 export function createApp({
   generateAiResponseUseCase,
@@ -79,6 +80,7 @@ export function createApp({
   historicoDoProduto = null,
   produtosForaDoApp = null,
   integradorDaLoja = null,
+  retornoDav = null,
 }) {
   const app = express();
   // Barreira de escrita por chave de permissao, com cache por token.
@@ -192,6 +194,15 @@ export function createApp({
       createFirebaseAuthMiddleware({ required: true }),
       lojaAlvoDoAdmin,
       createProdutosRoutes({ historicoDoProduto, produtosForaDoApp, accountForRequest }),
+    );
+  }
+  // Itens 5.13 e 4.21: aba "Retorno DAV" dos Logs e "Reenviar ao Linear" (loja, ou Admin na loja alvo).
+  if (retornoDav) {
+    app.use(
+      '/api/retorno-dav',
+      createFirebaseAuthMiddleware({ required: true }),
+      lojaAlvoDoAdmin,
+      createRetornoDavRoutes({ retornoDav, requirePermission, accountForRequest, registrarAcaoDoAdmin }),
     );
   }
   // Catalogo da loja a partir da lista padrao (Ativar, travadas, nome de exibicao).

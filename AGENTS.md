@@ -55,6 +55,7 @@ npm run check
 - `POST /api/implantacao/importar-produtos`: recebe CSV em texto, importa produtos/categorias/subcategorias via Firebase Admin e responde em NDJSON com progresso real para a tela Implantacao.
 - `/api/implantacao/admin/pipelines`: lista pipelines e aprova verificacoes manuais. Exige token Firebase e conta admin da plataforma (`usersAdmin/{uid}.isAdmin`), com registro em `adminAuditLogs`.
 - `/api/coupons`: cria, lista e desativa cupons do próprio estabelecimento do lojista autenticado (mesmo padrão de acesso de `/api/notifications`, sem allowlist).
+- `/api/retorno-dav`: aba "Retorno DAV" dos Logs (item 5.13) e "Reenviar ao Linear" (item 4.21, `POST /:vendaId/reenviar`). Le `estabelecimentos/{id}/ReturnSales` so com os campos da situacao; o reenvio marca `aguardaGravacao` e `reenvio` em transacao (uma vez so, so em "Nao enviado" de ate 30 dias) e grava em `AcoesEquipe`. O BFF nao le nem grava ReturnSales. `scripts/retornoDavHistorico.mjs` preenche `entregueEm` dos pedidos de antes da 4.20 (simula sem `--gravar`).
 - `GET /api/notifications/web/status/{establishmentId}`: informa se a loja possui navegadores ativos para Web Push.
 - `POST /api/notifications/web/test`: envia uma notificacao de teste apenas para a loja vinculada ao usuario autenticado.
 
