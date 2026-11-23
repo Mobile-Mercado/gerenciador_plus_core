@@ -216,6 +216,77 @@ test('4.21: pedido nao enviado pronto ha mais de 30 dias aparece sem o botao e n
   }, dados);
 });
 
+test('5.14: "Ja lancado no Linear" so ao lado do reenvio, vira "Lancado a mao" com quem e quando, e nunca reenvia', async () => {
+  await comServidor(async ({ chamar, banco }) => {
+    const lista = (await chamar('/')).corpo.data;
+    lista.forEach((l) => assert.equal(l.podeMarcarLancado, l.podeReenviar, l.pedido));
+    const r = await chamar('/v432/lancado', { metodo: 'POST' });
+    assert.equal(r.status, 200);
+    assert.deepEqual(
+      [r.corpo.data.rotulo, r.corpo.data.quem, r.corpo.data.em, r.corpo.data.podeReenviar, r.corpo.data.podeMarcarLancado],
+      ['Lançado à mão', 'Fernanda', AGORA.toISOString(), false, false],
+    );
+    const doc = banco.dados(`${RS}/v432`);
+    assert.deepEqual(doc.lancadoAMao, { em: AGORA, uid: 'uid-dono', quem: 'Fernanda', porAdmin: false });
+    // gravadoEm junto: a nuvem do integrador (foiGravada) nunca mais entrega o pedido.
+    assert.equal(doc.gravadoEm.toISOString(), AGORA.toISOString());
+    assert.equal(doc.aguardaGravacao, false);
+    const log = acoes(banco);
+    assert.equal(log.length, 1);
+    assert.deepEqual([log[0].acao, log[0].quem, log[0].alvo.rotulo], ['lancado_no_linear', 'uid-dono@mobile.test', '#000432']);
+    // A lista mostra "Lancado a mao", sem os dois botoes.
+    const linha = (await chamar('/')).corpo.data.find((l) => l.pedido === '000432');
+    assert.deepEqual([linha.rotulo, linha.quem, linha.podeReenviar, linha.podeMarcarLancado], ['Lançado à mão', 'Fernanda', false, false]);
+    // Uma vez so; e o reenvio fica recusado para sempre.
+    const deNovo = await chamar('/v432/lancado', { metodo: 'POST' });
+    assert.deepEqual([deNovo.status, deNovo.corpo.error.code], [409, 'lancado_ja_marcado']);
+    const reenvio = await chamar('/v432/reenviar', { metodo: 'POST' });
+    assert.deepEqual([reenvio.status, reenvio.corpo.error.code], [409, 'reenvio_nao_permitido']);
+    assert.equal(banco.dados(`${RS}/v432`).reenvio, undefined);
+    assert.equal(acoes(banco).length, 1);
+  });
+});
+
+test('5.14: pedido da 4.20 parado marcado como lancado sai da busca do integrador (aguardaGravacao false e gravadoEm)', async () => {
+  await comServidor(async ({ chamar, banco }) => {
+    assert.equal((await chamar('/v440/lancado', { metodo: 'POST' })).status, 200);
+    const doc = banco.dados(`${RS}/v440`);
+    assert.equal(doc.aguardaGravacao, false);
+    assert.ok(doc.gravadoEm);
+    assert.equal(doc.buscadoPor, undefined);
+  });
+});
+
+test('5.14: gravado, entregue, aguardando e reenvio pedido nao marcam; dois cliques marcam uma vez', async () => {
+  await comServidor(async ({ chamar, banco }) => {
+    assert.equal((await chamar('/v440/reenviar', { metodo: 'POST' })).status, 200);
+    for (const id of ['v441', 'v439', 'v438', 'v437', 'v442', 'v434', 'v440']) {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await chamar(`/${id}/lancado`, { metodo: 'POST' });
+      assert.deepEqual([r.status, r.corpo.error.code], [409, 'lancado_nao_permitido'], id);
+    }
+    assert.equal(acoes(banco).filter((a) => a.acao === 'lancado_no_linear').length, 0);
+  });
+  const { banco, retornoDav } = montar();
+  const ator = { uid: 'uid-dono', quem: 'Fernanda' };
+  const resultados = await Promise.allSettled([
+    retornoDav.marcarLancado({ lojaId: 'loja-1', vendaId: 'v432', ator }),
+    retornoDav.marcarLancado({ lojaId: 'loja-1', vendaId: 'v432', ator }),
+  ]);
+  assert.equal(resultados.filter((r) => r.status === 'fulfilled').length, 1);
+  assert.equal(resultados.find((r) => r.status === 'rejected').reason.code, 'lancado_ja_marcado');
+  assert.equal(acoes(banco).length, 1);
+});
+
+test('5.14: a Mobile tambem marca, com o registro do Admin', async () => {
+  await comServidor(async ({ chamar, registrosDoAdmin }) => {
+    const r = await chamar('/v432/lancado', { metodo: 'POST', uid: 'uid-admin', lojaAlvo: 'loja-1' });
+    assert.equal(r.status, 200);
+    assert.equal(r.corpo.data.quem, 'Móbile');
+    assert.deepEqual(registrosDoAdmin[0].detalhes, { acao: 'lancado_no_linear', pedido: '000432' });
+  });
+});
+
 test('regra antiga do numero: pronto depois de um pronto maior (com 10 min de folga) nunca saiu', () => {
   const vendas = [
     { id: 'a', numero: 434, prontoEm: h('2026-11-16T18:05:00Z') },

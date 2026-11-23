@@ -42,6 +42,8 @@ export class RetornoDav {
       em: em ? em.toISOString() : null,
       quem,
       podeReenviar: podeReenviar(situacao) && recente,
+      // 5.14: "Ja lancado no Linear" fica ao lado de "Reenviar ao Linear", na mesma condicao.
+      podeMarcarLancado: podeReenviar(situacao) && recente,
     };
   }
 
@@ -86,6 +88,39 @@ export class RetornoDav {
       em: agora.toISOString(),
       quem: ator.quem || null,
       podeReenviar: false,
+      podeMarcarLancado: false,
+    };
+  }
+
+  // 5.14: "Ja lancado no Linear", so em "Nao enviado" com o botao, uma vez so por pedido.
+  async marcarLancado({ lojaId, vendaId, ator }) {
+    if (typeof vendaId !== 'string' || !vendaId.trim() || vendaId.includes('/')) {
+      throw new AppError('Pedido inválido.', { statusCode: 400, code: 'pedido_invalido' });
+    }
+    const agora = this.clock();
+    const vendas = vendasComNumero(await this.repositorio.listarVendas({ lojaId }));
+    const venda = vendas.find((item) => item.id === vendaId);
+    if (!venda) throw new AppError('Pedido não encontrado.', { statusCode: 404, code: 'pedido_nao_encontrado' });
+    const pulados = puladosPelaRegraDoNumero(vendas);
+    const antes = this.linha(venda, { pulados, agora });
+    const naoPode = (situacao) => (situacao === SITUACOES.LANCADO
+      ? new AppError('Este pedido já foi marcado como lançado no Linear.', { statusCode: 409, code: 'lancado_ja_marcado' })
+      : new AppError('Só pedido não enviado pode ser marcado como lançado.', { statusCode: 409, code: 'lancado_nao_permitido' }));
+    if (!antes.podeMarcarLancado) throw naoPode(antes.situacao);
+    const conferir = (dados) => {
+      const naTransacao = this.linha({ ...venda, dados }, { pulados, agora });
+      return naTransacao.podeMarcarLancado ? null : naoPode(naTransacao.situacao);
+    };
+    const resultado = await this.repositorio.marcarLancado({ lojaId, vendaId, ator, rotulo: antes.pedido ? `#${antes.pedido}` : vendaId, conferir });
+    if (!resultado.existe) throw new AppError('Pedido não encontrado.', { statusCode: 404, code: 'pedido_nao_encontrado' });
+    return {
+      ...antes,
+      situacao: SITUACOES.LANCADO,
+      rotulo: ROTULOS.lancado,
+      em: agora.toISOString(),
+      quem: ator.quem || null,
+      podeReenviar: false,
+      podeMarcarLancado: false,
     };
   }
 }

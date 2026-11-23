@@ -8,6 +8,9 @@
 // - entregueEm: hora da entrega dos pedidos de antes da 4.20, preenchida pelo script
 //   scripts/retornoDavHistorico.mjs a partir do registro da funcao -> "Entregue".
 // - aguardaGravacao: true para os pedidos que nasceram com a 4.20 no ar e ainda nao foram gravados.
+// - lancadoAMao { em, uid, quem }: item 5.14, "Ja lancado no Linear" -> "Lancado a mao". A marcacao
+//   tambem preenche gravadoEm (com aguardaGravacao false): a nuvem do integrador pula todo pedido com
+//   gravadoEm (foiGravada, nos dois caminhos), entao ele nunca mais e entregue ao caixa.
 //
 // Pedido de antes da 4.20 sem aguardaGravacao: o integrador antigo so buscava numero maior que o
 // ultimo que ja tinha. Um pedido que ficou pronto quando ja havia, ha mais de 10 minutos, um pronto de
@@ -20,6 +23,7 @@ export const SITUACOES = Object.freeze({
   ENTREGUE: 'entregue',
   NAO_ENVIADO: 'nao_enviado',
   AGUARDANDO: 'aguardando',
+  LANCADO: 'lancado',
 });
 
 export const ROTULOS = Object.freeze({
@@ -28,6 +32,7 @@ export const ROTULOS = Object.freeze({
   entregue: 'Entregue',
   nao_enviado: 'Não enviado',
   aguardando: 'Aguardando o integrador',
+  lancado: 'Lançado à mão',
 });
 
 // Um pedido 4.20 que o integrador ainda nao gravou e normal por alguns minutos (o caixa busca a cada
@@ -74,6 +79,10 @@ export function puladosPelaRegraDoNumero(vendas) {
 // { situacao, em, quem } de uma venda. `pulados` vem de puladosPelaRegraDoNumero (todas as vendas da loja).
 export function situacaoDoRetorno(venda, { pulados = new Set(), agora = new Date() } = {}) {
   const dados = venda.dados || {};
+  // 5.14: antes de "Gravado na pasta", porque a marcacao tambem preenche gravadoEm.
+  if (dados.lancadoAMao) {
+    return { situacao: SITUACOES.LANCADO, em: emData(dados.lancadoAMao.em), quem: dados.lancadoAMao.quem || null };
+  }
   const gravado = emData(dados.gravadoEm);
   if (gravado) return { situacao: SITUACOES.GRAVADO, em: gravado, quem: null };
   const reenvio = dados.reenvio && emData(dados.reenvio.em);
