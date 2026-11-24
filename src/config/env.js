@@ -74,6 +74,9 @@ export const env = Object.freeze({
   CADASTRO_EXIGE_APP_CHECK: toBoolean(process.env.CADASTRO_EXIGE_APP_CHECK, false),
   // Rotas do app usuario (cola B57-03c, item 5): App Check preparado e desligado, como o cadastro.
   APP_USUARIO_EXIGE_APP_CHECK: toBoolean(process.env.APP_USUARIO_EXIGE_APP_CHECK, false),
+  // Item 5.10 (Acessos conectados): dia da publicacao (ex.: 2026-11-24T12:00:00-03:00). O navegador sem
+  // X-Sessao e aceito ate 7 dias depois; sem a data, sempre aceito (transicao aberta).
+  SESSOES_WEB_PUBLICADO_EM: process.env.SESSOES_WEB_PUBLICADO_EM || null,
   // "Atualizar agora" da tela Instalacoes do Admin: os mesmos parametros da rotina instalacoesAppNightly
   // (functions/.env.appmobileprod-19505), a conta de servico que le os relatorios e o nome do segredo
   // da chave da Apple no Secret Manager. A chave nunca fica aqui.
