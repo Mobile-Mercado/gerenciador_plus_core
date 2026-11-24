@@ -66,6 +66,14 @@ export class FirestoreManagerDataGateway {
 
     const normalized = operations.map((mutation) => this.normalizeMutation(mutation));
     for (const mutation of normalized) {
+      // Cola B57-13g, item 6: a acao nova do Log da equipe e gravada para todo usuario logado da
+      // loja, sem a chave settings.edit; so na loja dele e so documento novo (create, que nao
+      // sobrescreve registro). Merge, update e delete seguem pela politica.
+      if (ehCriacaoDeAcaoDaEquipe(mutation, actor)) {
+        this.policy.assertActor(actor);
+        mutation.somenteCriar = true;
+        continue;
+      }
       await this.policy.assertMutation({ actor, mutation });
     }
     // Depois da politica: o carimbo nao passa pela lista de campos do painel, so o
@@ -278,7 +286,9 @@ export class FirestoreManagerDataGateway {
 
   async applyMutation(mutation) {
     const reference = this.firestore.doc(mutation.target.path);
-    if (mutation.operation === 'set') {
+    if (mutation.somenteCriar) {
+      await reference.create(mutation.data);
+    } else if (mutation.operation === 'set') {
       await reference.set(mutation.data, mutation.options);
     } else if (mutation.operation === 'update') {
       await reference.update(mutation.data);
@@ -289,7 +299,8 @@ export class FirestoreManagerDataGateway {
 
   applyBatchMutation(batch, mutation) {
     const reference = this.firestore.doc(mutation.target.path);
-    if (mutation.operation === 'set') batch.set(reference, mutation.data, mutation.options);
+    if (mutation.somenteCriar) batch.create(reference, mutation.data);
+    else if (mutation.operation === 'set') batch.set(reference, mutation.data, mutation.options);
     else if (mutation.operation === 'update') batch.update(reference, mutation.data);
     else batch.delete(reference);
   }
@@ -424,6 +435,12 @@ function assertOperator(operator) {
   ]);
   if (!allowed.has(operator)) throw invalidTarget();
   return operator;
+}
+
+function ehCriacaoDeAcaoDaEquipe(mutation, actor) {
+  return mutation.operation === 'set'
+    && mutation.options?.merge !== true
+    && ehAcaoDaEquipe(mutation.target.path, actor?.establishmentId);
 }
 
 function invalidTarget() {
