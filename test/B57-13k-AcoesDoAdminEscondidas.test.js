@@ -28,6 +28,8 @@ function montar() {
     [`${ACOES}/a4`]: { em: em(4), quem: 'conta@loja.test', acao: 'pedido.aceitar', alvo: { tipo: 'pedido', id: 'p1' }, origem: 'manual' },
     [`${ACOES}/a5`]: { em: em(5), quem: '', acao: 'produto.promocaoVencida', alvo: produto, origem: 'promocaoVencida' },
     [`${ACOES}/a6`]: { em: em(6), quem: 'uid-admin', acao: 'produto.editar', alvo: produto, origem: 'implantacao' },
+    // B57-13p, item 35: a2 consta no registro que o Admin deixa na loja (origem exata do antigo).
+    'estabelecimentos/loja-1/AdminAuditLogs/r1': { action: 'admin_plataforma', details: { caminhos: [`${ACOES}/a2`] } },
     [HISTORICO]: {
       pagina: 1,
       registros: [
@@ -52,9 +54,10 @@ const ids = (resultado) => resultado.docs.map((documento) => documento.id);
 test('B57-13k item 35: a acao do Admin nao aparece nos Logs da loja; a do funcionario, a da conta da loja e a rotina continuam', async () => {
   const { gateway, acesso } = montar();
   const dono = await acesso.findAccountByClaims({ uid: 'uid-dono' });
-  assert.deepEqual(ids(await gateway.getDocuments({ actor: dono, target: consulta(10) })), ['a5', 'a4', 'a1']);
+  // B57-13p, item 35: a6 (antigo, de conta Admin, fora do registro do Admin e sem ser planilha) aparece.
+  assert.deepEqual(ids(await gateway.getDocuments({ actor: dono, target: consulta(10) })), ['a6', 'a5', 'a4', 'a1']);
   // A pagina de 2 vem cheia, pulando as do Admin (a paginacao do painel continua).
-  assert.deepEqual(ids(await gateway.getDocuments({ actor: dono, target: consulta(2) })), ['a5', 'a4']);
+  assert.deepEqual(ids(await gateway.getDocuments({ actor: dono, target: consulta(2) })), ['a6', 'a5']);
   // O Admin, agindo na loja, ve tudo.
   const admin = contaDoAdminNaLoja('uid-admin', 'loja-1');
   assert.deepEqual(ids(await gateway.getDocuments({ actor: admin, target: consulta(10) })), ['a6', 'a5', 'a4', 'a3', 'a2', 'a1']);
@@ -92,5 +95,5 @@ test('B57-13k item 35: o historico do produto da loja nao mostra a acao do Admin
   const dono = await acesso.findAccountByClaims({ uid: 'uid-dono' });
   const historico = new HistoricoDoProduto({ repositorio: new FirestoreHistoricoDoProdutoRepository({ firestore }) });
   const resposta = await historico.listar({ ator: dono, produtoId: 'arroz' });
-  assert.deepEqual(resposta.linhas.map((linha) => linha.id), ['a5', 'a1']);
+  assert.deepEqual(resposta.linhas.map((linha) => linha.id), ['a6', 'a5', 'a1']);
 });

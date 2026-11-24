@@ -127,6 +127,8 @@ test('3.5: sem o indice composto, a leitura cai para o filtro de igualdade e ord
             const real = colecao.doc(id).collection(sub);
             return {
               where: (...filtro1) => ({
+                // B57-13p, item 35: o historico le o registro do Admin na loja (AdminAuditLogs).
+                get: () => real.where(...filtro1).get(),
                 where: (...filtro2) => {
                 const consulta = real.where(...filtro1).where(...filtro2);
                 return {

@@ -7,8 +7,8 @@ import {
 } from './firestoreTransport.js';
 import { carimboDeStatus } from './ManagerDataAccessPolicy.js';
 import { autorDaAcao, ehAcaoDaEquipe, ehHistoricoDaEquipe } from '../../domain/logs/autorDaAcao.js';
-import { contasDoAdminParaALoja, ehDoAdmin } from '../../domain/logs/acaoDoAdmin.js';
-import { contasDoAdminDaPlataforma } from './contasDoAdminDaPlataforma.js';
+import { contasDoAdminParaALoja, ehAcaoDoAdmin, ehDoAdmin } from '../../domain/logs/acaoDoAdmin.js';
+import { caminhosDoAdminNaLoja, contasDoAdminDaPlataforma } from './contasDoAdminDaPlataforma.js';
 import { nomeDoComputadorNaLoja } from './nomeDoComputador.js';
 
 const MAX_BATCH_OPERATIONS = 450;
@@ -69,8 +69,11 @@ export class FirestoreManagerDataGateway {
   // Tira as linhas do Admin e completa a pagina com as seguintes (ate 5 leituras a mais), para a
   // paginacao do painel (pagina cheia = tem mais) continuar certa.
   async semAcoesDoAdmin(actor, target, queryReference, documents) {
-    const contas = await this.contasDoAdmin(actor);
-    const visivel = (documento) => !ehDoAdmin(documento.data(), contas);
+    const [contas, caminhosDoAdmin] = await Promise.all([
+      this.contasDoAdmin(actor),
+      caminhosDoAdminNaLoja(this.firestore, actor.establishmentId),
+    ]);
+    const visivel = (documento) => !ehAcaoDoAdmin(documento.data(), { caminho: documento.ref.path, caminhosDoAdmin, contas });
     const limite = limiteDaConsulta(target);
     const visiveis = documents.filter(visivel);
     let ultimo = documents[documents.length - 1];
