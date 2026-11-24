@@ -61,6 +61,8 @@ export class FirestoreEstablishmentAccessRepository extends EstablishmentAccessR
         ? sessionEstablishment(establishmentSnapshot.id, establishmentSnapshot.data())
         : null,
       hasEstablishment: temLoja,
+      // Cola B57-13, item 28: a conta principal da loja (a do userReference). Aqui e esta conta.
+      contaDaLoja: temLoja ? { uid, email: userData.email || null } : null,
     };
   }
 
@@ -115,6 +117,8 @@ export class FirestoreEstablishmentAccessRepository extends EstablishmentAccessR
         ? sessionEstablishment(establishmentSnapshot.id, establishmentSnapshot.data())
         : null,
       hasEstablishment: establishmentSnapshot.exists,
+      // Cola B57-13, item 28: a conta principal da loja, para o Log da equipe e Usuarios e permissoes.
+      contaDaLoja: await this.contaDaLojaDe(establishmentSnapshot),
       permissions: {
         isAdmin: groupData?.isAdmin === true,
         groupId: groupId || null,
@@ -123,6 +127,16 @@ export class FirestoreEstablishmentAccessRepository extends EstablishmentAccessR
         keys: Array.isArray(groupData?.permissions) ? groupData.permissions : [],
       },
     };
+  }
+
+  // Cola B57-13, item 28: a conta principal da loja e o Users para o qual userReference aponta
+  // (criada no cadastro da loja): { uid, email }. Loja sem userReference ou Users sem login: null.
+  async contaDaLojaDe(establishmentSnapshot) {
+    const referencia = establishmentSnapshot?.exists ? establishmentSnapshot.data()?.userReference : null;
+    if (!referencia?.path) return null;
+    const usuario = await this.firestore.doc(referencia.path).get();
+    const dados = usuario.exists ? usuario.data() || {} : {};
+    return dados.userAuthId ? { uid: dados.userAuthId, email: dados.email || null } : null;
   }
 
   async userCanAccess({ uid, establishmentId }) {

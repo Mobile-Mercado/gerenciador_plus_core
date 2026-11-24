@@ -43,6 +43,8 @@ export class GetManagerSession {
       establishmentId: account.establishmentId,
       hasEstablishment: account.hasEstablishment,
       permissions: account.permissions || { isAdmin: true, groupId: null, keys: [] },
+      // Cola B57-13, item 28: { uid, email } da conta principal da loja, ou null.
+      contaDaLoja: account.contaDaLoja || null,
       isPlatformAdmin,
     };
   }

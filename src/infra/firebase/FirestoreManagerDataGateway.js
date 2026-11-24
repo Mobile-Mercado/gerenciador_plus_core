@@ -6,6 +6,7 @@ import {
   serializeDocumentSnapshot,
 } from './firestoreTransport.js';
 import { carimboDeStatus } from './ManagerDataAccessPolicy.js';
+import { autorDaAcao, ehAcaoDaEquipe, sessaoValida } from '../../domain/logs/autorDaAcao.js';
 
 const MAX_BATCH_OPERATIONS = 450;
 const MAX_QUERY_LIMIT = 500;
@@ -52,7 +53,7 @@ export class FirestoreManagerDataGateway {
     return { count: Number(snapshot.data().count || 0) };
   }
 
-  async mutate({ actor, request }) {
+  async mutate({ actor, request, sessaoId = null }) {
     const operations = request.operation === 'batch'
       ? request.operations
       : [request];
@@ -74,6 +75,7 @@ export class FirestoreManagerDataGateway {
         mutation.data = carimboDeStatus(actor, mutation.data);
       }
     });
+    await this.carimbarAutor(actor, normalized, sessaoId);
 
     if (normalized.length === 1 && request.operation !== 'batch') {
       await this.applyMutation(normalized[0]);
@@ -83,6 +85,32 @@ export class FirestoreManagerDataGateway {
       await batch.commit();
     }
     return { written: normalized.length };
+  }
+
+  // Cola B57-13, item 28: a acao do Log da equipe gravada pelo painel leva o autor (conta da loja ou
+  // funcionario) e o nome do computador em "Acessos conectados", lido da sessao do X-Sessao. O autor
+  // do corpo e trocado pelo do Core.
+  async carimbarAutor(actor, normalized, sessaoId) {
+    const acoes = normalized.filter((mutation) => mutation.operation === 'set'
+      && ehAcaoDaEquipe(mutation.target.path, actor?.establishmentId));
+    if (!acoes.length) return;
+    const autor = autorDaAcao(actor, await this.nomeDoComputador(actor.establishmentId, sessaoId));
+    if (!autor) return;
+    acoes.forEach((mutation) => {
+      mutation.data = { ...mutation.data, autor };
+    });
+  }
+
+  async nomeDoComputador(establishmentId, sessaoId) {
+    const sessao = sessaoValida(sessaoId);
+    if (!sessao) return null;
+    try {
+      const snapshot = await this.firestore.doc(`estabelecimentos/${establishmentId}/SessoesWeb/${sessao}`).get();
+      return snapshot.exists ? snapshot.data()?.nome || null : null;
+    } catch {
+      // Sem o nome a acao e gravada do mesmo jeito ("Navegador sem nome").
+      return null;
+    }
   }
 
   async subscribe({ actor, target, onSnapshot, onError }) {

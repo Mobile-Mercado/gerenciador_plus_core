@@ -28,10 +28,12 @@ export class ManageManagerData {
     return this.gateway.countDocuments({ actor: await this.actor(actorUid, claims, lojaAlvo), target });
   }
 
-  async mutate({ actorUid, claims, request, lojaAlvo }) {
+  // `sessaoId`: o cabecalho X-Sessao do navegador (cola B57-13, item 28: o computador do Log da equipe).
+  async mutate({ actorUid, claims, request, lojaAlvo, sessaoId = null }) {
     const result = await this.gateway.mutate({
       actor: await this.actor(actorUid, claims, lojaAlvo),
       request,
+      sessaoId,
     });
     establishmentIdsTouchingAccess(request).forEach((id) => this.forgetEstablishment(id));
     return result;
