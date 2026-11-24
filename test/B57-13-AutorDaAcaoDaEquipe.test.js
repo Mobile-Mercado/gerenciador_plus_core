@@ -63,8 +63,8 @@ test('B57-13 item 28: autor da acao: conta da loja com o e-mail, funcionario com
     autorDaAcao({ uid: 'f-joao', contaDaLoja, userDocument: { name: 'João Silva', nome: 'João Silva', email: 'joao@loja.test' } }, '  '),
     { tipo: 'funcionario', nome: 'João Silva', email: 'joao@loja.test', computador: null },
   );
-  // Admin da plataforma agindo na loja (X-Loja-Alvo): sem autor, fica o `quem` gravado pelo painel.
-  assert.equal(autorDaAcao({ uid: 'adm', porAdminDaPlataforma: true }, 'Escritório'), null);
+  // Admin da plataforma agindo na loja (X-Loja-Alvo): autor do Admin, escondido da loja (B57-13k, item 35).
+  assert.deepEqual(autorDaAcao({ uid: 'adm', porAdminDaPlataforma: true }, 'Escritório'), { tipo: 'adminDaPlataforma', nome: null, email: null, computador: null });
   assert.equal(ehAcaoDaEquipe('estabelecimentos/loja-1/AcoesEquipe/a1', 'loja-1'), true);
   assert.equal(ehAcaoDaEquipe('estabelecimentos/loja-2/AcoesEquipe/a1', 'loja-1'), false);
   assert.equal(ehAcaoDaEquipe('estabelecimentos/loja-1/Products/a1', 'loja-1'), false);

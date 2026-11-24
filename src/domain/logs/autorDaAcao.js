@@ -7,7 +7,8 @@
 // - funcionario: o login criado em "Novo funcionario" (AdminUsers). O web mostra o nome.
 // - computador: o nome dado ao navegador em "Acessos conectados" (SessoesWeb/{X-Sessao}.nome), ou null
 //   (o web mostra "Navegador sem nome").
-// O admin da plataforma agindo na loja (X-Loja-Alvo) fica sem autor: o web mostra o `quem` gravado.
+// O admin da plataforma agindo na loja (X-Loja-Alvo) grava autor.tipo 'adminDaPlataforma' (cola B57-13k,
+// item 35): a linha fica escondida da loja na leitura (acaoDoAdmin.js).
 
 export const ACOES_DA_EQUIPE = 'AcoesEquipe';
 
@@ -32,7 +33,8 @@ export function ehHistoricoDaEquipe(path, establishmentId) {
 }
 
 export function autorDaAcao(actor, computador) {
-  if (!actor || actor.porAdminDaPlataforma) return null;
+  if (!actor) return null;
+  if (actor.porAdminDaPlataforma) return { tipo: 'adminDaPlataforma', nome: null, email: null, computador: null };
   const usuario = actor.userDocument || {};
   const ehContaDaLoja = Boolean(actor.contaDaLoja?.uid) && actor.contaDaLoja.uid === actor.uid;
   const nomeDoComputador = String(computador ?? '').trim();

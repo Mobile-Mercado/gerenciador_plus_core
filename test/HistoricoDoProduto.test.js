@@ -120,6 +120,8 @@ test('3.5: sem o indice composto, a leitura cai para o filtro de igualdade e ord
     collection: (nome) => {
       const colecao = banco.collection(nome);
       return {
+        // B57-13k, item 35: o historico le usersAdmin para esconder as linhas do Admin.
+        get: () => colecao.get(),
         doc: (id) => ({
           collection: (sub) => {
             const real = colecao.doc(id).collection(sub);

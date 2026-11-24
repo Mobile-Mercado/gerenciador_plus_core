@@ -7,6 +7,8 @@ import {
 } from './firestoreTransport.js';
 import { carimboDeStatus } from './ManagerDataAccessPolicy.js';
 import { autorDaAcao, ehAcaoDaEquipe, ehHistoricoDaEquipe, sessaoValida } from '../../domain/logs/autorDaAcao.js';
+import { contasDoAdminParaALoja, ehDoAdmin } from '../../domain/logs/acaoDoAdmin.js';
+import { contasDoAdminDaPlataforma } from './contasDoAdminDaPlataforma.js';
 
 const MAX_BATCH_OPERATIONS = 450;
 const MAX_QUERY_LIMIT = 500;
@@ -22,9 +24,17 @@ export class FirestoreManagerDataGateway {
     await this.policy.assertRead({ actor, target });
     const reference = this.documentReference(target);
     const snapshot = await reference.get();
+    // Cola B57-13k, item 35: os registros de lote do Admin nao aparecem para a loja.
+    const contas = this.escondeDoAdmin(actor) && ehHistoricoDaEquipe(reference.path, actor.establishmentId)
+      ? await this.contasDoAdmin(actor)
+      : null;
     return serializeDocumentSnapshot(
       snapshot,
-      (path, data) => this.policy.sanitizeDocument(path, data),
+      (path, data) => {
+        const limpo = this.policy.sanitizeDocument(path, data);
+        if (!contas || !Array.isArray(limpo?.registros)) return limpo;
+        return { ...limpo, registros: limpo.registros.filter((registro) => !ehDoAdmin(registro, contas)) };
+      },
     );
   }
 
@@ -37,9 +47,43 @@ export class FirestoreManagerDataGateway {
       const queryReference = await this.queryReference(actor, target);
       const snapshot = await queryReference.get();
       documents = snapshot.docs;
+      if (this.escondeDoAdmin(actor) && ehAcoesDaEquipe(target, actor.establishmentId)) {
+        documents = await this.semAcoesDoAdmin(actor, target, queryReference, documents);
+      }
     }
     const filtered = await this.policy.filterDocuments({ actor, target, documents });
     return this.serializeQuery(filtered);
+  }
+
+  // Cola B57-13k, item 35: "nada que o Admin faz fica visivel para o gerente ou para o dono da loja".
+  // So a leitura da loja; o admin da plataforma agindo na loja ve tudo. Nada e apagado no banco.
+  escondeDoAdmin(actor) {
+    return Boolean(actor?.establishmentId) && !actor.porAdminDaPlataforma;
+  }
+
+  async contasDoAdmin(actor) {
+    return contasDoAdminParaALoja(await contasDoAdminDaPlataforma(this.firestore), actor?.contaDaLoja);
+  }
+
+  // Tira as linhas do Admin e completa a pagina com as seguintes (ate 5 leituras a mais), para a
+  // paginacao do painel (pagina cheia = tem mais) continuar certa.
+  async semAcoesDoAdmin(actor, target, queryReference, documents) {
+    const contas = await this.contasDoAdmin(actor);
+    const visivel = (documento) => !ehDoAdmin(documento.data(), contas);
+    const limite = limiteDaConsulta(target);
+    const visiveis = documents.filter(visivel);
+    let ultimo = documents[documents.length - 1];
+    // Pagina cheia: pode haver mais linhas depois da ultima lida.
+    let temMais = Boolean(limite) && documents.length === limite;
+    for (let rodada = 0; temMais && visiveis.length < limite && rodada < 5; rodada += 1) {
+      const falta = limite - visiveis.length;
+      // eslint-disable-next-line no-await-in-loop
+      const seguinte = await queryReference.startAfter(ultimo).limit(falta).get();
+      visiveis.push(...seguinte.docs.filter(visivel));
+      temMais = seguinte.docs.length === falta;
+      ultimo = seguinte.docs[seguinte.docs.length - 1];
+    }
+    return visiveis;
   }
 
   async countDocuments({ actor, target }) {
@@ -115,19 +159,21 @@ export class FirestoreManagerDataGateway {
         mutation.data = { ...mutation.data, autor };
       });
     }
+    // Cola B57-13k, item 35: a loja le a pagina sem os registros do Admin. Os registros ja gravados
+    // ficam exatamente como estao no banco (inclusive os do Admin); do que o painel manda, so o que
+    // passa dos que ele leu e novo.
+    const contas = historicos.length && this.escondeDoAdmin(actor) ? await this.contasDoAdmin(actor) : null;
     for (const mutation of historicos) {
       // eslint-disable-next-line no-await-in-loop
       const atual = await this.firestore.doc(mutation.target.path).get();
       const gravados = atual.exists && Array.isArray(atual.data()?.registros) ? atual.data().registros : [];
-      mutation.data = {
-        ...mutation.data,
-        registros: mutation.data.registros.map((registro, indice) => {
-          if (!registro || typeof registro !== 'object' || Array.isArray(registro)) return registro;
-          const { autor: _doCorpo, ...resto } = registro;
-          const anterior = indice < gravados.length ? gravados[indice]?.autor : autor;
-          return anterior ? { ...resto, autor: anterior } : resto;
-        }),
-      };
+      const lidosPeloPainel = contas ? gravados.filter((registro) => !ehDoAdmin(registro, contas)).length : gravados.length;
+      const novos = mutation.data.registros.slice(lidosPeloPainel).map((registro) => {
+        if (!registro || typeof registro !== 'object' || Array.isArray(registro)) return registro;
+        const { autor: _doCorpo, ...resto } = registro;
+        return autor ? { ...resto, autor } : resto;
+      });
+      mutation.data = { ...mutation.data, registros: [...gravados, ...novos] };
     }
   }
 
@@ -435,6 +481,18 @@ function assertOperator(operator) {
   ]);
   if (!allowed.has(operator)) throw invalidTarget();
   return operator;
+}
+
+// Consulta da colecao AcoesEquipe da loja do ator (Logs da aba Equipe).
+function ehAcoesDaEquipe(target, establishmentId) {
+  const base = target?.kind === 'query' ? target.source : target;
+  return base?.kind === 'collection' && base.path === `estabelecimentos/${establishmentId}/AcoesEquipe`;
+}
+
+function limiteDaConsulta(target) {
+  const limite = (target?.constraints || []).find((constraint) => constraint?.kind === 'limit');
+  const valor = Number(limite?.value);
+  return Number.isInteger(valor) && valor > 0 ? Math.min(valor, MAX_QUERY_LIMIT) : null;
 }
 
 function ehCriacaoDeAcaoDaEquipe(mutation, actor) {

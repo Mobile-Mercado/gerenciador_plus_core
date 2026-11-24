@@ -1,3 +1,4 @@
+import { contasDoAdminDaPlataforma } from './contasDoAdminDaPlataforma.js';
 import { HistoricoDoProdutoRepository } from '../../domain/produtos/HistoricoDoProdutoRepository.js';
 import { logger as loggerPadrao } from '../logger/logger.js';
 import { lerConfiguracaoDoErp } from './configuracaoDoErp.js';
@@ -105,6 +106,11 @@ export class FirestoreHistoricoDoProdutoRepository extends HistoricoDoProdutoRep
       if (error?.code === 'auth/user-not-found') return null;
       throw error;
     }
+  }
+
+  // Cola B57-13k, item 35: e-mails e uids das contas de usersAdmin (linhas do Admin escondidas da loja).
+  contasDoAdmin() {
+    return contasDoAdminDaPlataforma(this.firestore);
   }
 
   async linhasDoProduto({ lojaId, produtoId, limite }) {
