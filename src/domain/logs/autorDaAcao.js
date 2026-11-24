@@ -20,6 +20,17 @@ export function ehAcaoDaEquipe(path, establishmentId) {
     && partes[2] === ACOES_DA_EQUIPE;
 }
 
+// Paginas do historico de lotes da equipe (categorizador, taggeador e nomeador): cola B57-13g, 28.5.
+export function ehHistoricoDaEquipe(path, establishmentId) {
+  const partes = String(path || '').split('/');
+  return partes.length === 4
+    && partes[0] === 'estabelecimentos'
+    && Boolean(establishmentId)
+    && partes[1] === establishmentId
+    && partes[2] === 'implantacaoGrenciador'
+    && /^historicoProdutos_\d+$/.test(partes[3]);
+}
+
 export function autorDaAcao(actor, computador) {
   if (!actor || actor.porAdminDaPlataforma) return null;
   const usuario = actor.userDocument || {};

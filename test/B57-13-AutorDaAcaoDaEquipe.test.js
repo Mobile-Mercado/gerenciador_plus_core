@@ -34,15 +34,15 @@ const ACAO = { em: new Date('2026-11-24T12:00:00Z'), quem: 'x@x.test', tela: 'pe
 test('B57-13 item 28: a conta e o funcionario sabem qual e a conta da loja', async () => {
   const acesso = new FirestoreEstablishmentAccessRepository({ firestore: banco() });
   const dono = await acesso.findAccountByClaims({ uid: 'uid-dono' });
-  assert.deepEqual(dono.contaDaLoja, { uid: 'uid-dono', email: 'conta@loja.test' });
+  assert.deepEqual(dono.contaDaLoja, { uid: 'uid-dono', email: 'conta@loja.test', nome: 'Super Loja' });
   const donoComClaim = await acesso.findAccountByClaims({ uid: 'uid-dono', adminOf: 'loja-1' });
-  assert.deepEqual(donoComClaim.contaDaLoja, { uid: 'uid-dono', email: 'conta@loja.test' });
+  assert.deepEqual(donoComClaim.contaDaLoja, { uid: 'uid-dono', email: 'conta@loja.test', nome: 'Super Loja' });
   const joao = await acesso.findAccountByClaims({ uid: 'f-joao', adminOf: 'loja-1' });
-  assert.deepEqual(joao.contaDaLoja, { uid: 'uid-dono', email: 'conta@loja.test' });
+  assert.deepEqual(joao.contaDaLoja, { uid: 'uid-dono', email: 'conta@loja.test', nome: 'Super Loja' });
 
   const sessao = new GetManagerSession({ accessRepository: acesso });
   const resposta = await sessao.execute({ actorUid: 'f-joao', claims: { uid: 'f-joao', adminOf: 'loja-1' } });
-  assert.deepEqual(resposta.contaDaLoja, { uid: 'uid-dono', email: 'conta@loja.test' });
+  assert.deepEqual(resposta.contaDaLoja, { uid: 'uid-dono', email: 'conta@loja.test', nome: 'Super Loja' });
 });
 
 test('B57-13 item 28: loja sem userReference fica sem conta da loja, e o funcionario continua funcionario', async () => {

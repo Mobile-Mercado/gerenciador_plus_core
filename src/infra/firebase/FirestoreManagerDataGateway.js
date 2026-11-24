@@ -6,7 +6,7 @@ import {
   serializeDocumentSnapshot,
 } from './firestoreTransport.js';
 import { carimboDeStatus } from './ManagerDataAccessPolicy.js';
-import { autorDaAcao, ehAcaoDaEquipe, sessaoValida } from '../../domain/logs/autorDaAcao.js';
+import { autorDaAcao, ehAcaoDaEquipe, ehHistoricoDaEquipe, sessaoValida } from '../../domain/logs/autorDaAcao.js';
 
 const MAX_BATCH_OPERATIONS = 450;
 const MAX_QUERY_LIMIT = 500;
@@ -90,15 +90,37 @@ export class FirestoreManagerDataGateway {
   // Cola B57-13, item 28: a acao do Log da equipe gravada pelo painel leva o autor (conta da loja ou
   // funcionario) e o nome do computador em "Acessos conectados", lido da sessao do X-Sessao. O autor
   // do corpo e trocado pelo do Core.
+  //
+  // Cola B57-13g, item 28.5: os registros de lote do categorizador, do taggeador e do nomeador
+  // (implantacaoGrenciador/historicoProdutos_N) ganham o mesmo autor. O painel regrava a pagina
+  // inteira: so os registros alem dos ja gravados sao novos; os antigos ficam com o autor que tinham.
   async carimbarAutor(actor, normalized, sessaoId) {
     const acoes = normalized.filter((mutation) => mutation.operation === 'set'
       && ehAcaoDaEquipe(mutation.target.path, actor?.establishmentId));
-    if (!acoes.length) return;
+    const historicos = normalized.filter((mutation) => mutation.operation === 'set'
+      && Array.isArray(mutation.data?.registros)
+      && ehHistoricoDaEquipe(mutation.target.path, actor?.establishmentId));
+    if (!acoes.length && !historicos.length) return;
     const autor = autorDaAcao(actor, await this.nomeDoComputador(actor.establishmentId, sessaoId));
-    if (!autor) return;
-    acoes.forEach((mutation) => {
-      mutation.data = { ...mutation.data, autor };
-    });
+    if (autor) {
+      acoes.forEach((mutation) => {
+        mutation.data = { ...mutation.data, autor };
+      });
+    }
+    for (const mutation of historicos) {
+      // eslint-disable-next-line no-await-in-loop
+      const atual = await this.firestore.doc(mutation.target.path).get();
+      const gravados = atual.exists && Array.isArray(atual.data()?.registros) ? atual.data().registros : [];
+      mutation.data = {
+        ...mutation.data,
+        registros: mutation.data.registros.map((registro, indice) => {
+          if (!registro || typeof registro !== 'object' || Array.isArray(registro)) return registro;
+          const { autor: _doCorpo, ...resto } = registro;
+          const anterior = indice < gravados.length ? gravados[indice]?.autor : autor;
+          return anterior ? { ...resto, autor: anterior } : resto;
+        }),
+      };
+    }
   }
 
   async nomeDoComputador(establishmentId, sessaoId) {
