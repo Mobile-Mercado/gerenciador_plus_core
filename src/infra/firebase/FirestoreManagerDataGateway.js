@@ -6,9 +6,10 @@ import {
   serializeDocumentSnapshot,
 } from './firestoreTransport.js';
 import { carimboDeStatus } from './ManagerDataAccessPolicy.js';
-import { autorDaAcao, ehAcaoDaEquipe, ehHistoricoDaEquipe, sessaoValida } from '../../domain/logs/autorDaAcao.js';
+import { autorDaAcao, ehAcaoDaEquipe, ehHistoricoDaEquipe } from '../../domain/logs/autorDaAcao.js';
 import { contasDoAdminParaALoja, ehDoAdmin } from '../../domain/logs/acaoDoAdmin.js';
 import { contasDoAdminDaPlataforma } from './contasDoAdminDaPlataforma.js';
+import { nomeDoComputadorNaLoja } from './nomeDoComputador.js';
 
 const MAX_BATCH_OPERATIONS = 450;
 const MAX_QUERY_LIMIT = 500;
@@ -177,16 +178,8 @@ export class FirestoreManagerDataGateway {
     }
   }
 
-  async nomeDoComputador(establishmentId, sessaoId) {
-    const sessao = sessaoValida(sessaoId);
-    if (!sessao) return null;
-    try {
-      const snapshot = await this.firestore.doc(`estabelecimentos/${establishmentId}/SessoesWeb/${sessao}`).get();
-      return snapshot.exists ? snapshot.data()?.nome || null : null;
-    } catch {
-      // Sem o nome a acao e gravada do mesmo jeito ("Navegador sem nome").
-      return null;
-    }
+  nomeDoComputador(establishmentId, sessaoId) {
+    return nomeDoComputadorNaLoja(this.firestore, establishmentId, sessaoId);
   }
 
   async subscribe({ actor, target, onSnapshot, onError }) {

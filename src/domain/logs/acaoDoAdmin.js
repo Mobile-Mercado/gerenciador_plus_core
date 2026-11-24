@@ -3,11 +3,14 @@
 // de lote (historicoProdutos_N) feitos pelo admin da plataforma ficam escondidos da loja na leitura.
 // Nada e apagado nem alterado no banco.
 //
-// Linha do Admin:
-// - gravada pelo Core desde esta cola com autor.tipo 'adminDaPlataforma' (admin agindo na loja pelo
-//   cabecalho X-Loja-Alvo);
-// - ou, nas linhas antigas, com `quem` igual ao e-mail ou ao uid de uma conta de usersAdmin.
-// A conta principal da loja nunca entra como Admin, mesmo que o e-mail dela esteja em usersAdmin.
+// Cola B57-13o, item 35: o criterio e a ORIGEM da acao, nao a conta.
+// - Registro com marca de origem (campo `autor`, gravado pelo Core): so some o feito pelas telas do
+//   Admin (autor.tipo 'adminDaPlataforma', cabecalho X-Loja-Alvo). Painel da loja (contaDaLoja ou
+//   funcionario) aparece, mesmo que a conta tambem seja Admin.
+// - Acao do App Gerenciador (origem 'app') aparece sempre.
+// - Registro antigo, sem marca de origem: a regra por conta de b79d25c (`quem` igual ao e-mail ou ao
+//   uid de uma conta de usersAdmin), porque nao ha no proprio registro como saber de onde veio.
+// A conta principal da loja nunca entra como Admin na regra por conta.
 // Rotinas do Core (promocao vencida, `quem` vazio) e o integrador nao sao Admin.
 
 export const AUTOR_ADMIN = 'adminDaPlataforma';
@@ -23,7 +26,8 @@ export function contasDoAdminParaALoja(contas, contaDaLoja = null) {
 
 export function ehDoAdmin(registro, contas) {
   if (!registro || typeof registro !== 'object') return false;
-  if (registro.autor?.tipo === AUTOR_ADMIN) return true;
+  if (registro.autor && typeof registro.autor === 'object') return registro.autor.tipo === AUTOR_ADMIN;
+  if (registro.origem === 'app') return false;
   const quem = normalizar(registro.quem);
   return Boolean(quem) && Boolean(contas?.has(quem));
 }

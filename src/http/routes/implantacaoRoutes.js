@@ -1,3 +1,4 @@
+import { autorDaAcao } from '../../domain/logs/autorDaAcao.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { AppError } from '../../domain/errors/AppError.js';
@@ -84,16 +85,21 @@ export function createImplantacaoRoutes({
       response.setHeader('X-Accel-Buffering', 'no');
       response.flushHeaders?.();
 
+      const conta = await accountForRequest(request);
       const summary = await importProductsFromCsvUseCase.execute({
         establishmentId: input.establishmentId,
         // Loja da sessao: o caso de uso recusa importar em outra loja.
-        actorEstablishmentId: (await accountForRequest(request))?.establishmentId,
+        actorEstablishmentId: conta?.establishmentId,
         csvText: input.csvText,
         metadata: {
           fileName: input.fileName,
           firebaseUid: request.auth?.uid,
           // Quem importou, para o Log das acoes da equipe (cola 65, item 3.5).
           firebaseEmail: request.auth?.email || null,
+          // Cola B57-13o, item 35: a origem no Log. Pela tela do Admin (X-Loja-Alvo), autor do Admin,
+          // escondido da loja; pela loja, conta da loja ou funcionario, com o computador.
+          autor: autorDaAcao(conta ? { ...conta, uid: conta.uid || request.auth?.uid } : null, null),
+          sessaoId: String(request.headers['x-sessao'] || '').trim() || null,
         },
         onProgress: (progress) => writeEvent({ type: 'progress', ...progress }),
       });
