@@ -1,3 +1,4 @@
+import { origemDoCabecalho } from '../../domain/logs/origemDaAcao.js';
 import { autorDaAcao } from '../../domain/logs/autorDaAcao.js';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -100,6 +101,8 @@ export function createImplantacaoRoutes({
           // escondido da loja; pela loja, conta da loja ou funcionario, com o computador.
           autor: autorDaAcao(conta ? { ...conta, uid: conta.uid || request.auth?.uid } : null, null),
           sessaoId: String(request.headers['x-sessao'] || '').trim() || null,
+          // Cola B57-13s, item 39: a tela e o caminho de onde a planilha foi importada.
+          origemDaAcao: origemDoCabecalho(String(request.headers['x-origem'] || ''), { porAdmin: Boolean(request.lojaAlvo) }),
         },
         onProgress: (progress) => writeEvent({ type: 'progress', ...progress }),
       });

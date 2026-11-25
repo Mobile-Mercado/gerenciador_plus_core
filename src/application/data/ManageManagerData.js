@@ -29,11 +29,13 @@ export class ManageManagerData {
   }
 
   // `sessaoId`: o cabecalho X-Sessao do navegador (cola B57-13, item 28: o computador do Log da equipe).
-  async mutate({ actorUid, claims, request, lojaAlvo, sessaoId = null }) {
+  // `origem`: o cabecalho X-Origem (cola B57-13s, item 39: tela e caminho da acao no Log da equipe).
+  async mutate({ actorUid, claims, request, lojaAlvo, sessaoId = null, origem = null }) {
     const result = await this.gateway.mutate({
       actor: await this.actor(actorUid, claims, lojaAlvo),
       request,
       sessaoId,
+      origem,
     });
     establishmentIdsTouchingAccess(request).forEach((id) => this.forgetEstablishment(id));
     return result;

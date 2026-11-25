@@ -144,9 +144,11 @@ export function mudancaDoProduto(anterior = {}, gravado = {}) {
 }
 
 // `autor` (cola B57-13o, item 35): a origem da importacao, como nas acoes do painel.
-function linhaDoLog({ quem, acao, produtoId, rotulo, antes, depois, autor = null }) {
+function linhaDoLog({ quem, acao, produtoId, rotulo, antes, depois, autor = null, origemDaAcao = null }) {
   return {
     ...(autor ? { autor } : {}),
+    // Cola B57-13s, item 39: a tela e o caminho de onde a planilha foi importada.
+    ...(origemDaAcao ? { origemDaAcao } : {}),
     em: FieldValue.serverTimestamp(),
     quem,
     tela: 'implantacao',
@@ -255,6 +257,7 @@ export class ImportProductsFromCsvUseCase {
 
     const acoesRef = establishmentRef.collection('AcoesEquipe');
     const quem = metadata?.firebaseEmail || metadata?.firebaseUid || '';
+    const origemDaAcao = metadata?.origemDaAcao || null;
     const autor = metadata?.autor && metadata.autor.tipo !== 'adminDaPlataforma'
       ? { ...metadata.autor, computador: await nomeDoComputadorNaLoja(this.firestore, establishmentId, metadata.sessaoId) }
       : metadata?.autor || null;
@@ -375,7 +378,7 @@ export class ImportProductsFromCsvUseCase {
         opsInBatch += 1;
 
         batch.set(acoesRef.doc(), linhaDoLog({
-          quem, acao: 'produto.criar', produtoId: productId, rotulo: name, antes: null, depois: { name }, autor,
+          quem, acao: 'produto.criar', produtoId: productId, rotulo: name, antes: null, depois: { name }, autor, origemDaAcao,
         }));
         opsInBatch += 1;
 
@@ -389,7 +392,7 @@ export class ImportProductsFromCsvUseCase {
         const mudanca = mudancaDoProduto(anterior, sharedFields);
         if (mudanca.campos.length) {
           batch.set(acoesRef.doc(), linhaDoLog({
-            quem, acao: 'produto.editar', produtoId: productId, rotulo: name || anterior.name, antes: mudanca.antes, depois: mudanca.depois, autor,
+            quem, acao: 'produto.editar', produtoId: productId, rotulo: name || anterior.name, antes: mudanca.antes, depois: mudanca.depois, autor, origemDaAcao,
           }));
           opsInBatch += 1;
         }

@@ -1,3 +1,4 @@
+import { origemDoCabecalho } from '../../domain/logs/origemDaAcao.js';
 import { FieldPath, Filter } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 import {
@@ -101,7 +102,8 @@ export class FirestoreManagerDataGateway {
     return { count: Number(snapshot.data().count || 0) };
   }
 
-  async mutate({ actor, request, sessaoId = null }) {
+  // `origem`: o cabecalho X-Origem do painel (cola B57-13s, item 39).
+  async mutate({ actor, request, sessaoId = null, origem = null }) {
     const operations = request.operation === 'batch'
       ? request.operations
       : [request];
@@ -131,7 +133,7 @@ export class FirestoreManagerDataGateway {
         mutation.data = carimboDeStatus(actor, mutation.data);
       }
     });
-    await this.carimbarAutor(actor, normalized, sessaoId);
+    await this.carimbarAutor(actor, normalized, sessaoId, origem);
 
     if (normalized.length === 1 && request.operation !== 'batch') {
       await this.applyMutation(normalized[0]);
@@ -150,7 +152,10 @@ export class FirestoreManagerDataGateway {
   // Cola B57-13g, item 28.5: os registros de lote do categorizador, do taggeador e do nomeador
   // (implantacaoGrenciador/historicoProdutos_N) ganham o mesmo autor. O painel regrava a pagina
   // inteira: so os registros alem dos ja gravados sao novos; os antigos ficam com o autor que tinham.
-  async carimbarAutor(actor, normalized, sessaoId) {
+  //
+  // Cola B57-13s, item 39: a acao e o registro novo do lote levam tambem a origem (tela e caminho) do
+  // cabecalho X-Origem; a do corpo e descartada. Sem cabecalho valido, sem origem.
+  async carimbarAutor(actor, normalized, sessaoId, origem = null) {
     const acoes = normalized.filter((mutation) => mutation.operation === 'set'
       && ehAcaoDaEquipe(mutation.target.path, actor?.establishmentId));
     const historicos = normalized.filter((mutation) => mutation.operation === 'set'
@@ -158,11 +163,11 @@ export class FirestoreManagerDataGateway {
       && ehHistoricoDaEquipe(mutation.target.path, actor?.establishmentId));
     if (!acoes.length && !historicos.length) return;
     const autor = autorDaAcao(actor, await this.nomeDoComputador(actor.establishmentId, sessaoId));
-    if (autor) {
-      acoes.forEach((mutation) => {
-        mutation.data = { ...mutation.data, autor };
-      });
-    }
+    const origemDaAcao = origemDoCabecalho(origem, { porAdmin: actor?.porAdminDaPlataforma === true });
+    acoes.forEach((mutation) => {
+      const { origemDaAcao: _doCorpo, ...dados } = mutation.data || {};
+      mutation.data = { ...dados, ...(autor ? { autor } : {}), ...(origemDaAcao ? { origemDaAcao } : {}) };
+    });
     // Cola B57-13k, item 35: a loja le a pagina sem os registros do Admin. Os registros ja gravados
     // ficam exatamente como estao no banco (inclusive os do Admin); do que o painel manda, so o que
     // passa dos que ele leu e novo.
@@ -174,8 +179,8 @@ export class FirestoreManagerDataGateway {
       const lidosPeloPainel = contas ? gravados.filter((registro) => !ehDoAdmin(registro, contas)).length : gravados.length;
       const novos = mutation.data.registros.slice(lidosPeloPainel).map((registro) => {
         if (!registro || typeof registro !== 'object' || Array.isArray(registro)) return registro;
-        const { autor: _doCorpo, ...resto } = registro;
-        return autor ? { ...resto, autor } : resto;
+        const { autor: _doCorpo, origemDaAcao: _origemDoCorpo, ...resto } = registro;
+        return { ...resto, ...(autor ? { autor } : {}), ...(origemDaAcao ? { origemDaAcao } : {}) };
       });
       mutation.data = { ...mutation.data, registros: [...gravados, ...novos] };
     }

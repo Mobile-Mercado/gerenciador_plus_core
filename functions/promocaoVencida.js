@@ -59,6 +59,8 @@ function registroDaRemocao({ produtoId, produto, FieldValue }) {
     antes,
     depois,
     origem: ORIGEM,
+    // Cola B57-13s, item 39: rotina do Core, sem tela (src/domain/logs/origemDaAcao.js, origemDaRotina).
+    origemDaAcao: { tipo: 'rotina', tela: ORIGEM, caminho: [], rota: null },
   };
 }
 
