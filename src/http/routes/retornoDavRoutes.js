@@ -1,3 +1,4 @@
+import { origemDoCabecalho } from '../../domain/logs/origemDaAcao.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../middlewares/asyncHandler.js';
@@ -32,6 +33,8 @@ export function createRetornoDavRoutes({ retornoDav, requirePermission, accountF
       email: request.auth?.email || null,
       quem: conta.porAdminDaPlataforma ? 'Móbile' : (conta.nome || request.auth?.email || null),
       porAdmin: conta.porAdminDaPlataforma === true,
+      // Cola B57-13s, item 39: a tela e o caminho da acao no Log da equipe.
+      origemDaAcao: origemDoCabecalho(String(request.headers['x-origem'] || ''), { porAdmin: conta.porAdminDaPlataforma === true }),
     };
     const linha = await retornoDav.reenviar({ lojaId: conta.establishmentId, vendaId, ator });
     if (conta.porAdminDaPlataforma && registrarAcaoDoAdmin) {
@@ -55,6 +58,8 @@ export function createRetornoDavRoutes({ retornoDav, requirePermission, accountF
       email: request.auth?.email || null,
       quem: conta.porAdminDaPlataforma ? 'Móbile' : (conta.nome || request.auth?.email || null),
       porAdmin: conta.porAdminDaPlataforma === true,
+      // Cola B57-13s, item 39: a tela e o caminho da acao no Log da equipe.
+      origemDaAcao: origemDoCabecalho(String(request.headers['x-origem'] || ''), { porAdmin: conta.porAdminDaPlataforma === true }),
     };
     const linha = await retornoDav.marcarLancado({ lojaId: conta.establishmentId, vendaId, ator });
     if (conta.porAdminDaPlataforma && registrarAcaoDoAdmin) {

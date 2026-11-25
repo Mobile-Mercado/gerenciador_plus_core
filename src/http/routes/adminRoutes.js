@@ -115,6 +115,9 @@ const sugestoesClientesSchema = z.object({
   cursor: z.string().min(1).max(400).optional(),
 });
 
+// Cola B57-13k, item 34: nomes dos blocos da Home no registro do "So na {loja}".
+const NOMES_DOS_BLOCOS_DA_HOME = Object.freeze({ topo: 'Topo', meio: 'Meio', fim: 'Fim' });
+
 export function createAdminRoutes({
   manageCatalogoPadrao, sugestoesDosClientes, pedidosDeLoja, lojaNoAdmin, franquias, administradores, dadosDoAdmin,
   manageImplantationPipelines, jornadaDeEntrada = null, entregaDaLoja = null, appDoClienteDaLoja = null,
@@ -446,7 +449,13 @@ export function createAdminRoutes({
   router.patch('/estabelecimentos/:lojaId/app-do-cliente', asyncHandler(async (request, response) => {
     const entrada = appDoClienteSchema.parse(request.body);
     const resultado = await appDoClienteDaLoja.salvar(request.params.lojaId, entrada);
-    response.locals.auditoria = { acao: 'app_do_cliente', campos: resultado.campos, antes: resultado.antes };
+    // Cola B57-13k, item 34 (b): "So na {loja}" (Admin > Aparencias > Home, ?soNaLoja=topo|meio|fim)
+    // entra no registro do Admin como "Salvou só na {loja}", com o nome do bloco.
+    const pedido = String(request.query?.soNaLoja || '');
+    const bloco = Object.hasOwn(NOMES_DOS_BLOCOS_DA_HOME, pedido) ? NOMES_DOS_BLOCOS_DA_HOME[pedido] : null;
+    response.locals.auditoria = bloco
+      ? { acao: 'so_na_loja', descricao: `Salvou só na ${resultado.nomeDaLoja}`, bloco, campos: resultado.campos, antes: resultado.antes }
+      : { acao: 'app_do_cliente', campos: resultado.campos, antes: resultado.antes };
     response.json({ data: resultado.app });
   }));
 

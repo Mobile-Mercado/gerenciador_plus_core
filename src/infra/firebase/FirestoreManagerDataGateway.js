@@ -1,4 +1,7 @@
-import { FieldPath, Filter } from 'firebase-admin/firestore';
+import { origemDoCabecalho } from '../../domain/logs/origemDaAcao.js';
+import { FieldPath, FieldValue, Filter } from 'firebase-admin/firestore';
+import { assertPermission } from '../../http/middlewares/requirePermission.js';
+import { ehSugestaoDeRevisao, resultadoDoPainel } from '../../domain/produtos/sugestoesDeRevisao.js';
 import { AppError } from '../../domain/errors/AppError.js';
 import {
   assertFirestorePath,
@@ -6,6 +9,10 @@ import {
   serializeDocumentSnapshot,
 } from './firestoreTransport.js';
 import { carimboDeStatus } from './ManagerDataAccessPolicy.js';
+import { autorDaAcao, ehAcaoDaEquipe, ehHistoricoDaEquipe } from '../../domain/logs/autorDaAcao.js';
+import { contasDoAdminParaALoja, ehAcaoDoAdmin, ehDoAdmin } from '../../domain/logs/acaoDoAdmin.js';
+import { caminhosDoAdminNaLoja, contasDoAdminDaPlataforma } from './contasDoAdminDaPlataforma.js';
+import { nomeDoComputadorNaLoja } from './nomeDoComputador.js';
 
 const MAX_BATCH_OPERATIONS = 450;
 const MAX_QUERY_LIMIT = 500;
@@ -21,9 +28,17 @@ export class FirestoreManagerDataGateway {
     await this.policy.assertRead({ actor, target });
     const reference = this.documentReference(target);
     const snapshot = await reference.get();
+    // Cola B57-13k, item 35: os registros de lote do Admin nao aparecem para a loja.
+    const contas = this.escondeDoAdmin(actor) && ehHistoricoDaEquipe(reference.path, actor.establishmentId)
+      ? await this.contasDoAdmin(actor)
+      : null;
     return serializeDocumentSnapshot(
       snapshot,
-      (path, data) => this.policy.sanitizeDocument(path, data),
+      (path, data) => {
+        const limpo = this.policy.sanitizeDocument(path, data);
+        if (!contas || !Array.isArray(limpo?.registros)) return limpo;
+        return { ...limpo, registros: limpo.registros.filter((registro) => !ehDoAdmin(registro, contas)) };
+      },
     );
   }
 
@@ -36,9 +51,46 @@ export class FirestoreManagerDataGateway {
       const queryReference = await this.queryReference(actor, target);
       const snapshot = await queryReference.get();
       documents = snapshot.docs;
+      if (this.escondeDoAdmin(actor) && ehAcoesDaEquipe(target, actor.establishmentId)) {
+        documents = await this.semAcoesDoAdmin(actor, target, queryReference, documents);
+      }
     }
     const filtered = await this.policy.filterDocuments({ actor, target, documents });
     return this.serializeQuery(filtered);
+  }
+
+  // Cola B57-13k, item 35: "nada que o Admin faz fica visivel para o gerente ou para o dono da loja".
+  // So a leitura da loja; o admin da plataforma agindo na loja ve tudo. Nada e apagado no banco.
+  escondeDoAdmin(actor) {
+    return Boolean(actor?.establishmentId) && !actor.porAdminDaPlataforma;
+  }
+
+  async contasDoAdmin(actor) {
+    return contasDoAdminParaALoja(await contasDoAdminDaPlataforma(this.firestore), actor?.contaDaLoja);
+  }
+
+  // Tira as linhas do Admin e completa a pagina com as seguintes (ate 5 leituras a mais), para a
+  // paginacao do painel (pagina cheia = tem mais) continuar certa.
+  async semAcoesDoAdmin(actor, target, queryReference, documents) {
+    const [contas, caminhosDoAdmin] = await Promise.all([
+      this.contasDoAdmin(actor),
+      caminhosDoAdminNaLoja(this.firestore, actor.establishmentId),
+    ]);
+    const visivel = (documento) => !ehAcaoDoAdmin(documento.data(), { caminho: documento.ref.path, caminhosDoAdmin, contas });
+    const limite = limiteDaConsulta(target);
+    const visiveis = documents.filter(visivel);
+    let ultimo = documents[documents.length - 1];
+    // Pagina cheia: pode haver mais linhas depois da ultima lida.
+    let temMais = Boolean(limite) && documents.length === limite;
+    for (let rodada = 0; temMais && visiveis.length < limite && rodada < 5; rodada += 1) {
+      const falta = limite - visiveis.length;
+      // eslint-disable-next-line no-await-in-loop
+      const seguinte = await queryReference.startAfter(ultimo).limit(falta).get();
+      visiveis.push(...seguinte.docs.filter(visivel));
+      temMais = seguinte.docs.length === falta;
+      ultimo = seguinte.docs[seguinte.docs.length - 1];
+    }
+    return visiveis;
   }
 
   async countDocuments({ actor, target }) {
@@ -52,7 +104,8 @@ export class FirestoreManagerDataGateway {
     return { count: Number(snapshot.data().count || 0) };
   }
 
-  async mutate({ actor, request }) {
+  // `origem`: o cabecalho X-Origem do painel (cola B57-13s, item 39).
+  async mutate({ actor, request, sessaoId = null, origem = null }) {
     const operations = request.operation === 'batch'
       ? request.operations
       : [request];
@@ -65,6 +118,25 @@ export class FirestoreManagerDataGateway {
 
     const normalized = operations.map((mutation) => this.normalizeMutation(mutation));
     for (const mutation of normalized) {
+      // Cola B57-13g, item 6: a acao nova do Log da equipe e gravada para todo usuario logado da
+      // loja, sem a chave settings.edit; so na loja dele e so documento novo (create, que nao
+      // sobrescreve registro). Merge, update e delete seguem pela politica.
+      if (ehCriacaoDeAcaoDaEquipe(mutation, actor)) {
+        this.policy.assertActor(actor);
+        mutation.somenteCriar = true;
+        continue;
+      }
+      // Cola B57-13t, item 38 (k): o resultado da revisao de unidade, por quem edita produto (products.edit),
+      // so na propria loja, so os campos do resultado, por mescla; o autor e a data vem do Core.
+      if (ehConferenciaDaRevisao(mutation, actor)) {
+        this.policy.assertActor(actor);
+        assertPermission(actor.permissions || { isAdmin: true, groupId: null, keys: [] }, 'products.edit');
+        mutation.data = resultadoDoPainel(mutation.data);
+        mutation.operation = 'set';
+        mutation.options = { merge: true };
+        mutation.conferenciaDaRevisao = true;
+        continue;
+      }
       await this.policy.assertMutation({ actor, mutation });
     }
     // Depois da politica: o carimbo nao passa pela lista de campos do painel, so o
@@ -74,6 +146,8 @@ export class FirestoreManagerDataGateway {
         mutation.data = carimboDeStatus(actor, mutation.data);
       }
     });
+    await this.carimbarAutor(actor, normalized, sessaoId, origem);
+    await this.carimbarConferencia(actor, normalized, sessaoId);
 
     if (normalized.length === 1 && request.operation !== 'batch') {
       await this.applyMutation(normalized[0]);
@@ -83,6 +157,61 @@ export class FirestoreManagerDataGateway {
       await batch.commit();
     }
     return { written: normalized.length };
+  }
+
+  // Cola B57-13, item 28: a acao do Log da equipe gravada pelo painel leva o autor (conta da loja ou
+  // funcionario) e o nome do computador em "Acessos conectados", lido da sessao do X-Sessao. O autor
+  // do corpo e trocado pelo do Core.
+  //
+  // Cola B57-13g, item 28.5: os registros de lote do categorizador, do taggeador e do nomeador
+  // (implantacaoGrenciador/historicoProdutos_N) ganham o mesmo autor. O painel regrava a pagina
+  // inteira: so os registros alem dos ja gravados sao novos; os antigos ficam com o autor que tinham.
+  //
+  // Cola B57-13s, item 39: a acao e o registro novo do lote levam tambem a origem (tela e caminho) do
+  // cabecalho X-Origem; a do corpo e descartada. Sem cabecalho valido, sem origem.
+  async carimbarAutor(actor, normalized, sessaoId, origem = null) {
+    const acoes = normalized.filter((mutation) => mutation.operation === 'set'
+      && ehAcaoDaEquipe(mutation.target.path, actor?.establishmentId));
+    const historicos = normalized.filter((mutation) => mutation.operation === 'set'
+      && Array.isArray(mutation.data?.registros)
+      && ehHistoricoDaEquipe(mutation.target.path, actor?.establishmentId));
+    if (!acoes.length && !historicos.length) return;
+    const autor = autorDaAcao(actor, await this.nomeDoComputador(actor.establishmentId, sessaoId));
+    const origemDaAcao = origemDoCabecalho(origem, { porAdmin: actor?.porAdminDaPlataforma === true });
+    acoes.forEach((mutation) => {
+      const { origemDaAcao: _doCorpo, ...dados } = mutation.data || {};
+      mutation.data = { ...dados, ...(autor ? { autor } : {}), ...(origemDaAcao ? { origemDaAcao } : {}) };
+    });
+    // Cola B57-13k, item 35: a loja le a pagina sem os registros do Admin. Os registros ja gravados
+    // ficam exatamente como estao no banco (inclusive os do Admin); do que o painel manda, so o que
+    // passa dos que ele leu e novo.
+    const contas = historicos.length && this.escondeDoAdmin(actor) ? await this.contasDoAdmin(actor) : null;
+    for (const mutation of historicos) {
+      // eslint-disable-next-line no-await-in-loop
+      const atual = await this.firestore.doc(mutation.target.path).get();
+      const gravados = atual.exists && Array.isArray(atual.data()?.registros) ? atual.data().registros : [];
+      const lidosPeloPainel = contas ? gravados.filter((registro) => !ehDoAdmin(registro, contas)).length : gravados.length;
+      const novos = mutation.data.registros.slice(lidosPeloPainel).map((registro) => {
+        if (!registro || typeof registro !== 'object' || Array.isArray(registro)) return registro;
+        const { autor: _doCorpo, origemDaAcao: _origemDoCorpo, ...resto } = registro;
+        return { ...resto, ...(autor ? { autor } : {}), ...(origemDaAcao ? { origemDaAcao } : {}) };
+      });
+      mutation.data = { ...mutation.data, registros: [...gravados, ...novos] };
+    }
+  }
+
+  // Cola B57-13t, item 38 (k): quem conferiu (no formato do Log da equipe) e quando (hora do servidor).
+  async carimbarConferencia(actor, normalized, sessaoId) {
+    const conferencias = normalized.filter((mutation) => mutation.conferenciaDaRevisao);
+    if (!conferencias.length) return;
+    const conferidoPor = autorDaAcao(actor, await this.nomeDoComputador(actor.establishmentId, sessaoId));
+    conferencias.forEach((mutation) => {
+      mutation.data = { ...mutation.data, conferidoPor, conferidoEm: FieldValue.serverTimestamp() };
+    });
+  }
+
+  nomeDoComputador(establishmentId, sessaoId) {
+    return nomeDoComputadorNaLoja(this.firestore, establishmentId, sessaoId);
   }
 
   async subscribe({ actor, target, onSnapshot, onError }) {
@@ -228,7 +357,9 @@ export class FirestoreManagerDataGateway {
 
   async applyMutation(mutation) {
     const reference = this.firestore.doc(mutation.target.path);
-    if (mutation.operation === 'set') {
+    if (mutation.somenteCriar) {
+      await reference.create(mutation.data);
+    } else if (mutation.operation === 'set') {
       await reference.set(mutation.data, mutation.options);
     } else if (mutation.operation === 'update') {
       await reference.update(mutation.data);
@@ -239,7 +370,8 @@ export class FirestoreManagerDataGateway {
 
   applyBatchMutation(batch, mutation) {
     const reference = this.firestore.doc(mutation.target.path);
-    if (mutation.operation === 'set') batch.set(reference, mutation.data, mutation.options);
+    if (mutation.somenteCriar) batch.create(reference, mutation.data);
+    else if (mutation.operation === 'set') batch.set(reference, mutation.data, mutation.options);
     else if (mutation.operation === 'update') batch.update(reference, mutation.data);
     else batch.delete(reference);
   }
@@ -374,6 +506,29 @@ function assertOperator(operator) {
   ]);
   if (!allowed.has(operator)) throw invalidTarget();
   return operator;
+}
+
+// Consulta da colecao AcoesEquipe da loja do ator (Logs da aba Equipe).
+function ehAcoesDaEquipe(target, establishmentId) {
+  const base = target?.kind === 'query' ? target.source : target;
+  return base?.kind === 'collection' && base.path === `estabelecimentos/${establishmentId}/AcoesEquipe`;
+}
+
+function limiteDaConsulta(target) {
+  const limite = (target?.constraints || []).find((constraint) => constraint?.kind === 'limit');
+  const valor = Number(limite?.value);
+  return Number.isInteger(valor) && valor > 0 ? Math.min(valor, MAX_QUERY_LIMIT) : null;
+}
+
+function ehConferenciaDaRevisao(mutation, actor) {
+  const mescla = (mutation.operation === 'set' && mutation.options?.merge === true) || mutation.operation === 'update';
+  return mescla && ehSugestaoDeRevisao(mutation.target.path, actor?.establishmentId);
+}
+
+function ehCriacaoDeAcaoDaEquipe(mutation, actor) {
+  return mutation.operation === 'set'
+    && mutation.options?.merge !== true
+    && ehAcaoDaEquipe(mutation.target.path, actor?.establishmentId);
 }
 
 function invalidTarget() {

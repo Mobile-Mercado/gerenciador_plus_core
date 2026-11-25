@@ -100,6 +100,8 @@ export function createDataRoutes({ manageManagerData, registrarAcaoDoAdmin = nul
         claims: request.auth,
         lojaAlvo: request.lojaAlvo,
         request: mutation,
+        sessaoId: String(request.headers['x-sessao'] || '').trim() || null,
+        origem: String(request.headers['x-origem'] || '').trim() || null,
       });
       if (request.lojaAlvo && registrarAcaoDoAdmin) {
         await registrarAcaoDoAdmin({

@@ -60,6 +60,7 @@ export class FirestoreRetornoDavRepository {
         antes: { situacao: 'Não enviado' },
         depois: { situacao: 'Reenvio pedido' },
         origem: ator.porAdmin ? 'admin' : 'manual',
+        ...(ator.origemDaAcao ? { origemDaAcao: ator.origemDaAcao } : {}),
       });
       return { existe: true };
     });
@@ -91,6 +92,7 @@ export class FirestoreRetornoDavRepository {
         antes: { situacao: 'Não enviado' },
         depois: { situacao: 'Lançado à mão' },
         origem: ator.porAdmin ? 'admin' : 'manual',
+        ...(ator.origemDaAcao ? { origemDaAcao: ator.origemDaAcao } : {}),
       });
       return { existe: true };
     });

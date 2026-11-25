@@ -71,7 +71,8 @@ export class AppDoClienteDaLoja {
       if (!Object.keys(mudancas).length) throw recusa('Nada para gravar.', 'app_do_cliente_sem_mudancas');
 
       transacao.update(ref, { ...mudancas, updatedAt: this.serverTimestamp() });
-      return { antes, campos: Object.keys(mudancas) };
+      // Cola B57-13k, item 34: o nome da loja para o registro do Admin ("Salvou só na {loja}").
+      return { antes, campos: Object.keys(mudancas), nomeDaLoja: atual.fantasyName || atual.name || atual.nomeEstabelecimento || loja.id };
     });
     return { ...resultado, app: await this.ler(lojaId) };
   }

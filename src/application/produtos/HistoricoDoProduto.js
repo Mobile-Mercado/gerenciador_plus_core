@@ -1,5 +1,6 @@
 import { AppError } from '../../domain/errors/AppError.js';
 import { nomeDoErpDaLoja } from './nomeDoErp.js';
+import { contasDoAdminParaALoja, ehAcaoDoAdmin } from '../../domain/logs/acaoDoAdmin.js';
 
 // Historico de um produto (cola 65, item 3.5, revisado pelo Thay): fonte unica e o Log das acoes da
 // equipe, estabelecimentos/{loja}/AcoesEquipe, no formato de registrarAcao.js do web (em, quem, tela,
@@ -174,8 +175,16 @@ export class HistoricoDoProduto {
     const id = produtoValido(produtoId);
     const maximo = Math.min(Math.max(Number.parseInt(limite, 10) || LIMITE_PADRAO, 1), LIMITE_MAXIMO);
     const { linhas, completo } = await this.repositorio.linhasDoProduto({ lojaId, produtoId: id, limite: maximo });
+    // Cola B57-13k, item 35: a linha do Admin nao aparece para a loja.
+    const esconde = !ator?.porAdminDaPlataforma && typeof this.repositorio.contasDoAdmin === 'function';
+    const contas = esconde ? contasDoAdminParaALoja(await this.repositorio.contasDoAdmin(), ator?.contaDaLoja) : null;
+    // Cola B57-13p, item 35: a origem exata dos registros antigos, pelo registro do Admin na loja.
+    const caminhosDoAdmin = esconde && typeof this.repositorio.caminhosDoAdmin === 'function'
+      ? await this.repositorio.caminhosDoAdmin({ lojaId })
+      : null;
     const doProduto = (linhas || [])
       .filter((linha) => linha?.alvo?.tipo === 'produto' && linha?.alvo?.id === id)
+      .filter((linha) => !contas || !ehAcaoDoAdmin(linha, { caminho: `estabelecimentos/${lojaId}/AcoesEquipe/${linha.id}`, caminhosDoAdmin, contas }))
       .sort((a, b) => (emMilissegundos(b.em) ?? -Infinity) - (emMilissegundos(a.em) ?? -Infinity))
       .slice(0, maximo);
     const [quemDaLinha, erp] = await Promise.all([

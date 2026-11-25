@@ -1,3 +1,4 @@
+import { caminhosDoAdminNaLoja, contasDoAdminDaPlataforma } from './contasDoAdminDaPlataforma.js';
 import { HistoricoDoProdutoRepository } from '../../domain/produtos/HistoricoDoProdutoRepository.js';
 import { logger as loggerPadrao } from '../logger/logger.js';
 import { lerConfiguracaoDoErp } from './configuracaoDoErp.js';
@@ -105,6 +106,16 @@ export class FirestoreHistoricoDoProdutoRepository extends HistoricoDoProdutoRep
       if (error?.code === 'auth/user-not-found') return null;
       throw error;
     }
+  }
+
+  // Cola B57-13k, item 35: e-mails e uids das contas de usersAdmin (linhas do Admin escondidas da loja).
+  contasDoAdmin() {
+    return contasDoAdminDaPlataforma(this.firestore);
+  }
+
+  // Cola B57-13p, item 35: documentos de AcoesEquipe gravados pelo Admin na loja (AdminAuditLogs).
+  caminhosDoAdmin({ lojaId }) {
+    return caminhosDoAdminNaLoja(this.firestore, lojaId);
   }
 
   async linhasDoProduto({ lojaId, produtoId, limite }) {
