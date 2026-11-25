@@ -50,6 +50,8 @@ export function ehAcaoDoAdmin(registro, { caminho = '', caminhosDoAdmin = null, 
   if (!registro || typeof registro !== 'object') return false;
   if (registro.autor && typeof registro.autor === 'object') return registro.autor.tipo === AUTOR_ADMIN;
   if (registro.origem === 'app') return false;
+  // Cola B57-13t, item 35: o Retorno DAV do Admin e gravado pelo Core com origem 'admin' e sem autor.
+  if (registro.origem === 'admin') return true;
   if (caminho && caminhosDoAdmin?.has(caminho)) return true;
   return ehLinhaDePlanilha(registro) && ehDoAdmin(registro, contas);
 }
