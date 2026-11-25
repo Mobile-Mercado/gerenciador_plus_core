@@ -1,5 +1,7 @@
 import { origemDoCabecalho } from '../../domain/logs/origemDaAcao.js';
-import { FieldPath, Filter } from 'firebase-admin/firestore';
+import { FieldPath, FieldValue, Filter } from 'firebase-admin/firestore';
+import { assertPermission } from '../../http/middlewares/requirePermission.js';
+import { ehSugestaoDeRevisao, resultadoDoPainel } from '../../domain/produtos/sugestoesDeRevisao.js';
 import { AppError } from '../../domain/errors/AppError.js';
 import {
   assertFirestorePath,
@@ -124,6 +126,17 @@ export class FirestoreManagerDataGateway {
         mutation.somenteCriar = true;
         continue;
       }
+      // Cola B57-13t, item 38 (k): o resultado da revisao de unidade, por quem edita produto (products.edit),
+      // so na propria loja, so os campos do resultado, por mescla; o autor e a data vem do Core.
+      if (ehConferenciaDaRevisao(mutation, actor)) {
+        this.policy.assertActor(actor);
+        assertPermission(actor.permissions || { isAdmin: true, groupId: null, keys: [] }, 'products.edit');
+        mutation.data = resultadoDoPainel(mutation.data);
+        mutation.operation = 'set';
+        mutation.options = { merge: true };
+        mutation.conferenciaDaRevisao = true;
+        continue;
+      }
       await this.policy.assertMutation({ actor, mutation });
     }
     // Depois da politica: o carimbo nao passa pela lista de campos do painel, so o
@@ -134,6 +147,7 @@ export class FirestoreManagerDataGateway {
       }
     });
     await this.carimbarAutor(actor, normalized, sessaoId, origem);
+    await this.carimbarConferencia(actor, normalized, sessaoId);
 
     if (normalized.length === 1 && request.operation !== 'batch') {
       await this.applyMutation(normalized[0]);
@@ -184,6 +198,16 @@ export class FirestoreManagerDataGateway {
       });
       mutation.data = { ...mutation.data, registros: [...gravados, ...novos] };
     }
+  }
+
+  // Cola B57-13t, item 38 (k): quem conferiu (no formato do Log da equipe) e quando (hora do servidor).
+  async carimbarConferencia(actor, normalized, sessaoId) {
+    const conferencias = normalized.filter((mutation) => mutation.conferenciaDaRevisao);
+    if (!conferencias.length) return;
+    const conferidoPor = autorDaAcao(actor, await this.nomeDoComputador(actor.establishmentId, sessaoId));
+    conferencias.forEach((mutation) => {
+      mutation.data = { ...mutation.data, conferidoPor, conferidoEm: FieldValue.serverTimestamp() };
+    });
   }
 
   nomeDoComputador(establishmentId, sessaoId) {
@@ -494,6 +518,11 @@ function limiteDaConsulta(target) {
   const limite = (target?.constraints || []).find((constraint) => constraint?.kind === 'limit');
   const valor = Number(limite?.value);
   return Number.isInteger(valor) && valor > 0 ? Math.min(valor, MAX_QUERY_LIMIT) : null;
+}
+
+function ehConferenciaDaRevisao(mutation, actor) {
+  const mescla = (mutation.operation === 'set' && mutation.options?.merge === true) || mutation.operation === 'update';
+  return mescla && ehSugestaoDeRevisao(mutation.target.path, actor?.establishmentId);
 }
 
 function ehCriacaoDeAcaoDaEquipe(mutation, actor) {
