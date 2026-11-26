@@ -125,7 +125,8 @@ test('B57-16b item 11: o App Gerenciador le os chips por tipo e, ao concluir, so
     assert.equal(novo.corpo.data.criado, true);
     assert.deepEqual(
       { origem: novo.corpo.data.motivo.origem, salvoPor: novo.corpo.data.motivo.salvoPor, troca: novo.corpo.data.motivo.troca, remocao: novo.corpo.data.motivo.remocao, usos: novo.corpo.data.motivo.usos },
-      { origem: 'app', salvoPor: { id: 'f-caixa', nome: 'Bia Caixa' }, troca: false, remocao: true, usos: 1 },
+      // B57-16c, item 2 (a): sem a conta completa na sessao, o salvo por fica sem nome ate o commit seguinte.
+      { origem: 'app', salvoPor: { id: null, nome: null }, troca: false, remocao: true, usos: 1 },
     );
     const [log] = acoes(firestore);
     assert.equal(log.acao, 'motivo.criar');
@@ -150,7 +151,8 @@ test('B57-16b item 11: o web cria, edita e apaga, com os Logs e a origem; valida
     assert.equal(criado.status, 201);
     const { id } = criado.corpo.data.motivo;
     assert.equal(criado.corpo.data.motivo.origem, 'web');
-    assert.deepEqual(criado.corpo.data.motivo.salvoPor, { id: 'uid-dono', nome: 'Zero Grau' });
+    // B57-16c, item 2 (a): sem a conta completa na sessao, o salvo por fica sem nome ate o commit seguinte.
+    assert.deepEqual(criado.corpo.data.motivo.salvoPor, { id: null, nome: null });
     assert.equal((await chamar('POST', '/', { auth: DONO, corpo: { texto: 'produto vencido.', troca: true, remocao: false } })).status, 409);
     assert.equal((await chamar('POST', '/', { auth: DONO, corpo: { texto: 'Nada ligado', troca: false, remocao: false } })).status, 400);
     assert.equal((await chamar('POST', '/', { auth: DONO, corpo: { texto: '   ', troca: true, remocao: true } })).status, 400);
@@ -171,7 +173,7 @@ test('B57-16b item 11: o web cria, edita e apaga, com os Logs e a origem; valida
     assert.deepEqual(edicao.antes, { texto: 'Fora da validade' });
     assert.deepEqual(edicao.depois, { texto: 'Fora do prazo de validade' });
     assert.equal(edicao.origemDaAcao.caminho.join(' > '), 'Ajustes > Motivos da separação');
-    assert.equal(edicao.autor.tipo, 'contaDaLoja');
+    assert.equal(edicao.autor.tipo, 'funcionario', 'B57-16c, item 2 (a): sem a conta da loja na sessao ate o commit seguinte');
   } finally {
     ouvindo.close();
   }
