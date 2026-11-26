@@ -12,6 +12,7 @@ import { createEntregaDaLojaRoutes } from './http/routes/entregaDaLojaRoutes.js'
 import { createFormasDePagamentoRoutes } from './http/routes/formasDePagamentoRoutes.js';
 import { createSafrapayDaLojaRoutes } from './http/routes/safrapayDaLojaRoutes.js';
 import { createEntregadoresDaLojaRoutes } from './http/routes/entregadoresDaLojaRoutes.js';
+import { createMotivosDaSeparacaoRoutes } from './http/routes/motivosDaSeparacaoRoutes.js';
 import { createCadastroRoutes } from './http/routes/cadastroRoutes.js';
 import { createCatalogoRoutes } from './http/routes/catalogoRoutes.js';
 import { createCouponRoutes } from './http/routes/couponRoutes.js';
@@ -66,6 +67,7 @@ export function createApp({
   bannersNoAdmin = null,
   formasDePagamento = null,
   entregadoresDaLoja = null,
+  motivosDaSeparacao = null,
   verificarAppCheck,
   imagensDaLoja,
   pedidosDeLoja,
@@ -252,6 +254,16 @@ export function createApp({
     sessaoWeb,
     createEntregadoresDaLojaRoutes({ entregadoresDaLoja, requirePermission, accountForRequest }),
   );
+  // Motivos da separacao (cola B57-16b, item 11): so o Core le e grava MotivosDaSeparacao; o web e o App
+  // Gerenciador usam estas rotas (contrato B57-16b-contrato-motivos.md).
+  if (motivosDaSeparacao) {
+    app.use(
+      '/api/loja/motivos-da-separacao',
+      createFirebaseAuthMiddleware({ required: true }),
+      sessaoWeb,
+      createMotivosDaSeparacaoRoutes({ motivosDaSeparacao, requirePermission, accountForRequest }),
+    );
+  }
   // Entrega da propria loja: a mesma tela e o mesmo contrato do Admin, sem mudar o contrato.
   app.use(
     '/api/loja/entrega',

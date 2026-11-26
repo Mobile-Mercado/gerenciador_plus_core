@@ -22,6 +22,7 @@ import { ConjuntosDeIcones } from './application/admin/ConjuntosDeIcones.js';
 import { AparenciaDaHome } from './application/admin/AparenciaDaHome.js';
 import { BannersNoAdmin } from './application/admin/BannersNoAdmin.js';
 import { EntregadoresDaLoja } from './application/loja/EntregadoresDaLoja.js';
+import { MotivosDaSeparacao } from './application/loja/MotivosDaSeparacao.js';
 import { FormasDePagamento } from './application/loja/FormasDePagamento.js';
 import { FirestoreRest } from './infra/firebase/FirestoreRest.js';
 import { CatalogoDaLoja } from './application/catalogo/CatalogoDaLoja.js';
@@ -159,6 +160,7 @@ const app = createApp({
   }),
   formasDePagamento: new FormasDePagamento({ firestore }),
   entregadoresDaLoja: new EntregadoresDaLoja({ firestore }),
+  motivosDaSeparacao: new MotivosDaSeparacao({ firestore }),
   verificarAppCheck: (token) => getFirebaseAppCheck().verifyToken(token),
   imagensDaLoja,
   pedidosDeLoja: new PedidosDeLoja({ firestore, auth: firebaseAuth, jornada: jornadaDoCadastro }),

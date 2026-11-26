@@ -2,7 +2,8 @@
 // lotes (historicoProdutos_N). O Core grava, em cada registro novo:
 //   origemDaAcao: { tipo, tela, caminho, rota }
 // - tipo: 'web' (Gerenciador Web da loja), 'admin' (telas do Admin, ou o Admin agindo na loja pelo
-//   cabecalho X-Loja-Alvo) ou 'rotina' (rotina do Core, sem tela).
+//   cabecalho X-Loja-Alvo), 'app' (App Gerenciador, que manda tipo: 'app'; cola B57-16b, item 11) ou
+//   'rotina' (rotina do Core, sem tela).
 // - caminho: os nomes das telas, do menu ate a tela da acao, como o painel mostra ("Produtos" >
 //   "Editar produto"); tela: o ultimo deles.
 // - rota: o endereco da tela no painel ("/produtos/editar"); null na rotina.
@@ -14,8 +15,8 @@ const MAX_TELAS = 8;
 const MAX_NOME = 80;
 const MAX_ROTA = 200;
 
-export function cabecalhoDaOrigem({ rota = null, caminho = [] } = {}) {
-  return encodeURIComponent(JSON.stringify({ rota, caminho }));
+export function cabecalhoDaOrigem({ tipo, rota = null, caminho = [] } = {}) {
+  return encodeURIComponent(JSON.stringify({ ...(tipo ? { tipo } : {}), rota, caminho }));
 }
 
 function nomeValido(nome) {
@@ -41,7 +42,8 @@ export function origemDoCabecalho(valor, { porAdmin = false } = {}) {
     rota = lido.rota;
   }
   const doAdmin = porAdmin || rota === '/admin' || Boolean(rota?.startsWith('/admin/'));
-  return { tipo: doAdmin ? 'admin' : 'web', tela: caminho[caminho.length - 1], caminho, rota };
+  const tipo = doAdmin ? 'admin' : (lido.tipo === 'app' ? 'app' : 'web');
+  return { tipo, tela: caminho[caminho.length - 1], caminho, rota };
 }
 
 // Rotina do Core, sem tela: a origem e o nome da rotina (o mesmo do campo `origem` do registro).
