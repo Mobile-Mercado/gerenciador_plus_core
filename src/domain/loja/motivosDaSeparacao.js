@@ -5,10 +5,10 @@
 // - Os salvos (origem 'app' ou 'web') tem texto, troca, remocao, origem, salvoPor { id, nome }, salvoEm e usos.
 // - Ordem por uso: mais usos primeiro; empate, os padroes na ordem do item 10 e, depois, os salvos, do mais novo
 //   ao mais antigo.
-// - O chip mostra 24 caracteres (como a pessoa ve) e "…" quando o texto passa disso.
+// - O chip mostra 30 caracteres (como a pessoa ve; eram 24 ate a cola B57-16c) e "…" quando o texto passa disso.
 
 export const COLECAO_DOS_MOTIVOS = 'MotivosDaSeparacao';
-export const TAMANHO_DO_CHIP = 24;
+export const TAMANHO_DO_CHIP = 30;
 export const TAMANHO_DO_TEXTO = 200;
 
 export const MOTIVOS_PADRAO = Object.freeze([

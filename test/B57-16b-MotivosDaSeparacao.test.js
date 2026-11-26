@@ -33,8 +33,8 @@ test('B57-16b item 11: os 8 padroes do item 10, com id fixo e "usar em"', () => 
 
 test('B57-16b item 11: chip de 24 caracteres e comparacao sem maiuscula, espaco e ponto final', () => {
   assert.equal(chipDoMotivo('Sem estoque no momento'), 'Sem estoque no momento');
-  assert.equal(chipDoMotivo('Estamos sem opção equivalente'), 'Estamos sem opção equiva…');
-  assert.equal([...chipDoMotivo('Estamos sem opção equivalente').replace('…', '')].length, 24);
+  // B57-16c: o corte passou de 24 para 30 (tests/B57-16c-ChipDe30.test.js); o padrao cabe inteiro.
+  assert.equal(chipDoMotivo('Estamos sem opção equivalente'), 'Estamos sem opção equivalente');
   assert.equal(chipDoMotivo('  Fora da validade  '), 'Fora da validade');
   assert.equal(mesmoMotivo('Sem estoque no momento.', 'sem  estoque no momento'), true);
   assert.equal(mesmoMotivo('Sem estoque', 'Sem estoque no momento'), false);
