@@ -137,6 +137,11 @@ export class FirestoreManagerDataGateway {
         mutation.conferenciaDaRevisao = true;
         continue;
       }
+      // Cola B57-16c, item 1 (opcao B): fora a conferencia, a sugestao nao se sobrescreve nem se apaga pelo proxy
+      // (a carga e so pelo script, com acesso de servidor).
+      if (ehSugestaoDeRevisao(mutation.target.path, actor?.establishmentId)) {
+        throw new AppError('Acesso aos dados solicitado nao permitido.', { statusCode: 403, code: 'sugestao_de_revisao_so_conferencia' });
+      }
       await this.policy.assertMutation({ actor, mutation });
     }
     // Depois da politica: o carimbo nao passa pela lista de campos do painel, so o
