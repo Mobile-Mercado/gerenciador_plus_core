@@ -6,7 +6,7 @@ import { corpoDeImagem } from '../middlewares/corpoDeImagem.js';
 import { appDoClienteSchema, formasDePagamentoSchema } from './appDoClienteSchema.js';
 import {
   afetadasSchema, alterarBannerSchema, animacaoPadraoSchema, coresPadraoSchema, alterarModeloSchema, alvoDoArquivoSchema, aparenciaDaLojaSchema, arquivoDaAparenciaSchema,
-  bannerParamsSchema, conjuntoDaLojaSchema, conjuntoNomeSchema, iconeDoConjuntoSchema, modelosConsultaSchema, novoBannerSchema,
+  bannerParamsSchema, conjuntoDaLojaSchema, conjuntoNomeSchema, iconeComIaSchema, iconeDoConjuntoSchema, modelosConsultaSchema, novoBannerSchema,
   novoModeloSchema, padraoSchema, variacaoParamsSchema, voltarAoOriginalSchema,
 } from './aparenciaSchema.js';
 import { entregaSchema } from './entregaSchema.js';
@@ -121,7 +121,7 @@ const NOMES_DOS_BLOCOS_DA_HOME = Object.freeze({ topo: 'Topo', meio: 'Meio', fim
 export function createAdminRoutes({
   manageCatalogoPadrao, sugestoesDosClientes, pedidosDeLoja, lojaNoAdmin, franquias, administradores, dadosDoAdmin,
   manageImplantationPipelines, jornadaDeEntrada = null, entregaDaLoja = null, appDoClienteDaLoja = null,
-  formasDePagamento = null, instalacoesDosApps = null, conjuntosDeIcones = null, aparenciaDaLoja = null,
+  formasDePagamento = null, instalacoesDosApps = null, conjuntosDeIcones = null, iconesComIa = null, aparenciaDaLoja = null,
   aparenciaDaHome = null, bannersNoAdmin = null, alertasDoAdmin = null, integradorDaLoja = null, sessoesWeb = null,
 }) {
   const router = Router();
@@ -582,6 +582,19 @@ export function createAdminRoutes({
       response.locals.auditoria = { acao: 'conjunto_icones_criado', conjuntoId: conjunto.id, nome: conjunto.nome };
       response.status(201).json({ data: conjunto });
     }));
+
+    // Criador de icones com IA (Thay, 27/11): gera o icone de uma categoria e devolve a imagem; o
+    // Admin grava pela troca de icone so no "Salvar conjunto".
+    if (iconesComIa) {
+      router.post('/conjuntos-icones/gerar', asyncHandler(async (request, response) => {
+        const entrada = iconeComIaSchema.parse(request.body);
+        const resultado = await iconesComIa.gerar(entrada, atorDe(request));
+        response.locals.auditoria = {
+          acao: 'icone_gerado_com_ia', categoriaId: entrada.categoriaId, conjuntoId: entrada.conjuntoId, qualidade: entrada.qualidade, custoUsd: resultado.custoUsd,
+        };
+        response.json({ data: resultado });
+      }));
+    }
 
     router.patch('/conjuntos-icones/:conjuntoId', asyncHandler(async (request, response) => {
       const { nome } = conjuntoNomeSchema.parse(request.body);
