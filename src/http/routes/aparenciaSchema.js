@@ -130,3 +130,15 @@ export const animacaoPadraoSchema = z.object({
   nome: z.string().max(120).optional(),
   incluirAnimacaoPropria: z.boolean().optional(),
 }).strict();
+
+// Criador de icones com IA (Thay, 27/11): uma categoria por chamada.
+export const iconeComIaSchema = z.object({
+  categoriaId: z.string().trim().min(1).max(120).regex(/^[^/]+$/),
+  categoria: z.string().trim().min(1).max(80),
+  estilo: z.enum(['3d', 'linha', 'plano', 'aquarela']).default('3d'),
+  detalhes: z.string().trim().max(300).default(''),
+  qualidade: z.enum(['low', 'medium', 'high']).default('medium'),
+  transparente: z.boolean().default(true),
+  referenciaConjuntoId: z.string().trim().min(1).max(120).regex(/^[^/]+$/).nullable().default(null),
+  conjuntoId: z.string().trim().min(1).max(120).regex(/^[^/]+$/).nullable().default(null),
+});

@@ -19,6 +19,7 @@ import { BannersDaLoja } from './application/loja/BannersDaLoja.js';
 import { AppDoClienteDaLoja } from './application/loja/AppDoClienteDaLoja.js';
 import { AparenciaDaLoja } from './application/loja/AparenciaDaLoja.js';
 import { ConjuntosDeIcones } from './application/admin/ConjuntosDeIcones.js';
+import { IconesComIa } from './application/admin/IconesComIa.js';
 import { AparenciaDaHome } from './application/admin/AparenciaDaHome.js';
 import { BannersNoAdmin } from './application/admin/BannersNoAdmin.js';
 import { EntregadoresDaLoja } from './application/loja/EntregadoresDaLoja.js';
@@ -139,6 +140,8 @@ const cadastroDeLoja = new CadastroDeLoja({
   imagens: imagensDaLoja,
   jornada: jornadaDoCadastro,
 });
+// Conjuntos de icones e o criador com IA (Thay, 27/11), que le os icones de referencia daqui.
+const conjuntosDeIcones = new ConjuntosDeIcones({ firestore, bucket: getStorageBucket(env.STORAGE_BUCKET) });
 const app = createApp({
   cadastroDeLoja,
   jornadaDoCadastro,
@@ -148,7 +151,8 @@ const app = createApp({
   entregaDaLoja: new EntregaDaLoja({ firestore }),
   appDoClienteDaLoja: new AppDoClienteDaLoja({ firestore }),
   // Aparencias (cola B56-04): conjuntos de icones, Ofertas e Abertura.
-  conjuntosDeIcones: new ConjuntosDeIcones({ firestore, bucket: getStorageBucket(env.STORAGE_BUCKET) }),
+  conjuntosDeIcones,
+  iconesComIa: new IconesComIa({ apiKey: env.OPENAI_API_KEY, conjuntosDeIcones }),
   aparenciaDaLoja: new AparenciaDaLoja({ firestore, bucket: getStorageBucket(env.STORAGE_BUCKET) }),
   // Cola B56-08: variacoes, modelos e padroes da Inicio, e os banners da loja pelo Admin.
   aparenciaDaHome: new AparenciaDaHome({ firestore }),
