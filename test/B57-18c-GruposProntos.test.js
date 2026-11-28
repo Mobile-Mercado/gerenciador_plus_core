@@ -42,7 +42,7 @@ test('aprovar cria Separador, Caixa e Gerente com as chaves da tabela, sem isAdm
     assert.ok(grupo(id).createdAt, id);
   }
   assert.deepEqual(new Set(grupo('caixa').permissions), new Set(['requests.view', 'requests.update_status',
-    'requests.cancel', 'clients.view', 'products.view', 'coupons.view', 'chat.view', 'chat.send']));
+    'requests.cancel', 'requests.remove_item', 'clients.view', 'products.view', 'coupons.view', 'chat.view', 'chat.send']));
 });
 
 test('separador sem chave de produto alem de Ver produtos; gerente sem gerenciar funcionarios e grupos, com financas', async () => {
@@ -74,4 +74,14 @@ test('aprovar que falha ao gravar nao deixa loja nem grupo', async () => {
   banco.batch = () => { const lote = batchOriginal(); lote.commit = async () => { throw new Error('falha de rede'); }; return lote; };
   await assert.rejects(new PedidosDeLoja({ firestore: banco, auth, serverTimestamp: HORA }).aprovar('pedido-novo', {}), /falha de rede/);
   assert.equal([...banco.docs.keys()].some((caminho) => caminho.startsWith('estabelecimentos/')), false);
+});
+
+// Cola do Thay B57-18e, item 4a: as tres permissoes da separacao nos grupos prontos.
+test('B57-18e: Separador e Gerente com as tres da separacao; Caixa so com Remover item do pedido', async () => {
+  const { grupo } = await aprovar();
+  const TRES = ['requests.remove_item', 'requests.hide_until_restock', 'requests.trash_discontinued'];
+  for (const id of ['separador', 'gerente']) TRES.forEach((chave) => assert.ok(grupo(id).permissions.includes(chave), `${id}: ${chave}`));
+  assert.ok(grupo('caixa').permissions.includes('requests.remove_item'));
+  assert.ok(!grupo('caixa').permissions.includes('requests.hide_until_restock'));
+  assert.ok(!grupo('caixa').permissions.includes('requests.trash_discontinued'));
 });
