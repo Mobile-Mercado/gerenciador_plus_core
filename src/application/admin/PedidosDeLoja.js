@@ -2,6 +2,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 import { COLECAO_PEDIDOS, STATUS } from '../cadastro/CadastroDeLoja.js';
 import { coresPadraoDe } from '../../domain/loja/primeiroAcesso.js';
+import { GRUPOS_PRONTOS } from '../../domain/loja/gruposProntos.js';
 
 // Estabelecimentos > Pedidos de loja (Admin). Lista os pedidos do cadastro pelo app gerenciador,
 // em pedidosDeLoja/{id}, e decide: aprovar, recusar com motivo ou marcar "Em conversa".
@@ -154,6 +155,12 @@ export class PedidosDeLoja {
     try {
       const lote = this.firestore.batch();
       lote.create(lojaRef, this.lojaDoPedido(pedido, lojaRef.id, ator, agora, cores));
+      // Grupos prontos da loja nova (cola do Thay B57-18c, item 6), no mesmo lote da loja.
+      for (const grupo of GRUPOS_PRONTOS) {
+        lote.create(lojaRef.collection('PermissionGroups').doc(grupo.id), {
+          name: grupo.name, permissions: [...grupo.permissions], isAdmin: false, createdAt: agora,
+        });
+      }
       lote.update(pedido.ref, {
         status: STATUS.APROVADA,
         lojaId: lojaRef.id,
