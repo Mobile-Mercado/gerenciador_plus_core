@@ -152,7 +152,7 @@ const app = createApp({
   appDoClienteDaLoja: new AppDoClienteDaLoja({ firestore }),
   // Aparencias (cola B56-04): conjuntos de icones, Ofertas e Abertura.
   conjuntosDeIcones,
-  iconesComIa: new IconesComIa({ apiKey: env.OPENAI_API_KEY, conjuntosDeIcones }),
+  iconesComIa: new IconesComIa({ apiKey: env.OPENAI_API_KEY, firestore, conjuntosDeIcones }),
   aparenciaDaLoja: new AparenciaDaLoja({ firestore, bucket: getStorageBucket(env.STORAGE_BUCKET) }),
   // Cola B56-08: variacoes, modelos e padroes da Inicio, e os banners da loja pelo Admin.
   aparenciaDaHome: new AparenciaDaHome({ firestore }),

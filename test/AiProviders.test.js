@@ -104,3 +104,26 @@ test('icone com IA: pedido, chamada ao GPT Image 2.5 flare, custo pelo uso e o a
   const falha = new IconesComIa({ apiKey: 'k', fetcher: async () => ({ ok: false, json: async () => ({ error: { message: 'quota' } }) }) });
   await assert.rejects(falha.gerar({ categoria: 'X' }), /não gerou o ícone \(quota\)/);
 });
+
+test('icone com IA: o pedido leva as subcategorias ligadas da lista padrao', async () => {
+  assert.doesNotMatch(pedidoDoIcone({ categoria: 'Bazar' }), /reúne/);
+  const docs = [
+    { nome: 'Pilhas' }, { nome: 'Descartáveis' }, { name: 'Utilidades domésticas' },
+    { nome: 'Velas', isActive: false }, { nome: 'Antiga', arquivada: true },
+  ].map((data) => ({ data: () => data }));
+  const consultas = [];
+  const firestore = { collection: (nome) => ({ where: (campo, op, valor) => { consultas.push([nome, campo, op, valor]); return { get: async () => ({ docs }) }; } }) };
+  const corpos = [];
+  const fetcher = async (url, opcoes) => {
+    corpos.push(JSON.parse(opcoes.body));
+    return { ok: true, json: async () => ({ data: [{ b64_json: Buffer.from('png').toString('base64') }] }) };
+  };
+  const ia = new IconesComIa({ apiKey: 'k', firestore, fetcher, reduzir: async () => Buffer.from('webp') });
+  await ia.gerar({ categoriaId: 'bazar', categoria: 'Bazar', qualidade: 'low' });
+  assert.deepEqual(consultas[0], ['subcategoriasProdutos', 'categoriaProdutoId', '==', 'bazar']);
+  assert.match(corpos[0].prompt, /A categoria reúne: Descartáveis, Pilhas, Utilidades domésticas\. Mostre de 1 a 3 produtos/);
+  assert.doesNotMatch(corpos[0].prompt, /Velas|Antiga/);
+  const semLeitura = new IconesComIa({ apiKey: 'k', firestore: { collection: () => { throw new Error('fora'); } }, fetcher, reduzir: async () => Buffer.from('webp') });
+  await semLeitura.gerar({ categoriaId: 'bazar', categoria: 'Bazar', qualidade: 'low' });
+  assert.doesNotMatch(corpos[1].prompt, /reúne/);
+});
