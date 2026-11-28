@@ -622,6 +622,14 @@ export function createAdminRoutes({
       response.json({ data: resultado.conjunto });
     }));
 
+    // Baixar o icone (Thay, 28/11): so leitura, sem auditoria.
+    router.get('/conjuntos-icones/:conjuntoId/icones/:categoriaId/arquivo', asyncHandler(async (request, response) => {
+      const { conteudo, contentType } = await conjuntosDeIcones.arquivoDoIcone(request.params.conjuntoId, request.params.categoriaId);
+      response.set('Content-Type', contentType);
+      response.set('Cache-Control', 'no-store');
+      response.send(conteudo);
+    }));
+
     router.delete('/conjuntos-icones/:conjuntoId/icones/:categoriaId', asyncHandler(async (request, response) => {
       const { conjuntoId, categoriaId } = request.params;
       const resultado = await conjuntosDeIcones.removerIcone(conjuntoId, categoriaId, atorDe(request));
