@@ -1,0 +1,589 @@
+rules_version = '2';
+
+// Regra de processo (Thay, 13/10/2026): as regras se publicam só a partir deste arquivo
+// commitado, nunca editadas no console do Firebase.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Bloqueia tudo por padrão
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===== Admin antigo (mobile_old_web_platform, appmobileprod-19505.web.app) =====
+    // So login, guarda e as telas /admin/categorias e /admin/subcategorias.
+    // Tudo restrito a quem tem usersAdmin/{uid}.isAdmin == true. Nenhuma linha
+    // existente muda; sao so colecoes que nao tinham regra (caiam no bloqueio acima).
+    function isAdminAntigo() {
+      return request.auth != null
+        && get(/databases/$(database)/documents/usersAdmin/$(request.auth.uid)).data.get('isAdmin', false) == true;
+    }
+
+    // Guarda e login (auth.service.ts:62-68 e :160-218): cada um le so o proprio
+    // documento, e so se for admin. Ninguem grava pelo navegador.
+    match /usersAdmin/{uid} {
+      allow read: if request.auth != null
+        && request.auth.uid == uid
+        && resource.data.get('isAdmin', false) == true;
+      allow write: if false;
+    }
+
+    // Guarda (auth.service.ts:190-202): lista inteira, so leitura, so admin.
+    match /franquias/{franquiaId} {
+      allow read: if isAdminAntigo();
+      allow write: if false;
+    }
+
+    // Lista padrao: /admin/categorias e /admin/subcategorias leem, criam,
+    // atualizam e apagam (categorias.component.ts:71,156; categorias-detail-dialog
+    // :114-116,:136,:148,:157; subcategorias.component.ts:75,:169;
+    // subcategorias-detail-dialog :47,:61,:67).
+    match /categoriasProdutos/{categoriaId} {
+      allow read, write: if isAdminAntigo();
+    }
+    match /subcategoriasProdutos/{subcategoriaId} {
+      allow read, write: if isAdminAntigo();
+    }
+
+    // Copias antigas por loja: as telas so consultam e atualizam
+    // (categorias-detail-dialog :174,:189; subcategorias-detail-dialog :90,:97,:106;
+    // subcategorias.component.ts :191,:214,:229). Nada no sistema atual le estas colecoes.
+    match /categoriasProdutosEstabelecimentos/{id} {
+      allow read, update: if isAdminAntigo();
+    }
+    match /subcategoriasProdutosEstabelecimento/{id} {
+      allow read, update: if isAdminAntigo();
+    }
+    // ===== fim do admin antigo =====
+
+    // Conjuntos de icones (cola B56-04): so o Core (rotas do Admin) grava, e a API le, as duas
+    // pelo Admin SDK. Nenhum app nem painel le ou grava direto.
+    match /conjuntosIcones/{conjuntoId} {
+      allow read, write: if false;
+    }
+    // Modelos e padroes da Inicio (cola B56-08): so o Core grava e le, pelo Admin SDK.
+    match /modelosAparencia/{modeloId} {
+      allow read, write: if false;
+    }
+    match /aparenciaPadrao/{documentoId} {
+      allow read, write: if false;
+    }
+    // Animacao padrao da Abertura de todas as lojas (cola B56-24, A2): o app le antes do login
+    // (so o nome e a URL do .json, que ja e publica); so o Core grava.
+    match /aparenciaPadrao/abertura {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Users - apenas o próprio usuário pode ler seus dados
+    // O Core acha a loja do dono pelo Users (campo id e userReference da loja): quem cria o
+    // proprio Users so grava no id o id do documento, como os apps gravam
+    // (mobile_cliente user_service.dart:23-54, mobile_gerenciador register_user_service.dart:15-46),
+    // e depois id e userAuthId nao mudam mais (13/10/2026).
+    match /Users/{userId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.resource.data.userAuthId == request.auth.uid
+                    && request.resource.data.get('id', userId) == userId;
+      allow update: if request.auth != null
+                    && request.auth.uid == resource.data.userAuthId
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['id', 'userAuthId']);
+      allow delete: if request.auth != null
+                    && request.auth.uid == resource.data.userAuthId;
+
+      // ShoppingCart - apenas o próprio dono
+      match /ShoppingCart/{cartId} {
+        allow read, write: if request.auth != null &&
+          request.auth.uid == get(/databases/$(database)/documents/Users/$(userId)).data.userAuthId;
+
+        match /Items/{itemId} {
+          allow read, write: if request.auth != null &&
+            request.auth.uid == get(/databases/$(database)/documents/Users/$(userId)).data.userAuthId;
+        }
+      }
+
+      // Addresses - apenas o próprio dono
+      match /Addresses/{addressId} {
+        allow read, write: if request.auth != null &&
+          request.auth.uid == get(/databases/$(database)/documents/Users/$(userId)).data.userAuthId;
+      }
+      // Cupons fiscais do cliente (contrato da versao 55, item 8, ajustado em 22/10/2026; cola RP-14).
+      // Id = chave de acesso de 44 numeros (foto sem chave: id livre). So o dono le, cria e apaga;
+      // ninguem altera pelo app. O app grava a nota lida na pagina da Sefaz (origem 'qr', situacao
+      // 'lido') ou a foto do cupom (origem 'foto', situacao 'aguardando'). Documento do consumidor
+      // sempre mascarado. Origem 'pedido' e so do servidor.
+      match /CuponsFiscais/{cupomId} {
+        function donoDoCupom() {
+          return request.auth != null &&
+            request.auth.uid == get(/databases/$(database)/documents/Users/$(userId)).data.userAuthId;
+        }
+        function documentoMascarado(documento) {
+          return documento == null || (documento is string
+            && (documento.matches('^[*]{3}[.][*]{3}[.][0-9]{3}-[0-9]{2}$')
+              || documento.matches('^[*]{2}[.][*]{3}[.][*]{3}/[0-9]{4}-[0-9]{2}$')));
+        }
+        function cupomLido(cupom) {
+          return cupom.keys().hasOnly(['chaveAcesso', 'urlQr', 'origem', 'situacao', 'uf', 'emitente', 'itens',
+              'total', 'pagamentos', 'tributos', 'emitidoEm', 'numero', 'serie', 'protocolo',
+              'consumidorDocumento', 'criadoEm', 'atualizadoEm'])
+            && cupom.origem == 'qr' && cupom.situacao == 'lido'
+            && cupomId.matches('^[0-9]{44}$') && cupom.chaveAcesso == cupomId
+            && cupom.emitente is map && cupom.itens is list && cupom.pagamentos is list
+            && cupom.total is number && cupom.emitidoEm is timestamp
+            && cupom.numero is string && cupom.serie is string && cupom.protocolo is string
+            && documentoMascarado(cupom.get('consumidorDocumento', null))
+            && cupom.criadoEm == request.time;
+        }
+        function cupomFotografado(cupom) {
+          return cupom.keys().hasOnly(['chaveAcesso', 'urlQr', 'origem', 'situacao', 'fotoPath', 'criadoEm', 'atualizadoEm'])
+            && cupom.origem == 'foto' && cupom.situacao == 'aguardando'
+            && cupom.fotoPath is string && cupom.fotoPath.size() > 0 && cupom.fotoPath.size() <= 300
+            && (cupom.get('chaveAcesso', null) == null || cupom.chaveAcesso.matches('^[0-9]{44}$'))
+            && cupom.criadoEm == request.time;
+        }
+        allow read, delete: if donoDoCupom();
+        allow create: if donoDoCupom() && (cupomLido(request.resource.data) || cupomFotografado(request.resource.data));
+        allow update: if false;
+      }
+    }
+
+    // Pedido de retirada pronto (PurchaseStatus.readyForPickup) nao volta para um status anterior
+    // (cola RP-13, decisao do Thay de 21/10/2026): o app Gerenciador antigo nao conhece o status,
+    // mostra o pedido como pendente, e o "Aceitar" dele regravaria accepted por cima.
+    function voltaDaRetirada() {
+      return resource.data.get('currentPurchaseStatus', '') == 'PurchaseStatus.readyForPickup'
+        && request.resource.data.get('currentPurchaseStatus', '') in [
+          'PurchaseStatus.pending', 'PurchaseStatus.accepted', 'PurchaseStatus.separatingOrder',
+          'pending', 'accepted', 'separatingOrder'];
+    }
+
+    // PurchaseRequests - apenas usuários autenticados do estabelecimento
+    match /PurchaseRequests/{orderId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null && !voltaDaRetirada();
+      allow delete: if false;
+
+      // AuditLog só é escrito pelas Cloud Functions (Admin SDK, ignora estas
+      // regras). Cliente nunca escreve aqui, senão o log de auditoria vira forjável.
+      match /AuditLog/{auditId} {
+        allow read: if request.auth != null;
+        allow write: if false;
+      }
+    }
+
+    // Coupons - leitura para clientes autenticados (tela de cupons e checkout);
+    // escrita só pela Cloud Function de gestão (Admin SDK, ignora estas regras).
+    match /Coupons/{couponId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+
+      // Redemptions guarda histórico de uso por cliente - nunca lido/escrito
+      // pelo client, só pelas Cloud Functions aplicarCupom/confirmarPedido.
+      match /Redemptions/{userId} {
+        allow read, write: if false;
+      }
+    }
+
+    // CouponRequests - pedido de cupom automático pelo sininho da tela de
+    // cupons do app do cliente. O client só cria; leitura fica para o
+    // gerenciador via backend (Admin SDK, ignora estas regras).
+    match /CouponRequests/{requestId} {
+      allow create: if request.auth != null;
+      allow read, update, delete: if false;
+    }
+
+    // PaymentMethods - catálogo de formas de pagamento, só leitura
+    // (mesmo padrão de CardFlags); sem esta regra a tela Formas de
+    // pagamento do gerenciador fica em branco.
+    match /PaymentMethods/{methodId} {
+      allow read: if request.auth != null;
+    }
+
+    // Avaliações de pedido - usuários autenticados
+    match /PurchaseReviews/{reviewId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+    }
+
+    // Bandeiras de cartão - referência, só leitura
+    match /CardFlags/{flagId} {
+      allow read: if request.auth != null;
+    }
+
+    // Categorias de estabelecimento - referência, só leitura
+    match /categoriasEstabelecimento/{categoryId} {
+      allow read: if request.auth != null;
+    }
+
+    // Cidades - referência, só leitura
+    match /cidades/{cityId} {
+      allow read: if request.auth != null;
+    }
+
+    // Estabelecimentos
+    match /estabelecimentos/{estabId} {
+      // isAdminOf lê só o claim do token - sem get(), gratuita.
+      function isAdminOf(estId) {
+        return request.auth != null && request.auth.token.adminOf == estId;
+      }
+      // isFullAdmin e hasPermission fazem get() em PermissionGroups -
+      // usar só em escrita sensível, nunca em leitura de alto volume.
+      function isFullAdmin(estId) {
+        return isAdminOf(estId) &&
+          get(/databases/$(database)/documents/estabelecimentos/$(estId)/PermissionGroups/$(request.auth.token.groupId)).data.isAdmin == true;
+      }
+      function hasPermission(estId, perm) {
+        return isAdminOf(estId) && (
+          isFullAdmin(estId) ||
+          perm in get(/databases/$(database)/documents/estabelecimentos/$(estId)/PermissionGroups/$(request.auth.token.groupId)).data.permissions
+        );
+      }
+
+      // Leitura intocada: o boot anônimo do whitelabel depende dela
+      // (caso whitelabel-boot-sem-sessao). Loja nova nasce só pelo servidor
+      // (POST /api/cadastro/loja do Core, Admin SDK), desde 13/10/2026; update só
+      // para o admin do próprio. Com o create fechado, credencial e userReference só se conferem
+      // no update: a loja nasce no "Aprovar" do Admin, com o userReference gravado pelo Core.
+      allow read: if request.auth != null;
+      allow create: if false;
+      allow update: if isAdminOf(estabId) && camposDoAdminIguais()
+        && semCredencialNova(request.resource.data, resource.data);
+      allow delete: if false;
+
+      // Campos que so o Admin muda (pelo Core, Admin SDK): o lojista com adminOf grava o resto da
+      // loja, mas estes so passam com o mesmo valor. scheduling.contracted e comparado pelo
+      // valor, porque o lojista ainda muda scheduling.enabled. userReference (RP-68, A.1): o
+      // Core acha o dono da loja por ele (findAccountByUid), entao o lojista nao troca, nao
+      // acrescenta nem apaga; a gravacao sem o campo, ou com o mesmo valor, passa.
+      // Aparencias (cola B56-04): aparencia (conjunto de icones), ofertas, abertura e primeiraTela
+      // so pelo Core, como o aparenciaHome; o fundo de Ofertas do lojista vai pela rota do Core.
+      // Cola B56-24 (A2): os blocos da jornada Primeiro acesso tambem so pelo Core.
+      // Cola B56-25 (item 8): as cores da loja (primaryColor e secondaryColor) so pelo Admin.
+      // Cola B57-01b (item C6): a cor do selo de desconto (discountBadgeColor) so pelo Admin, como o offerColor.
+      function camposDoAdminIguais() {
+        let mudou = request.resource.data.diff(resource.data).affectedKeys();
+        return !mudou.hasAny(['isActive', 'status', 'motivoRecusa', 'aprovadoPor', 'aprovadoEm',
+            'recusadoPor', 'recusadoEm', 'enviadoEm', 'origemCadastro', 'cnpjConferido', 'offerColor',
+            'featureFlags', 'aparenciaHome', 'userReference',
+            'aparencia', 'ofertas', 'abertura', 'primeiraTela',
+            'boasVindas', 'login', 'codigoSms', 'folhaNome', 'folhaEndereco',
+            'primaryColor', 'secondaryColor', 'discountBadgeColor'])
+          && request.resource.data.get('scheduling', {}).get('contracted', null)
+            == resource.data.get('scheduling', {}).get('contracted', null);
+      }
+
+      // Credencial da Safrapay fora do documento da loja (RP-57, b02c87f): ela fica em
+      // safrapayMerchants/{loja}, que so o Admin SDK le. O lojista nao grava valor de credencial
+      // em safrapay, paymentGateway nem paymentGateway.safrapay: cada campo fica ausente, nulo,
+      // vazio ou igual ao que ja esta gravado na mesma posicao. O App Gerenciador publicado manda
+      // merchantId e merchantToken vazios numa loja sem credencial, e isso continua aceito. Os
+      // aliases sao os que a API tambem le (companyPaymentConfig.js). RP-68, A.2: a escolha da
+      // credencial tambem fica so com o Admin: merchantRef e merchantConfigId (qual documento de
+      // safrapayMerchants a API usa) e useDefaultMerchant (a credencial padrao da Mobile).
+      // useDefaultMerchant false conta como vazio, porque a API so usa a padrao com true, "true"
+      // ou 1 (isEnabled); qualquer outro valor novo e recusado. enabled fica livre.
+      function mapaDe(valor) {
+        return valor is map ? valor : {};
+      }
+      function credencialLivre(novo, antigo, campo) {
+        return !(campo in novo) || novo[campo] == null || novo[campo] == '' ||
+          (campo in antigo && novo[campo] == antigo[campo]);
+      }
+      function mapaSemCredencialNova(novoValor, antigoValor) {
+        let novo = mapaDe(novoValor);
+        let antigo = mapaDe(antigoValor);
+        return credencialLivre(novo, antigo, 'merchantId') &&
+          credencialLivre(novo, antigo, 'merchantToken') &&
+          credencialLivre(novo, antigo, 'accessToken') &&
+          credencialLivre(novo, antigo, 'webhookSecret') &&
+          credencialLivre(novo, antigo, 'safrapayMerchantId') &&
+          credencialLivre(novo, antigo, 'safrapayMerchantToken') &&
+          credencialLivre(novo, antigo, 'token') &&
+          credencialLivre(novo, antigo, 'merchantRef') &&
+          credencialLivre(novo, antigo, 'merchantConfigId') &&
+          (credencialLivre(novo, antigo, 'useDefaultMerchant') || novo.useDefaultMerchant == false);
+      }
+      function semCredencialNova(novo, antigo) {
+        return mapaSemCredencialNova(novo.get('safrapay', {}), antigo.get('safrapay', {})) &&
+          mapaSemCredencialNova(novo.get('paymentGateway', {}), antigo.get('paymentGateway', {})) &&
+          mapaSemCredencialNova(
+            mapaDe(novo.get('paymentGateway', {})).get('safrapay', {}),
+            mapaDe(antigo.get('paymentGateway', {})).get('safrapay', {}));
+      }
+
+      // Visita do dia gravada pelo app do cliente (company_visits_service.dart), que
+      // manda estes campos todos; só viewsCount sobe, e de 1 em 1.
+      function contadorIgual(campo) {
+        return request.resource.data.get(campo, 0) == resource.data.get(campo, 0);
+      }
+      function soAcrescentado(campo) {
+        return !(campo in request.resource.data.diff(resource.data).affectedKeys()) || !(campo in resource.data);
+      }
+      function camposDaVisita() {
+        return ['id', 'appViewsCount', 'canceledOrdersCount', 'completedPurchasesCount',
+          'deniedRequestsCount', 'dissatisfiedCustomersCount', 'newOrdersCount',
+          'ordersDeliveredCount', 'riskOfDelayCount', 'shoppingStartedCount', 'totalSalesValue',
+          'viewsCount', 'withinTheTimeLimitCount', 'date', 'createdAt', 'updatedAt'];
+      }
+      function contadoresZerados(dados) {
+        return dados.get('appViewsCount', 0) == 0 && dados.get('canceledOrdersCount', 0) == 0
+          && dados.get('completedPurchasesCount', 0) == 0 && dados.get('deniedRequestsCount', 0) == 0
+          && dados.get('dissatisfiedCustomersCount', 0) == 0 && dados.get('newOrdersCount', 0) == 0
+          && dados.get('ordersDeliveredCount', 0) == 0 && dados.get('riskOfDelayCount', 0) == 0
+          && dados.get('shoppingStartedCount', 0) == 0 && dados.get('totalSalesValue', 0) == 0
+          && dados.get('withinTheTimeLimitCount', 0) == 0;
+      }
+      function visitaNova(statId) {
+        return request.auth != null
+          && request.resource.data.keys().hasOnly(camposDaVisita())
+          && request.resource.data.get('id', statId) == statId
+          && request.resource.data.viewsCount == 1
+          && request.resource.data.get('updatedAt', request.time) == request.time
+          && contadoresZerados(request.resource.data);
+      }
+      function maisUmaVisita() {
+        return request.auth != null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(camposDaVisita())
+          && request.resource.data.viewsCount == resource.data.get('viewsCount', 0) + 1
+          && contadorIgual('appViewsCount') && contadorIgual('canceledOrdersCount')
+          && contadorIgual('completedPurchasesCount') && contadorIgual('deniedRequestsCount')
+          && contadorIgual('dissatisfiedCustomersCount') && contadorIgual('newOrdersCount')
+          && contadorIgual('ordersDeliveredCount') && contadorIgual('riskOfDelayCount')
+          && contadorIgual('shoppingStartedCount') && contadorIgual('totalSalesValue')
+          && contadorIgual('withinTheTimeLimitCount')
+          && soAcrescentado('id') && soAcrescentado('date') && soAcrescentado('createdAt')
+          && (!('updatedAt' in request.resource.data.diff(resource.data).affectedKeys())
+            || request.resource.data.updatedAt == request.time);
+      }
+
+      // Coleções administrativas do sistema de grupos de permissão.
+      // Escrita sempre negada: só as Cloud Functions (Admin SDK) gravam.
+      match /AdminUsers/{uid} {
+        allow read: if isAdminOf(estabId);
+        allow write: if false;
+      }
+
+      match /PermissionGroups/{groupId} {
+        allow read: if isAdminOf(estabId);
+        allow write: if false;
+      }
+
+      match /AdminAuditLogs/{logId} {
+        allow read: if hasPermission(estabId, 'admin_users.view');
+        allow write: if false;
+      }
+
+      match /Products/{productId} {
+        allow read: if request.auth != null;
+        allow write: if hasPermission(estabId, 'products.edit');
+        // Separação (cola do Thay B57-18e, item 2): "Tirar produto do app até repor" e "Excluir
+        // produto que não vendemos mais" gravam só isActive ou isTrashed e a marca da equipe, sem
+        // precisar de "Editar produto". Nome, preço e estoque continuam só com products.edit.
+        allow update: if hasPermission(estabId, 'requests.hide_until_restock')
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['isActive', 'retiradoPelaEquipe']);
+        allow update: if hasPermission(estabId, 'requests.trash_discontinued')
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['isTrashed', 'retiradoPelaEquipe']);
+      }
+
+      match /Products/{productId}/barCode/{codeId} {
+        allow read: if request.auth != null;
+        allow write: if hasPermission(estabId, 'products.edit');
+      }
+
+      match /paymentMethods/{methodId} {
+        allow read: if request.auth != null;
+        allow write: if isAdminOf(estabId);
+      }
+
+      // Subcoleções da loja: grava só o admin da loja (claim adminOf) ou o servidor
+      // (Admin SDK, que ignora estas regras). Exceções fechadas: DailyStats (visita) e
+      // Suggestions (só criar), que o app do cliente grava sem claim.
+      match /PurchaseRequests/{orderId} {
+        allow read: if request.auth != null;
+        allow create: if isAdminOf(estabId);
+        allow update: if isAdminOf(estabId) && !voltaDaRetirada();
+        allow delete: if false;
+      }
+
+      match /Categories/{categoryId} {
+        allow read: if request.auth != null;
+        allow write: if isAdminOf(estabId);
+      }
+
+      match /Subcategories/{subcategoryId} {
+        allow read: if request.auth != null;
+        allow write: if isAdminOf(estabId);
+      }
+
+      match /Stats/{statId} {
+        allow read: if request.auth != null;
+        allow write: if isAdminOf(estabId);
+      }
+
+      // Quem só tem login grava só a visita do dia: viewsCount sobe 1 (ou nasce 1), os
+      // outros contadores ficam como estão. O resto, só o admin da loja ou o servidor.
+      match /DailyStats/{statId} {
+        allow read: if request.auth != null;
+        allow create: if isAdminOf(estabId) || visitaNova(statId);
+        allow update: if isAdminOf(estabId) || maisUmaVisita();
+        allow delete: if isAdminOf(estabId);
+      }
+
+      match /MonthlyStats/{statId} {
+        allow read: if request.auth != null;
+        allow write: if isAdminOf(estabId);
+      }
+
+      match /Banners/{bannerId} {
+        allow read: if request.auth != null;
+        allow write: if isAdminOf(estabId);
+      }
+
+      match /ProductCategories/{categoryId} {
+        allow read: if request.auth != null;
+        allow write: if isAdminOf(estabId);
+      }
+
+      match /ProductSubcategories/{subcategoryId} {
+        allow read: if request.auth != null;
+        allow write: if isAdminOf(estabId);
+      }
+
+      match /NotificationViewState/{group} {
+        allow read: if request.auth != null;
+        allow write: if isAdminOf(estabId);
+      }
+
+      match /implantacaoGrenciador/{automationId} {
+        allow read: if request.auth != null;
+        allow write: if isAdminOf(estabId);
+      }
+
+      // Logs do integrador - escritos so pelo Admin SDK, nas Cloud Functions
+      // saveIntegrationCycleLog e saveIntegrationHeartbeat, que ignoram estas
+      // regras. Cliente nunca escreve.
+      match /IntegrationStatus/{docId} {
+        allow read: if request.auth != null;
+        allow write: if false;
+      }
+
+      match /IntegrationLogs/{cycleId} {
+        allow read: if request.auth != null;
+        allow write: if false;
+      }
+
+      match /IntegrationLogItems/{itemId} {
+        allow read: if request.auth != null;
+        allow write: if false;
+      }
+
+      // Registro das acoes da equipe (cola do Thay B57-02, 18/11, item A8). O Gerenciador web
+      // grava pelo servidor (Admin SDK, que ignora estas regras); o App Gerenciador grava
+      // direto, so criando, com origem 'app', a hora do servidor e os campos do formato do web
+      // (registrarAcao.js) mais a versao do app e o aparelho. Ninguem muda nem apaga.
+      match /AcoesEquipe/{acaoId} {
+        allow read: if isAdminOf(estabId);
+        allow create: if isAdminOf(estabId)
+          && request.resource.data.keys().hasOnly(['em', 'quem', 'tela', 'acao', 'alvo', 'antes',
+            'depois', 'origem', 'versaoDoApp', 'aparelho', 'autor'])
+          && request.resource.data.origem == 'app'
+          && request.resource.data.em == request.time
+          && request.resource.data.acao is string
+          && request.resource.data.tela is string
+          && (!('autor' in request.resource.data) || request.resource.data.autor is map);
+        allow update, delete: if false;
+      }
+
+      // Sugestões de melhoria enviadas pelo cliente na tela Ajustes do app.
+      // Só cria, com os campos que o app grava (suggestion_document.dart) e o autor
+      // sendo quem chama: userId é o id do documento Users do cliente (não o uid), então
+      // o autor é conferido pelo userAuthId dele. Leitura e marcação de lida ficam no
+      // painel, via Admin SDK.
+      match /Suggestions/{suggestionId} {
+        allow create: if request.auth != null
+          && request.resource.data.keys().hasOnly(['id', 'companyId', 'userId', 'userName',
+            'userEmail', 'userPhone', 'subject', 'text', 'appVersion', 'platform', 'packageName',
+            'read', 'createdAt'])
+          && request.resource.data.id == suggestionId
+          && request.resource.data.companyId == estabId
+          && request.resource.data.read == false
+          && request.resource.data.text is string
+          && request.resource.data.text.size() <= 500
+          && request.resource.data.userId is string
+          && request.resource.data.userId.size() > 0
+          && get(/databases/$(database)/documents/Users/$(request.resource.data.userId)).data.userAuthId == request.auth.uid;
+        allow read, update, delete: if false;
+      }
+    }
+
+    // Base publica de produtos (produtos/{id}) - usada como referencia compartilhada
+    // entre estabelecimentos (lookup por barCode/nome), ver DATABASE.md
+    match /produtos/{productId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // Estatísticas globais do app
+    match /App/{docId} {
+      allow read: if request.auth != null;
+
+      match /{subcol}/{subId} {
+        allow read: if request.auth != null;
+      }
+    }
+
+    // Chats - apenas participantes podem ler/escrever
+    match /Chats/{chatId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+
+      match /Messages/{messageId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
+    }
+
+    // FCM Tokens - apenas o próprio usuário
+    match /FcmTokens/{tokenId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+      allow delete: if request.auth != null;
+    }
+
+    // AgenteVendas - conversas do agente IA por usuário
+    match /AgenteVendas/{userId} {
+      allow read, write: if request.auth != null;
+
+      match /conversas/{conversaId} {
+        allow read, write: if request.auth != null;
+
+        match /mensagens/{mensagemId} {
+          allow read, write: if request.auth != null;
+        }
+      }
+    }
+
+    // Necessário para collectionGroup('conversas') funcionar
+    match /{path=**}/conversas/{conversaId} {
+      allow read: if request.auth != null;
+    }
+
+    // Necessário para collectionGroup('mensagens') funcionar
+    match /{path=**}/mensagens/{mensagemId} {
+      allow read: if request.auth != null;
+    }
+
+    // Necessário para collectionGroup('AuditLog') funcionar (tela de
+    // histórico de alterações). Escrita continua negada — só a Cloud
+    // Function (Admin SDK) grava, como já vale na regra aninhada acima.
+    match /{path=**}/AuditLog/{auditId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+  }
+}
