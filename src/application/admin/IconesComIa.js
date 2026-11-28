@@ -16,17 +16,21 @@ export const ESTILOS_DE_ICONE = Object.freeze({
 export const QUALIDADES_DE_ICONE = Object.freeze(['low', 'medium', 'high']);
 const LADO_DO_ICONE = 256;
 const MAX_REFERENCIAS = 4;
+const MAX_SUBCATEGORIAS = 12;
 
 function recusa(mensagem, code, statusCode = 400) {
   return new AppError(mensagem, { statusCode, code });
 }
 
-export function pedidoDoIcone({ categoria, estilo, detalhes = '', comReferencia = false }) {
-  const partes = [
-    `Ícone para a categoria "${categoria}" de um aplicativo de supermercado.`,
+export function pedidoDoIcone({ categoria, estilo, detalhes = '', comReferencia = false, subcategorias = [] }) {
+  const partes = [`Ícone para a categoria "${categoria}" de um aplicativo de supermercado.`];
+  // Subcategorias da lista padrao (Thay, 28/11): dizem que produtos a categoria reune.
+  const nomes = subcategorias.map((nome) => String(nome || '').trim()).filter(Boolean).slice(0, MAX_SUBCATEGORIAS);
+  if (nomes.length) partes.push(`A categoria reúne: ${nomes.join(', ')}. Mostre de 1 a 3 produtos típicos dessas subcategorias.`);
+  partes.push(
     'Um único objeto ou grupo de produtos típicos da categoria, centralizado, ocupando cerca de 80% do quadro.',
     'Sem texto, sem letras, sem marcas, sem moldura e sem fundo.',
-  ];
+  );
   if (comReferencia) partes.push('Siga exatamente o mesmo estilo, traço, iluminação e paleta das imagens de referência.');
   else partes.push(`Estilo: ${ESTILOS_DE_ICONE[estilo] || ESTILOS_DE_ICONE['3d']}.`);
   const extra = String(detalhes || '').trim();
@@ -47,12 +51,27 @@ export async function iconeNoLimite(conteudo) {
 }
 
 export class IconesComIa {
-  constructor({ apiKey, conjuntosDeIcones = null, usoIaAdmin = null, fetcher = globalThis.fetch, reduzir = iconeNoLimite }) {
+  constructor({ apiKey, firestore = null, conjuntosDeIcones = null, usoIaAdmin = null, fetcher = globalThis.fetch, reduzir = iconeNoLimite }) {
     this.apiKey = apiKey;
+    this.firestore = firestore;
     this.reduzir = reduzir;
     this.conjuntosDeIcones = conjuntosDeIcones;
     this.usoIaAdmin = usoIaAdmin;
     this.fetcher = fetcher;
+  }
+
+  // Nomes das subcategorias da lista padrao ligadas a categoria; sem leitura, segue sem elas.
+  async subcategorias(categoriaId) {
+    if (!categoriaId || !this.firestore) return [];
+    try {
+      const snapshot = await this.firestore.collection('subcategoriasProdutos').where('categoriaProdutoId', '==', String(categoriaId)).get();
+      return snapshot.docs.map((documento) => documento.data() || {})
+        .filter((data) => data.arquivada !== true && data.isActive !== false)
+        .map((data) => String(data.nome ?? data.name ?? '').trim()).filter(Boolean)
+        .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    } catch {
+      return [];
+    }
   }
 
   // Ate 4 icones do conjunto de referencia, menos o da propria categoria.
@@ -100,8 +119,8 @@ export class IconesComIa {
   async gerar({ categoriaId, categoria, estilo = '3d', detalhes = '', qualidade = 'medium', transparente = true, referenciaConjuntoId = null, conjuntoId = null }, ator = {}) {
     if (!this.apiKey) throw recusa('A chave da OpenAI não está configurada no Core.', 'icone_ia_sem_chave', 503);
     if (!QUALIDADES_DE_ICONE.includes(qualidade)) throw recusa('Qualidade inválida.', 'icone_ia_qualidade');
-    const referencias = await this.referencias(referenciaConjuntoId, categoriaId);
-    const pedido = pedidoDoIcone({ categoria, estilo, detalhes, comReferencia: referencias.length > 0 });
+    const [referencias, subcategorias] = await Promise.all([this.referencias(referenciaConjuntoId, categoriaId), this.subcategorias(categoriaId)]);
+    const pedido = pedidoDoIcone({ categoria, estilo, detalhes, comReferencia: referencias.length > 0, subcategorias });
     const { imagem, uso } = await this.chamar({ pedido, qualidade, transparente, referencias });
     const icone = await this.reduzir(imagem);
     const custoUsd = custoDeImagemUsd(MODELO_DE_ICONE, uso);
