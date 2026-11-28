@@ -27,6 +27,18 @@ function nomeValido(nome) {
   return limpo;
 }
 
+// Link do Firebase Storage (.../v0/b/<bucket>/o/<caminho>?...) -> caminho, so quando e deste bucket.
+export function caminhoNoBucket(url, nomeDoBucket) {
+  try {
+    const link = new URL(String(url || ''));
+    const partes = link.pathname.match(/^\/v0\/b\/([^/]+)\/o\/(.+)$/);
+    if (link.hostname !== 'firebasestorage.googleapis.com' || !partes || partes[1] !== nomeDoBucket) return null;
+    return decodeURIComponent(partes[2]);
+  } catch {
+    return null;
+  }
+}
+
 export class ConjuntosDeIcones {
   constructor({ firestore, bucket = null, serverTimestamp = () => FieldValue.serverTimestamp(), apagarCampo = () => FieldValue.delete(), agora = () => Date.now() }) {
     this.firestore = firestore;
@@ -172,6 +184,26 @@ export class ConjuntosDeIcones {
       bytes: icone.conteudo.length,
       conjunto: this.paraATela(await atual.ref.get()),
     };
+  }
+
+  // Baixar o icone no Admin (Thay, 28/11): o Storage nao deixa o navegador ler o arquivo, entao o
+  // Core le pelo servidor. O caminho sai do link gravado no conjunto (so deste bucket) ou do arquivo.
+  async arquivoDoIcone(id, categoriaId) {
+    const atual = await this.conjunto(id);
+    if (!ID_SEGURO.test(String(categoriaId || ''))) throw recusa('Categoria não encontrada na lista padrão.', 'conjunto_categoria_nao_encontrada', 404);
+    const icone = atual.data()?.icones?.[categoriaId];
+    if (!icone) throw recusa('Esta categoria não tem ícone neste conjunto.', 'conjunto_icone_ausente', 404);
+    if (!this.bucket) throw recusa('Armazenamento de arquivos não configurado.', 'aparencia_sem_bucket', 503);
+    const caminho = caminhoNoBucket(icone.url, this.bucket.name) || (icone.arquivo ? `${COLECAO}/${atual.id}/${icone.arquivo}` : null);
+    if (!caminho) throw recusa('O arquivo deste ícone não está no armazenamento.', 'conjunto_icone_sem_arquivo', 404);
+    const arquivo = this.bucket.file(caminho);
+    try {
+      const [[conteudo], [metadados]] = await Promise.all([arquivo.download(), arquivo.getMetadata()]);
+      return { conteudo, contentType: metadados?.contentType || 'application/octet-stream' };
+    } catch (falha) {
+      if (falha?.code === 404) throw recusa('O arquivo deste ícone não está no armazenamento.', 'conjunto_icone_sem_arquivo', 404);
+      throw falha;
+    }
   }
 
   // Tira o icone da categoria do conjunto: nas lojas que usam o conjunto, a categoria fica sem

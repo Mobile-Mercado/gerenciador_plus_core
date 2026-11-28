@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import test from 'node:test';
 import sharp from 'sharp';
-import { ConjuntosDeIcones } from '../src/application/admin/ConjuntosDeIcones.js';
+import { ConjuntosDeIcones, caminhoNoBucket } from '../src/application/admin/ConjuntosDeIcones.js';
 import { FirestoreEmMemoria } from './apoio/firestoreEmMemoria.js';
 
 // Cola B56-04, conjuntos de icones (parte 2), na branch icones-conjuntos (cola B56-16): os testes dos
@@ -261,4 +261,27 @@ test('rota do Admin (B56-17): GET /estabelecimentos/:lojaId/conjunto-icones diz 
     assert.deepEqual((await (await chamar('GET', '/api/admin/estabelecimentos/loja-1/conjunto-icones')).json()).data, { lojaId: 'loja-1', conjuntoIcones: 'ilus' });
     assert.equal((await chamar('GET', '/api/admin/estabelecimentos/nao-existe/conjunto-icones')).status, 404);
   });
+});
+
+test('baixar icone (Thay, 28/11): le pelo servidor o arquivo do link deste bucket ou pelo nome; sem icone, 404', async () => {
+  assert.equal(caminhoNoBucket('https://firebasestorage.googleapis.com/v0/b/b/o/conjuntosIcones%2Filus%2Fbazar_1.webp?alt=media&token=t', 'b'), 'conjuntosIcones/ilus/bazar_1.webp');
+  assert.equal(caminhoNoBucket('https://firebasestorage.googleapis.com/v0/b/outro/o/x.webp', 'b'), null);
+  assert.equal(caminhoNoBucket('https://padrao/bebidas.svg', 'b'), null);
+  const { conjuntos, armazenamento } = montar({}, {
+    'conjuntosIcones/ilus': { nome: 'Ilustrações', icones: {
+      bebidas: { url: 'https://firebasestorage.googleapis.com/v0/b/b/o/conjuntosIcones%2Fcopia%2Fbebidas.webp?alt=media', arquivo: 'bebidas.webp' },
+      mercearia: { url: 'https://outro/mercearia.webp', arquivo: 'mercearia_9.webp' },
+    } },
+  });
+  const lidos = [];
+  armazenamento.file = (caminho) => ({
+    download: async () => { lidos.push(caminho); if (caminho.includes('sumiu')) throw Object.assign(new Error('x'), { code: 404 }); return [Buffer.from('webp')]; },
+    getMetadata: async () => [{ contentType: 'image/webp' }],
+  });
+  const bebidas = await conjuntos.arquivoDoIcone('ilus', 'bebidas');
+  assert.deepEqual([bebidas.contentType, bebidas.conteudo.toString()], ['image/webp', 'webp']);
+  await conjuntos.arquivoDoIcone('ilus', 'mercearia');
+  assert.deepEqual(lidos, ['conjuntosIcones/copia/bebidas.webp', 'conjuntosIcones/ilus/mercearia_9.webp']);
+  await assert.rejects(conjuntos.arquivoDoIcone('ilus', 'sem_icone'), (falha) => falha.statusCode === 404);
+  await assert.rejects(conjuntos.arquivoDoIcone('nao-existe', 'bebidas'), (falha) => falha.statusCode === 404);
 });
