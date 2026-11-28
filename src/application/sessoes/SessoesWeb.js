@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from '../../domain/errors/AppError.js';
-import { navegadorDoAgente, sistemaDoAgente } from '../../domain/sessoes/navegadorDoAgente.js';
+import { navegadorDoAgente, nomeAutomatico, sistemaDoAgente } from '../../domain/sessoes/navegadorDoAgente.js';
 
 // Item 5.10 "Acessos conectados" (aprovado pelo Thay em 20/11; plano construcao-acessos-conectados.md).
 // Cada navegador tem uma sessao propria (sessaoId no localStorage, igual em todas as abas). O
@@ -55,6 +55,15 @@ function nomeOuNull(nome) {
   return texto || null;
 }
 
+// Cola B57-18l, item 2: nome guardado no navegador. Invalido e ignorado (nunca impede a entrada).
+function nomeDoNavegador(nome) {
+  try {
+    return nomeOuNull(nome);
+  } catch {
+    return null;
+  }
+}
+
 function emData(valor) {
   const data = typeof valor?.toDate === 'function' ? valor.toDate() : valor;
   return data instanceof Date && !Number.isNaN(data.getTime()) ? data : null;
@@ -77,10 +86,11 @@ export class SessoesWeb {
   }
 
   // Primeira entrada do navegador (ou a volta dele): reaproveita a sessao ativa do mesmo navegador
-  // na mesma loja, senao cria outra. Devolve o id que o navegador guarda e o nome (null: o Gerenciador
-  // Web pergunta "Nome deste computador").
+  // na mesma loja, senao cria outra. Devolve o id que o navegador guarda, o nome dado e o nome
+  // automatico. Cola B57-18l, item 2: o nome guardado no navegador vai em todo registro; a sessao nova
+  // nasce com ele e a antiga sem nome recebe ele. Um nome ja dado nunca e trocado.
   async registrar({
-    lojaId, uid, sessaoId = null, userAgent = '', versaoDoSistema = null, retrato = null, ip = null,
+    lojaId, uid, sessaoId = null, userAgent = '', versaoDoSistema = null, retrato = null, ip = null, nome = null,
   }) {
     const loja = lojaValida(lojaId);
     const agora = this.clock();
@@ -92,16 +102,19 @@ export class SessoesWeb {
       retrato: typeof retrato === 'string' && FORMATO_DO_RETRATO.test(retrato) ? retrato.toLowerCase() : null,
       ip: typeof ip === 'string' && ip.trim() ? ip.trim().slice(0, 64) : null,
     };
+    const guardado = nomeDoNavegador(nome);
+    const resposta = (id, dado) => ({ sessaoId: id, nome: dado || null, nomeAutomatico: nomeAutomatico(dados) });
     if (idValido(sessaoId)) {
       const atual = await this.repositorio.ler({ lojaId: loja, sessaoId });
       if (atual && !atual.encerradaEm) {
-        await this.repositorio.atualizar({ lojaId: loja, sessaoId, campos: dados });
-        return { sessaoId, nome: atual.nome || null };
+        const campos = atual.nome || !guardado ? dados : { ...dados, nome: guardado };
+        await this.repositorio.atualizar({ lojaId: loja, sessaoId, campos });
+        return resposta(sessaoId, atual.nome || guardado);
       }
     }
     const novo = this.novoId();
-    await this.repositorio.criar({ lojaId: loja, sessaoId: novo, dados: { ...dados, nome: null } });
-    return { sessaoId: novo, nome: null };
+    await this.repositorio.criar({ lojaId: loja, sessaoId: novo, dados: { ...dados, nome: guardado } });
+    return resposta(novo, guardado);
   }
 
   // 'ativa' ou 'encerrada' (sessao apagada pela limpeza de 7 dias conta como encerrada).
@@ -136,7 +149,8 @@ export class SessoesWeb {
     return { ativa: true };
   }
 
-  // "Nome deste computador", pela propria loja, so na sessao ativa do proprio navegador.
+  // "Nome deste computador", pela propria loja, so na sessao ativa do proprio navegador. Cola B57-18l,
+  // item 2: a janela saiu do web; a rota fica, sem uso, para abas antigas abertas.
   async nomearPelaLoja({ lojaId, sessaoId, nome }) {
     const loja = lojaValida(lojaId);
     const texto = nomeOuNull(nome);
@@ -185,6 +199,7 @@ export class SessoesWeb {
         .map((sessao) => ({
           sessaoId: sessao.sessaoId,
           nome: sessao.nome || null,
+          nomeAutomatico: nomeAutomatico(sessao),
           navegador: sessao.navegador || 'Navegador',
           sistema: sessao.sistema || null,
           ultimoUso: emIso(sessao.ultimoUso),

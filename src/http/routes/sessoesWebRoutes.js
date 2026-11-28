@@ -5,14 +5,17 @@ import { ipDoCliente } from '../ipDoCliente.js';
 
 // Item 5.10 "Acessos conectados", lado da loja (Gerenciador Web). A loja vem da conta de quem chama
 // (accountForRequest), nunca do corpo.
-// - POST /registrar { sessaoId?, versaoDoSistema?, retrato? }: { sessaoId, nome } (sessaoId null para
-//   conta sem loja, que nao entra na lista). Navegador e sistema saem do User-Agent.
+// - POST /registrar { sessaoId?, versaoDoSistema?, retrato?, nome? }: { sessaoId, nome, nomeAutomatico }
+//   (sessaoId null para conta sem loja, que nao entra na lista). Navegador e sistema saem do User-Agent.
+//   nome: o nome guardado no navegador (cola B57-18l, item 2); invalido e ignorado.
 // - POST /sinal: a cada 30 s; sessao encerrada responde 401 sessao_encerrada.
-// - PATCH /nome { nome }: "Nome deste computador" na primeira entrada.
+// - PATCH /nome { nome }: "Nome deste computador" na primeira entrada. Sem uso desde a cola B57-18l,
+//   item 2 (a janela saiu); fica para abas antigas abertas.
 const registrarSchema = z.object({
   sessaoId: z.string().max(64).nullable().optional(),
   versaoDoSistema: z.string().max(32).nullable().optional(),
   retrato: z.string().max(64).nullable().optional(),
+  nome: z.string().max(200).nullable().optional(),
 });
 const nomeSchema = z.object({ nome: z.string().max(200) });
 
@@ -42,6 +45,7 @@ export function createSessoesWebRoutes({ sessoesWeb, accountForRequest }) {
         versaoDoSistema: corpo.versaoDoSistema ?? null,
         retrato: corpo.retrato ?? null,
         ip: ipDoCliente(request),
+        nome: corpo.nome ?? null,
       }),
     });
   }));

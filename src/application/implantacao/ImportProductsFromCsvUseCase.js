@@ -1,4 +1,5 @@
 import { nomeDoComputadorNaLoja } from '../../infra/firebase/nomeDoComputador.js';
+import { camposDoComputador } from '../../domain/logs/autorDaAcao.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { AppError } from '../../domain/errors/AppError.js';
 import { productSearchKeys } from './catalogSearchIndex.js';
@@ -259,7 +260,7 @@ export class ImportProductsFromCsvUseCase {
     const quem = metadata?.firebaseEmail || metadata?.firebaseUid || '';
     const origemDaAcao = metadata?.origemDaAcao || null;
     const autor = metadata?.autor && metadata.autor.tipo !== 'adminDaPlataforma'
-      ? { ...metadata.autor, computador: await nomeDoComputadorNaLoja(this.firestore, establishmentId, metadata.sessaoId) }
+      ? { ...metadata.autor, ...camposDoComputador(await nomeDoComputadorNaLoja(this.firestore, establishmentId, metadata.sessaoId)) }
       : metadata?.autor || null;
     const existingData = new Map();
 
