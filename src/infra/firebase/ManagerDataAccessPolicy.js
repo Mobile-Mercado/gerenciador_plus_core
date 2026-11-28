@@ -21,7 +21,9 @@ const CUSTOMER_CACHE_TTL_MS = 30 * 60 * 1000;
 // sequencia de ids invalidos viraria uma varredura por chamada.
 const VERIFICATION_TTL_MS = 10 * 60 * 1000;
 // Status que contam como cancelamento do pedido: exigem requests.cancel.
-const CANCEL_STATUSES = new Set(['canceled', 'cancelled', 'cancelado', 'denied', 'giveUp']);
+// Recusar (denied) pede "Atualizar status do pedido", como no App Gerenciador (cola do Thay
+// B57-18d, item 2d); cancelar e desistir continuam em "Cancelar pedido".
+const CANCEL_STATUSES = new Set(['canceled', 'cancelled', 'cancelado', 'giveUp']);
 // Campos de preco: a promocao (como o app gerenciador grava) pede a mesma permissao de preco.
 const PRICE_FIELDS = new Set([
   'price', 'currentPrice', 'promotionPrice', 'historyPrice', 'previewPrice',
