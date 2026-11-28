@@ -382,9 +382,13 @@ service cloud.firestore {
         // Separação (cola do Thay B57-18e, item 2): "Tirar produto do app até repor" e "Excluir
         // produto que não vendemos mais" gravam só isActive ou isTrashed e a marca da equipe, sem
         // precisar de "Editar produto". Nome, preço e estoque continuam só com products.edit.
+        // O desfazer do "Até repor" grava isTrashed: false junto (cola B57-18i, item 6): num
+        // produto sem o campo, o campo que falta conta como false; isTrashed nunca vira true aqui.
         allow update: if hasPermission(estabId, 'requests.hide_until_restock')
           && request.resource.data.diff(resource.data).affectedKeys()
-               .hasOnly(['isActive', 'retiradoPelaEquipe']);
+               .hasOnly(['isActive', 'isTrashed', 'retiradoPelaEquipe'])
+          && request.resource.data.get('isTrashed', false) == false
+          && resource.data.get('isTrashed', false) == false;
         allow update: if hasPermission(estabId, 'requests.trash_discontinued')
           && request.resource.data.diff(resource.data).affectedKeys()
                .hasOnly(['isTrashed', 'retiradoPelaEquipe']);

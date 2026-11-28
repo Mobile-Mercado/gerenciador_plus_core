@@ -122,10 +122,15 @@ const CASOS = [
   caso(6, 'products.edit: criar produto', 'editor', true, true, (_r, db) => setDoc(doc(db, 'estabelecimentos/loja-1/Products/novo-editor'), produtoBase)),
   caso(6, 'grupo isAdmin: Não vendemos mais + preço', 'admin', true, true, (r) => updateDoc(r, aplicar('lixeira', { currentPrice: 2 }))),
   // Fora dos 6 da proposta: o desfazer grava isActive e isTrashed juntos. Num produto sem o campo
-  // isTrashed, o desfazer do "Até repor" acrescenta isTrashed: false, que conta como mudança.
-  caso('extra', 'Desfazer Até repor em produto sem o campo isTrashed', 'repor', false, false,
+  // isTrashed, o desfazer do "Até repor" acrescenta isTrashed: false; a cola B57-18i, item 6,
+  // conta o campo que falta como false, então passa.
+  caso('extra', 'Desfazer Até repor em produto sem o campo isTrashed', 'repor', false, true,
     (r) => updateDoc(r, desfazer({ isActive: true, isTrashed: false })),
     { name: 'Sem isTrashed', currentPrice: 3, isActive: false, retiradoPelaEquipe: marcaGravada('ateRepor') }),
+  // Cola B57-18i, item 6: pela chave do "Até repor", isTrashed continua sem poder virar true.
+  caso('extra', 'Até repor pondo isTrashed true em produto sem o campo', 'repor', false, false,
+    (r) => updateDoc(r, { isActive: false, isTrashed: true, retiradoPelaEquipe: { tipo: 'ateRepor', quem: 'uid-x', em: serverTimestamp(), pedido: 'p1' } }),
+    { name: 'Sem isTrashed', currentPrice: 3, isActive: true }),
 ];
 
 async function rodar(conjunto) {
