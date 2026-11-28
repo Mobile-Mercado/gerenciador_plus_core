@@ -36,6 +36,7 @@ import { requestLogger } from './http/middlewares/requestLogger.js';
 import { createSessaoWebGuard } from './http/middlewares/sessaoWeb.js';
 import { createSessoesWebRoutes } from './http/routes/sessoesWebRoutes.js';
 import { createRetornoDavRoutes } from './http/routes/retornoDavRoutes.js';
+import { createIntegradorRoutes } from './http/routes/integradorRoutes.js';
 
 export function createApp({
   generateAiResponseUseCase,
@@ -88,6 +89,7 @@ export function createApp({
   sessoesWeb = null,
   sessoesWebPublicadoEm = null,
   retornoDav = null,
+  alteradosHoje = null,
 }) {
   const app = express();
   // Barreira de escrita por chave de permissao, com cache por token.
@@ -232,6 +234,16 @@ export function createApp({
       sessaoWeb,
       lojaAlvoDoAdmin,
       createRetornoDavRoutes({ retornoDav, requirePermission, accountForRequest, registrarAcaoDoAdmin }),
+    );
+  }
+  // Cola 100, item 6: "Alterados hoje" da faixa da aba Integrador (loja, ou Admin na loja alvo).
+  if (alteradosHoje) {
+    app.use(
+      '/api/integrador',
+      createFirebaseAuthMiddleware({ required: true }),
+      sessaoWeb,
+      lojaAlvoDoAdmin,
+      createIntegradorRoutes({ alteradosHoje, requirePermission, accountForRequest }),
     );
   }
   // Catalogo da loja a partir da lista padrao (Ativar, travadas, nome de exibicao).
