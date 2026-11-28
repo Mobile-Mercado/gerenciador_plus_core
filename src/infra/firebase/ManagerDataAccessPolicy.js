@@ -245,6 +245,7 @@ export class ManagerDataAccessPolicy {
       if (mutation.operation !== 'update') throw forbidden();
       const pedido = await this.assertOrderDocument(actor, path);
       assertOnlyFields(mutation.data, camposDoPedidoAceitos(mutation.data), 'data_order_fields_forbidden');
+      assertValoresDaPesagem(mutation.data);
       assertBooleanFields(mutation.data, 'data_order_fields_forbidden');
       assertConferenciaEntrega(mutation.data);
       assertPedidoNaoEncerrado(pedido, mutation.data);
@@ -871,6 +872,18 @@ function referenceId(value) {
 function camposDoPedidoAceitos(data) {
   if (!Object.hasOwn(data || {}, 'separationChecklist')) return ORDER_UPDATE_FIELDS;
   return new Set([...ORDER_UPDATE_FIELDS, ...CAMPOS_DA_PESAGEM]);
+}
+
+// price e total da pesagem vem do navegador: so numeros finitos e nao negativos (cola do Thay
+// B57-18d, item 2b). O desconto segue como o web grava.
+function assertValoresDaPesagem(data) {
+  for (const campo of ['price', 'total']) {
+    if (!Object.hasOwn(data || {}, campo)) continue;
+    const valor = data[campo];
+    if (typeof valor !== 'number' || !Number.isFinite(valor) || valor < 0) {
+      throw forbidden('A alteração contém campos não permitidos.', 'data_order_valores_invalidos');
+    }
+  }
 }
 
 function assertOnlyFields(data, allowed, code) {
