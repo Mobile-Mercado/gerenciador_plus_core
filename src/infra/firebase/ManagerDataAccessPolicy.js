@@ -65,6 +65,9 @@ const ORDER_UPDATE_FIELDS = new Set([
   'statusList',
   'separatedAt',
   'separationChecklist',
+  // Retirada: a hora em que o pedido ficou pronto, gravada junto com readyForPickup na
+  // conclusao da separacao (contrato da versao 55, item 1; cola do Thay B57-18, item 6).
+  'prontoParaRetirarEm',
   'deliveryPerson',
   // Codigo do link do entregador: o painel grava junto com o deliveryPerson, na mesma
   // escrita da atribuicao, e e a chave que a rota /api/entrega confere.
@@ -75,6 +78,10 @@ const ORDER_UPDATE_FIELDS = new Set([
   'isTest',
   'isTestAccount',
 ]);
+// Pesagem na separacao (Cola 65, item 5.3): itens com as medidas, subtotal, total e desconto.
+// So entram na mesma gravacao que conclui a separacao (separationChecklist junto); sozinhos,
+// continuam recusados, para o painel nao reescrever itens e valores de um pedido fora da separacao.
+const CAMPOS_DA_PESAGEM = new Set(['productsCart', 'price', 'total', 'descontoNaSeparacao']);
 // Status em que o pedido esta encerrado. Troca de status a partir deles e
 // recusada: o clique vem de uma tela que ainda nao viu o encerramento (cliente
 // desistiu, prazo de aceite venceu) e reabriria o pedido. Reabrir, se um dia for
@@ -237,7 +244,7 @@ export class ManagerDataAccessPolicy {
     if (root === 'PurchaseRequests') {
       if (mutation.operation !== 'update') throw forbidden();
       const pedido = await this.assertOrderDocument(actor, path);
-      assertOnlyFields(mutation.data, ORDER_UPDATE_FIELDS, 'data_order_fields_forbidden');
+      assertOnlyFields(mutation.data, camposDoPedidoAceitos(mutation.data), 'data_order_fields_forbidden');
       assertBooleanFields(mutation.data, 'data_order_fields_forbidden');
       assertConferenciaEntrega(mutation.data);
       assertPedidoNaoEncerrado(pedido, mutation.data);
@@ -861,10 +868,15 @@ function referenceId(value) {
   return '';
 }
 
+function camposDoPedidoAceitos(data) {
+  if (!Object.hasOwn(data || {}, 'separationChecklist')) return ORDER_UPDATE_FIELDS;
+  return new Set([...ORDER_UPDATE_FIELDS, ...CAMPOS_DA_PESAGEM]);
+}
+
 function assertOnlyFields(data, allowed, code) {
   const fields = Object.keys(data || {});
   if (!fields.length || fields.some((field) => !allowed.has(field))) {
-    throw forbidden('A alteracao contem campos nao permitidos.', code);
+    throw forbidden('A alteração contém campos não permitidos.', code);
   }
 }
 
@@ -879,7 +891,7 @@ function assertConferenciaEntrega(data) {
   if (conferencia === undefined) return;
   const outros = Object.keys(data || {}).filter((campo) => campo !== 'conferenciaEntrega');
   if (outros.length) {
-    throw forbidden('A alteracao contem campos nao permitidos.', 'data_order_fields_forbidden');
+    throw forbidden('A alteração contém campos não permitidos.', 'data_order_fields_forbidden');
   }
   const ehMapa = conferencia !== null
     && typeof conferencia === 'object'
@@ -887,7 +899,7 @@ function assertConferenciaEntrega(data) {
   const invalida = !ehMapa
     || Object.keys(conferencia).some((campo) => !CONFERENCIA_FIELDS.has(campo));
   if (invalida) {
-    throw forbidden('A alteracao contem campos nao permitidos.', 'data_order_fields_forbidden');
+    throw forbidden('A alteração contém campos não permitidos.', 'data_order_fields_forbidden');
   }
 }
 
@@ -933,7 +945,7 @@ function assertBooleanFields(data, code) {
   const invalid = Object.entries(data || {})
     .some(([field, value]) => BOOLEAN_MUTATION_FIELDS.has(field) && typeof value !== 'boolean');
   if (invalid) {
-    throw forbidden('A alteracao contem campos nao permitidos.', code);
+    throw forbidden('A alteração contém campos não permitidos.', code);
   }
 }
 
