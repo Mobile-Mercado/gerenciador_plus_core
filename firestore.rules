@@ -481,11 +481,12 @@ service cloud.firestore {
         allow read: if isAdminOf(estabId);
         allow create: if isAdminOf(estabId)
           && request.resource.data.keys().hasOnly(['em', 'quem', 'tela', 'acao', 'alvo', 'antes',
-            'depois', 'origem', 'versaoDoApp', 'aparelho'])
+            'depois', 'origem', 'versaoDoApp', 'aparelho', 'autor'])
           && request.resource.data.origem == 'app'
           && request.resource.data.em == request.time
           && request.resource.data.acao is string
-          && request.resource.data.tela is string;
+          && request.resource.data.tela is string
+          && (!('autor' in request.resource.data) || request.resource.data.autor is map);
         allow update, delete: if false;
       }
 

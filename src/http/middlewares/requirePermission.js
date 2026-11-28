@@ -43,7 +43,7 @@ export function createPermissionGuard({ accessRepository, clock = () => Date.now
     // Admin da plataforma agindo na loja escolhida (conferido em lojaAlvoDoAdmin.js).
     if (request.lojaAlvo) {
       const conta = contaDoAdminNaLoja(request.auth?.uid, request.lojaAlvo);
-      return { establishmentId: conta.establishmentId, hasEstablishment: true, permissions: conta.permissions, porAdminDaPlataforma: true };
+      return { uid: request.auth?.uid || null, establishmentId: conta.establishmentId, hasEstablishment: true, permissions: conta.permissions, porAdminDaPlataforma: true };
     }
     const chave = cacheKey(request);
     const agora = clock();
@@ -71,6 +71,11 @@ export function createPermissionGuard({ accessRepository, clock = () => Date.now
       permissions,
       // Nome de quem chama (dono: Users; funcionario: AdminUsers), para o "Criado por" do cupom.
       nome: account.userDocument?.nome || account.userDocument?.name || null,
+      // Cola B57-16b, item 11: quem agiu, para o autor do Log da equipe e o "salvo por" dos motivos (e da
+      // planilha importada, B57-13o): o uid, o cadastro (nome e e-mail) e a conta principal da loja.
+      uid: account.uid || request.auth?.uid || null,
+      userDocument: { nome: account.userDocument?.nome || null, name: account.userDocument?.name || null, email: account.userDocument?.email || null },
+      contaDaLoja: account.contaDaLoja || null,
     };
     if (chave) cache.set(chave, { account: resumo, expiresAt: expiresAt(request) });
     return resumo;

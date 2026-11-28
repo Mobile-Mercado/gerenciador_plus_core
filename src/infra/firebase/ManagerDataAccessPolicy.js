@@ -21,7 +21,9 @@ const CUSTOMER_CACHE_TTL_MS = 30 * 60 * 1000;
 // sequencia de ids invalidos viraria uma varredura por chamada.
 const VERIFICATION_TTL_MS = 10 * 60 * 1000;
 // Status que contam como cancelamento do pedido: exigem requests.cancel.
-const CANCEL_STATUSES = new Set(['canceled', 'cancelled', 'cancelado', 'denied', 'giveUp']);
+// Recusar (denied) pede "Atualizar status do pedido", como no App Gerenciador (cola do Thay
+// B57-18d, item 2d); cancelar e desistir continuam em "Cancelar pedido".
+const CANCEL_STATUSES = new Set(['canceled', 'cancelled', 'cancelado', 'giveUp']);
 // Campos de preco: a promocao (como o app gerenciador grava) pede a mesma permissao de preco.
 const PRICE_FIELDS = new Set([
   'price', 'currentPrice', 'promotionPrice', 'historyPrice', 'previewPrice',
@@ -65,6 +67,9 @@ const ORDER_UPDATE_FIELDS = new Set([
   'statusList',
   'separatedAt',
   'separationChecklist',
+  // Retirada: a hora em que o pedido ficou pronto, gravada junto com readyForPickup na
+  // conclusao da separacao (contrato da versao 55, item 1; cola do Thay B57-18, item 6).
+  'prontoParaRetirarEm',
   'deliveryPerson',
   // Codigo do link do entregador: o painel grava junto com o deliveryPerson, na mesma
   // escrita da atribuicao, e e a chave que a rota /api/entrega confere.
@@ -75,6 +80,10 @@ const ORDER_UPDATE_FIELDS = new Set([
   'isTest',
   'isTestAccount',
 ]);
+// Pesagem na separacao (Cola 65, item 5.3): itens com as medidas, subtotal, total e desconto.
+// So entram na mesma gravacao que conclui a separacao (separationChecklist junto); sozinhos,
+// continuam recusados, para o painel nao reescrever itens e valores de um pedido fora da separacao.
+const CAMPOS_DA_PESAGEM = new Set(['productsCart', 'price', 'total', 'descontoNaSeparacao']);
 // Status em que o pedido esta encerrado. Troca de status a partir deles e
 // recusada: o clique vem de uma tela que ainda nao viu o encerramento (cliente
 // desistiu, prazo de aceite venceu) e reabriria o pedido. Reabrir, se um dia for
@@ -237,7 +246,8 @@ export class ManagerDataAccessPolicy {
     if (root === 'PurchaseRequests') {
       if (mutation.operation !== 'update') throw forbidden();
       const pedido = await this.assertOrderDocument(actor, path);
-      assertOnlyFields(mutation.data, ORDER_UPDATE_FIELDS, 'data_order_fields_forbidden');
+      assertOnlyFields(mutation.data, camposDoPedidoAceitos(mutation.data), 'data_order_fields_forbidden');
+      assertValoresDaPesagem(mutation.data);
       assertBooleanFields(mutation.data, 'data_order_fields_forbidden');
       assertConferenciaEntrega(mutation.data);
       assertPedidoNaoEncerrado(pedido, mutation.data);
@@ -696,7 +706,7 @@ function caminhosTocados(data, ehUpdate) {
 // conectados (SessoesWeb e IpsNomeados, item 5.10: o IP so aparece no Admin) e os pedidos prontos para o
 // caixa (ReturnSales, itens 5.13 e 4.21: o reenvio ao Linear passa pela rota do Core, uma vez so por pedido;
 // a venda tem dado do cliente). O BFF nunca passa.
-const SUBCOLECOES_SO_DO_CORE = new Set(['entregadoresPrivado', 'IntegradorDaLoja', 'SessoesWeb', 'IpsNomeados', 'ReturnSales']);
+const SUBCOLECOES_SO_DO_CORE = new Set(['entregadoresPrivado', 'IntegradorDaLoja', 'SessoesWeb', 'IpsNomeados', 'ReturnSales', 'MotivosDaSeparacao']);
 
 function isSoDoCore(path) {
   const parts = pathParts(path);
@@ -861,10 +871,27 @@ function referenceId(value) {
   return '';
 }
 
+function camposDoPedidoAceitos(data) {
+  if (!Object.hasOwn(data || {}, 'separationChecklist')) return ORDER_UPDATE_FIELDS;
+  return new Set([...ORDER_UPDATE_FIELDS, ...CAMPOS_DA_PESAGEM]);
+}
+
+// price e total da pesagem vem do navegador: so numeros finitos e nao negativos (cola do Thay
+// B57-18d, item 2b). O desconto segue como o web grava.
+function assertValoresDaPesagem(data) {
+  for (const campo of ['price', 'total']) {
+    if (!Object.hasOwn(data || {}, campo)) continue;
+    const valor = data[campo];
+    if (typeof valor !== 'number' || !Number.isFinite(valor) || valor < 0) {
+      throw forbidden('A alteração contém campos não permitidos.', 'data_order_valores_invalidos');
+    }
+  }
+}
+
 function assertOnlyFields(data, allowed, code) {
   const fields = Object.keys(data || {});
   if (!fields.length || fields.some((field) => !allowed.has(field))) {
-    throw forbidden('A alteracao contem campos nao permitidos.', code);
+    throw forbidden('A alteração contém campos não permitidos.', code);
   }
 }
 
@@ -879,7 +906,7 @@ function assertConferenciaEntrega(data) {
   if (conferencia === undefined) return;
   const outros = Object.keys(data || {}).filter((campo) => campo !== 'conferenciaEntrega');
   if (outros.length) {
-    throw forbidden('A alteracao contem campos nao permitidos.', 'data_order_fields_forbidden');
+    throw forbidden('A alteração contém campos não permitidos.', 'data_order_fields_forbidden');
   }
   const ehMapa = conferencia !== null
     && typeof conferencia === 'object'
@@ -887,7 +914,7 @@ function assertConferenciaEntrega(data) {
   const invalida = !ehMapa
     || Object.keys(conferencia).some((campo) => !CONFERENCIA_FIELDS.has(campo));
   if (invalida) {
-    throw forbidden('A alteracao contem campos nao permitidos.', 'data_order_fields_forbidden');
+    throw forbidden('A alteração contém campos não permitidos.', 'data_order_fields_forbidden');
   }
 }
 
@@ -933,7 +960,7 @@ function assertBooleanFields(data, code) {
   const invalid = Object.entries(data || {})
     .some(([field, value]) => BOOLEAN_MUTATION_FIELDS.has(field) && typeof value !== 'boolean');
   if (invalid) {
-    throw forbidden('A alteracao contem campos nao permitidos.', code);
+    throw forbidden('A alteração contém campos não permitidos.', code);
   }
 }
 

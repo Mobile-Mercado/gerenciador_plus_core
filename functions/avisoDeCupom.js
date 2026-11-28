@@ -11,14 +11,16 @@
 //      que falha se ja existe. No maximo um aviso por cliente e loja por dia (fuso de Sao
 //      Paulo), mesmo com dois toques ao mesmo tempo. A colecao so e lida e gravada pelo
 //      servidor: a regra do banco nao tem match para ela e cai no bloqueio geral;
-//   4. manda o push ao App Gerenciador do dono (FcmTokens com clientID = Users do dono, como o
-//      "Voce vendeu!" do mobile_old_web_platform) e o aviso do navegador do gerenciador web
+//   4. manda o push ao App Gerenciador do dono e dos funcionarios ativos com "Ver pedidos" ou
+//      Administrador (destinatariosDaLoja.js, cola B57-18g, item 1; como o "Voce vendeu!" do
+//      mobile_old_web_platform) e o aviso do navegador do gerenciador web
 //      (enviarAvisoParaLoja, url /cupons). Um envio que falha nao impede o outro.
 //
 // Arquivo puro: o banco, o FieldValue, o messaging e o contador chegam por parametro.
 
 const { diaDe } = require('./buscasResumo');
 const { contarEnvios, contarFalhaGeral, semToken } = require('./pushResumo');
+const { tokensDaLoja } = require('./destinatariosDaLoja');
 
 const ORIGEM = 'avisarPedidoDeCupom';
 const COLECAO_DE_AVISOS = 'AvisosDePedidoDeCupom';
@@ -123,22 +125,14 @@ async function reservarAvisoDoDia({ db, FieldValue, lojaId, clienteId, dia, pedi
   }
 }
 
-// Envia ao App Gerenciador do dono (FcmTokens com clientID = id do Users do dono, como o
-// mobile_old_web_platform faz no "Voce vendeu!"). A contagem em PushResumo vai por `contar`, que
-// nao espera a gravacao (contarSemEsperar em index.js): o envio nunca espera a contagem. O valor
-// do token nunca vai para o log.
+// Envia ao App Gerenciador do dono e dos funcionarios ativos com "Ver pedidos" ou Administrador
+// (tokensDaLoja, cola B57-18g, item 1; o mesmo do "Voce vendeu!" do mobile_old_web_platform).
+// A contagem em PushResumo vai por `contar`, que nao espera a gravacao (contarSemEsperar em
+// index.js): o envio nunca espera a contagem. O valor do token nunca vai para o log.
 async function enviarAoAppDoLojista({
   db, messaging, contar, lojaId, donoId, title, body, data, origem = ORIGEM,
 }) {
-  const snapshot = await db.collection('FcmTokens').where('clientID', '==', donoId).get();
-  const tokens = [];
-  const plataformas = [];
-  snapshot.docs.forEach((documento) => {
-    const token = String(documento.data()?.token || '').trim();
-    if (!token || tokens.includes(token)) return;
-    tokens.push(token);
-    plataformas.push(documento.data()?.platform);
-  });
+  const { tokens, plataformas } = await tokensDaLoja(db, lojaId, donoId);
   if (!tokens.length) {
     console.log(`[${origem}] Dono da loja ${lojaId} sem aparelho para o App Gerenciador`);
     contar({ loja: lojaId, origem, audiencia: 'lojista', ...semToken() });

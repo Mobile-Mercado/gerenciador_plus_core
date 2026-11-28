@@ -14,11 +14,15 @@ const {
 const FieldValue = { serverTimestamp: () => ({ serverTimestamp: true }) };
 
 // Firestore de mentira: documentos por caminho; create() falha com ALREADY_EXISTS (codigo 6)
-// quando o caminho ja existe, como no Admin SDK; where('clientID', '==', x) em FcmTokens.
+// quando o caminho ja existe, como no Admin SDK; where('clientID', '==' ou 'in', x) em FcmTokens;
+// collection(caminho).get() lista os filhos diretos (AdminUsers da loja); getAll le varios.
 function firestoreFalso(documentos = {}) {
   const banco = new Map(Object.entries(documentos));
   const criados = [];
   const consultas = [];
+  const filhos = (nome) => [...banco.entries()]
+    .filter(([caminho, dados]) => dados !== undefined && caminho.startsWith(`${nome}/`) && caminho.split('/').length === nome.split('/').length + 1)
+    .map(([caminho, dados]) => ({ id: caminho.split('/').at(-1), data: () => dados }));
   const doc = (caminho) => ({
     id: caminho.split('/').at(-1),
     path: caminho,
@@ -38,17 +42,20 @@ function firestoreFalso(documentos = {}) {
   });
   const collection = (nome) => ({
     doc: (id) => doc(`${nome}/${id}`),
+    async get() {
+      const docs = filhos(nome);
+      return { docs, empty: docs.length === 0 };
+    },
     where: (campo, op, valor) => ({
       async get() {
         consultas.push({ nome, campo, op, valor });
-        const docs = [...banco.entries()]
-          .filter(([caminho, dados]) => caminho.startsWith(`${nome}/`) && caminho.split('/').length === 2 && dados?.[campo] === valor)
-          .map(([caminho, dados]) => ({ id: caminho.split('/')[1], data: () => dados }));
+        const docs = filhos(nome).filter((d) => (op === 'in' ? valor.includes(d.data()?.[campo]) : d.data()?.[campo] === valor));
         return { docs, empty: docs.length === 0 };
       },
     }),
   });
-  return { db: { collection }, banco, criados, consultas };
+  const getAll = async (...refs) => Promise.all(refs.map(async (r) => ({ id: r.id, ...(await r.get()) })));
+  return { db: { collection, doc, getAll }, banco, criados, consultas };
 }
 
 const DIA = new Date('2026-11-14T15:00:00Z'); // 12h em Sao Paulo
@@ -122,8 +129,29 @@ test('RP-179 item 7: o navegador vai para /cupons pela mesma funcao dos outros a
 test('RP-179 item 7: so os aparelhos do dono (clientID = Users do dono), sem token repetido', async () => {
   const c = cenario();
   await c.rodar();
-  assert.deepEqual(c.consultas.filter((q) => q.nome === 'FcmTokens'), [{ nome: 'FcmTokens', campo: 'clientID', op: '==', valor: 'dono-1' }]);
+  // B57-18g item 1: a consulta e "in" com os destinatarios da loja; sem funcionario, so o dono.
+  assert.deepEqual(c.consultas.filter((q) => q.nome === 'FcmTokens'), [{ nome: 'FcmTokens', campo: 'clientID', op: 'in', valor: ['dono-1'] }]);
   assert.deepEqual(c.mensagens[0].tokens, ['tok-ios', 'tok-android']);
+});
+
+test('B57-18g item 1: o aviso vai tambem aos funcionarios ativos com Ver pedidos ou Administrador', async () => {
+  const c = cenario({
+    documentos: {
+      'estabelecimentos/loja-1/AdminUsers/f-sep': { active: true, groupId: 'g-sep' },
+      'estabelecimentos/loja-1/AdminUsers/f-caixa': { active: true, groupId: 'g-caixa' },
+      'estabelecimentos/loja-1/AdminUsers/f-adm': { active: false, groupId: 'g-adm' },
+      'estabelecimentos/loja-1/PermissionGroups/g-sep': { permissions: ['requests.view'] },
+      'estabelecimentos/loja-1/PermissionGroups/g-caixa': { permissions: ['products.view'] },
+      'estabelecimentos/loja-1/PermissionGroups/g-adm': { isAdmin: true },
+      'FcmTokens/f1': { clientID: 'f-sep', token: 'tok-sep', platform: 'android' },
+      'FcmTokens/f2': { clientID: 'f-caixa', token: 'tok-caixa', platform: 'android' },
+      'FcmTokens/f3': { clientID: 'f-adm', token: 'tok-adm', platform: 'ios' },
+    },
+  });
+  await c.rodar();
+  assert.deepEqual(c.consultas.filter((q) => q.nome === 'FcmTokens'), [{ nome: 'FcmTokens', campo: 'clientID', op: 'in', valor: ['dono-1', 'f-sep'] }]);
+  assert.deepEqual(c.mensagens[0].tokens, ['tok-ios', 'tok-android', 'tok-sep']);
+  assert.equal(c.contagens[0].contagens.reduce((soma, x) => soma + x.vezes, 0), 3);
 });
 
 test('RP-179 item 7: som padrao do aparelho e sem click_action; data.kind para o proximo build abrir Cupons', async () => {
