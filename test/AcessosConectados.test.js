@@ -130,7 +130,8 @@ test('5.10: nome do computador na primeira entrada, guardado na sessao e devolvi
     assert.equal(nomeado.status, 200);
     assert.equal(nomeado.corpo.data.nome, 'Caixa');
     const volta = await chamar('/api/sessoes-web/registrar', { metodo: 'POST', corpo: { sessaoId } });
-    assert.deepEqual(volta.corpo.data, { sessaoId, nome: 'Caixa' });
+    // Cola B57-18l, item 2: a resposta traz tambem o nome automatico.
+    assert.deepEqual(volta.corpo.data, { sessaoId, nome: 'Caixa', nomeAutomatico: 'Windows · Chrome' });
     assert.equal((await chamar('/api/sessoes-web/nome', { metodo: 'PATCH', sessao: sessaoId, corpo: { nome: '   ' } })).status, 400);
     // Conta sem loja nao entra na lista.
     const semLoja = await chamar('/api/sessoes-web/registrar', { metodo: 'POST', uid: 'uid-sem-loja', corpo: {} });

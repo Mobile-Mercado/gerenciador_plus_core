@@ -35,3 +35,10 @@ export function sistemaDoAgente(userAgent, versaoDoSistema = null) {
   if (/\bLinux\b/.test(agente)) return 'Linux';
   return 'Sistema desconhecido';
 }
+
+// Cola B57-18l, item 2: nome automatico do navegador, "{sistema} · {navegador}" ("Windows 11 · Chrome").
+// Sistema desconhecido: so o navegador. Calculado na leitura; o documento guarda so o nome dado.
+export function nomeAutomatico({ navegador, sistema } = {}) {
+  const partes = [sistema === 'Sistema desconhecido' ? null : sistema, navegador || 'Navegador'];
+  return partes.filter(Boolean).join(' · ');
+}
